@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes to npm when a version tag is pushed (e.g. `git push origin v1.2.0`).
+# Publishes to npm and creates a GitHub release when a version tag is pushed.
 # Uses npm Trusted Publishing via OIDC: no long-lived NPM_TOKEN is stored in the
 # repo, and every release carries a verified provenance attestation linking the
 # package back to this workflow run and commit.
@@ -18,9 +18,9 @@ on:
       - "v*"
 
 # Least privilege. id-token: write is what lets npm verify this run over OIDC;
-# contents: read is all the checkout needs.
+# contents: write creates the GitHub release after npm publishing succeeds.
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -56,3 +56,29 @@ jobs:
       # prepublishOnly runs lint + typecheck + tests + build + the pack-contents
       # assertion before this succeeds, so a broken or stale build cannot ship.
       - run: npm publish --provenance --access public
+
+      - name: Create GitHub release from the changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from "node:fs";
+          import path from "node:path";
+          const { version } = JSON.parse(fs.readFileSync("package.json", "utf8"));
+          const changelog = fs.readFileSync("CHANGELOG.md", "utf8");
+          const heading = `## [${version}]`;
+          const start = changelog.indexOf(heading);
+          if (start < 0) throw new Error(`Missing changelog section for ${version}`);
+          const body = changelog.slice(changelog.indexOf("\n", start) + 1);
+          const end = body.indexOf("\n## ");
+          const notes = (end < 0 ? body : body.slice(0, end)).trim();
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, "release-notes.md"), `${notes}\n`);
+          NODE
+          if ! gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --verify-tag \
+              --title "$GITHUB_REF_NAME" \
+              --notes-file "$RUNNER_TEMP/release-notes.md" \
+              --latest
+          fi

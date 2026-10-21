@@ -1,0 +1,3 @@
+{"timestamp":"2026-10-19T10:00:00Z","type":"session_meta","payload":{"id":"22222222-2222-2222-2222-222222222222","cwd":"/work/docs","source":"cli"}}
+{"timestamp":"2026-10-19T10:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Write an install guide."}]}}
+{"timestamp":"2026-10-19T10:00:02Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"The install guide is ready."}]}}

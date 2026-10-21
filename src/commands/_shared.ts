@@ -11,6 +11,10 @@ export const sharedArgs = {
     type: "string",
     description: "Claude Code config directory (env CLAUDE_CONFIG_DIR)",
   },
+  "codex-dir": {
+    type: "string",
+    description: "Codex data directory (env CODEX_HOME; default ~/.codex)",
+  },
   "kiro-dir": {
     type: "string",
     description: "kiro-cli config directory (env KIRO_CONFIG_DIR; default ~/.kiro)",
@@ -22,13 +26,14 @@ export const sharedArgs = {
     // gives a subcommand only its OWN parsed args. Say so rather than advertise
     // a placement that is silently ignored.
     description:
-      "Which backend(s) to read: claude, kiro, or auto (default: auto). Pass after the subcommand",
+      "Which backend(s) to read: claude, codex, kiro, or auto (default: auto). Pass after the subcommand",
   },
 } as const;
 
 export interface ResolvedPaths {
   home: string;
   claudeDir: string;
+  codexDir: string;
   kiroDir: string;
 }
 
@@ -40,15 +45,17 @@ export interface ResolvedPaths {
 export function resolvePaths(args: {
   home?: string;
   "claude-dir"?: string;
+  "codex-dir"?: string;
   "kiro-dir"?: string;
 }): ResolvedPaths {
   const home =
     args.home ?? process.env.CC_HINDSIGHT_HOME ?? path.join(os.homedir(), ".cc-hindsight");
   const claudeDir =
     args["claude-dir"] ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
+  const codexDir = args["codex-dir"] ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
   const kiroDir =
     args["kiro-dir"] ?? process.env.KIRO_CONFIG_DIR ?? path.join(os.homedir(), ".kiro");
-  return { home, claudeDir, kiroDir };
+  return { home, claudeDir, codexDir, kiroDir };
 }
 
 /**

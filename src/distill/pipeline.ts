@@ -32,6 +32,7 @@ import { DEFAULT_INPUT_BUDGET, middleCut, type TruncatePolicy } from "../core/bu
 import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { oneshotHash } from "../core/library.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
+import type { SourceName } from "../sources/types.js";
 import { withSpinner } from "../ui/progress.js";
 import { dim, fail, green, skip as skipGlyph } from "../ui/style.js";
 
@@ -580,7 +581,7 @@ export const CLUSTER_TIMEOUT_PER_DIGEST_MS = 5_000;
  */
 export function planClusterWindows(
   digests: Record<string, Digest>,
-  origins: Record<string, "claude" | "kiro"> | undefined,
+  origins: Record<string, SourceName> | undefined,
   budget: number | undefined,
 ): string[][] {
   const ids = Object.keys(digests).sort();
@@ -693,7 +694,7 @@ export interface ClusterStageOptions {
   /** Digests for the CURRENT eligible sessions (input to the clusterer). */
   digests: Record<string, Digest>;
   /** Backend per export name (absent entries ⇒ claude) — names the corpus in the prompt. */
-  origins?: Record<string, "claude" | "kiro">;
+  origins?: Record<string, SourceName>;
   generation: string;
   noGroup?: boolean;
   model?: string;

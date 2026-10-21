@@ -26,10 +26,10 @@ const digest = (outcome: Digest["outcome"] = "completed"): Digest => ({
 });
 
 describe("prompt versions were bumped with the source-aware copy change", () => {
-  it("digest v2, cluster v3, author v3", () => {
-    expect(DIGEST_PROMPT_VERSION).toBe(2);
-    expect(CLUSTER_PROMPT_VERSION).toBe(3);
-    expect(AUTHOR_PROMPT_VERSION).toBe(3);
+  it("digest v3, cluster v4, author v4", () => {
+    expect(DIGEST_PROMPT_VERSION).toBe(3);
+    expect(CLUSTER_PROMPT_VERSION).toBe(4);
+    expect(AUTHOR_PROMPT_VERSION).toBe(4);
   });
 });
 
@@ -53,6 +53,14 @@ describe("digest prompt — source naming and legend", () => {
     expect(prompt).not.toContain("[command]");
     expect(prompt).not.toContain("[image pasted] marks");
   });
+
+  it("Codex names the source and explains its decisions and attachments", () => {
+    const prompt = buildDigestPrompt({ ...base, origin: "codex" });
+    expect(prompt).toContain("one Codex session");
+    expect(prompt).toContain("[decision]");
+    expect(prompt).toContain("[image pasted]");
+    expect(prompt).not.toContain("[command]");
+  });
 });
 
 describe("cluster prompt — corpus naming by origin set", () => {
@@ -71,6 +79,12 @@ describe("cluster prompt — corpus naming by origin set", () => {
     );
   });
 
+  it("all-Codex names Codex", () => {
+    expect(buildClusterPrompt(digests, { "a.md": "codex", "b.md": "codex" })).toContain(
+      "You are grouping Codex sessions",
+    );
+  });
+
   it("a merged corpus goes neutral", () => {
     expect(buildClusterPrompt(digests, { "a.md": "claude", "b.md": "kiro" })).toContain(
       "You are grouping coding-agent sessions",
@@ -85,6 +99,13 @@ describe("author prompt — legend bullets follow the members' origins", () => {
     content: "human words",
     digest: digest(),
     origin,
+  });
+
+  it("Codex members explain decisions and images without inventing slash commands", () => {
+    const prompt = buildAuthorPrompt({ task, members: [member("codex")] });
+    expect(prompt).toContain("[decision]");
+    expect(prompt).toContain("[image pasted]");
+    expect(prompt).not.toContain("[command]");
   });
 
   it("all-claude members (and absent origin) keep the [decision]/[command] bullets", () => {

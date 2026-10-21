@@ -5,10 +5,12 @@ import copy from "./commands/copy.js";
 import distill from "./commands/distill.js";
 import edit from "./commands/edit.js";
 import exportCmd from "./commands/export.js";
+import gui from "./commands/gui.js";
 import list from "./commands/list.js";
 import preferences from "./commands/preferences.js";
 import prune from "./commands/prune.js";
 import rate from "./commands/rate.js";
+import retention from "./commands/retention.js";
 import scan, { runScan } from "./commands/scan.js";
 import show from "./commands/show.js";
 import status from "./commands/status.js";
@@ -39,6 +41,7 @@ function publishRootPaths(args: Record<string, unknown>): void {
   const envForFlag = {
     home: "CC_HINDSIGHT_HOME",
     "claude-dir": "CLAUDE_CONFIG_DIR",
+    "codex-dir": "CODEX_HOME",
     "kiro-dir": "KIRO_CONFIG_DIR",
   } as const;
   for (const [flag, envVar] of Object.entries(envForFlag)) {
@@ -70,6 +73,8 @@ export const main = defineCommand({
     prune,
     status,
     preferences,
+    retention,
+    gui,
   },
   run({ args }) {
     // citty invokes the root run() even after dispatching a subcommand, so we

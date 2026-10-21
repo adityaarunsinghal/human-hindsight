@@ -148,6 +148,7 @@ describe("registry: kiro store detected when only the v3 store exists", () => {
     expect(kiroV3StoreExists(tmp)).toBe(true);
     const sources = resolveSources("auto", {
       claudeDir: path.join(tmp, "no-claude"),
+      codexDir: path.join(tmp, "no-codex"),
       kiroDir: tmp,
     });
     expect(sources.map((s) => s.name)).toContain("kiro");

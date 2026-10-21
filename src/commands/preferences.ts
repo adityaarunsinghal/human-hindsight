@@ -15,7 +15,7 @@ import {
 import type { RunnerFn } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
 import type { AgentRunner } from "../runners/types.js";
-import { parseSourceMode } from "../sources/registry.js";
+import { parseSourceMode, type SourceMode } from "../sources/registry.js";
 import { copyToClipboard } from "../ui/clipboard.js";
 import { withSpinner } from "../ui/progress.js";
 import { cyan, dim, green, hint, ok } from "../ui/style.js";
@@ -55,6 +55,7 @@ export async function runPreferences(
   args: {
     home?: string;
     "claude-dir"?: string;
+    "codex-dir"?: string;
     "kiro-dir"?: string;
     source?: string;
     runner?: string;
@@ -129,7 +130,7 @@ export async function runPreferences(
       return 1;
     }
   }
-  const cli = resolved?.name === "kiro" ? "kiro-cli" : "claude";
+  const cli = resolved?.name === "kiro" ? "kiro-cli" : (resolved?.name ?? "claude");
   const cost = resolved?.name === "kiro" ? "your Kiro credits" : "your subscription/credits";
   write(`consolidate will invoke your local \`${cli}\` CLI once (${cost}).`);
   const confirmed =
@@ -252,16 +253,14 @@ export async function runConsolidation(opts: {
  * active source (kiro source ⇒ kiro steering; else claude). Exported for the
  * distill cascade, which infers the target the same way.
  */
-export function resolveTarget(
-  raw: string | undefined,
-  sourceMode: "claude" | "kiro" | "auto",
-): PreferencesTarget {
+export function resolveTarget(raw: string | undefined, sourceMode: SourceMode): PreferencesTarget {
   if (raw) {
     const v = raw.toLowerCase();
+    if (v === "codex") return "agents";
     if (v === "claude" || v === "kiro" || v === "agents") return v;
-    throw new Error(`unknown --target "${raw}" (expected claude, kiro, or agents)`);
+    throw new Error(`unknown --target "${raw}" (expected claude, codex, kiro, or agents)`);
   }
-  return sourceMode === "kiro" ? "kiro" : "claude";
+  return sourceMode === "kiro" ? "kiro" : sourceMode === "codex" ? "agents" : "claude";
 }
 
 /**
@@ -284,7 +283,7 @@ function targetFooter(target: PreferencesTarget): string[] {
       return [
         dim("add the block to your ") +
           cyan("AGENTS.md") +
-          dim(" — kiro and other agent CLIs auto-inherit it."),
+          dim(" — Codex, kiro, and other agent CLIs auto-inherit it."),
         dim("or run with --consolidate to merge near-duplicates with one runner call."),
       ];
     default:
@@ -350,7 +349,7 @@ export default defineCommand({
     target: {
       type: "string",
       description:
-        "Output target: claude (CLAUDE.md), kiro (steering file), or agents (AGENTS.md). Default: inferred from --source",
+        "Output target: claude (CLAUDE.md), codex/agents (AGENTS.md), or kiro (steering file). Default: inferred from --source",
     },
     consolidate: {
       type: "boolean",
@@ -358,7 +357,7 @@ export default defineCommand({
     },
     runner: {
       type: "string",
-      description: "Which local CLI consolidates: claude, kiro, or auto (default: auto)",
+      description: "Which local CLI consolidates: claude, codex, kiro, or auto (default: auto)",
     },
     model: {
       type: "string",

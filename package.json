@@ -1,13 +1,14 @@
 {
   "name": "cc-hindsight",
-  "version": "1.4.0",
-  "description": "Mine your coding-agent session history (Claude Code, kiro-cli) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
+  "version": "1.5.0",
+  "description": "Mine your coding-agent session history (Claude Code, Codex, kiro-cli) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",
   "license": "MIT",
   "keywords": [
     "claude",
     "claude-code",
+    "codex",
     "kiro",
     "kiro-cli",
     "agents",
@@ -48,6 +49,7 @@
   "dependencies": {
     "@clack/prompts": "1.7.0",
     "citty": "0.2.2",
+    "smol-toml": "1.9.1",
     "zod": "4.4.3"
   },
   "devDependencies": {

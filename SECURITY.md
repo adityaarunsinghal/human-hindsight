@@ -1,6 +1,6 @@
 # Security
 
-cc-hindsight reads your Claude Code conversation history, so its security
+cc-hindsight reads your coding-agent conversation history, so its security
 posture and its privacy posture are the same thing. The design goal is a data
 path that is small enough to review directly.
 
@@ -8,12 +8,20 @@ path that is small enough to review directly.
 
 - **Local-only.** Everything is read from your disk and written to your disk
   (`~/.cc-hindsight`, owner-only permissions). There is no server, no account,
-  and no telemetry. The only outbound call is your own `claude` CLI doing what
-  it already does when you use Claude Code.
+  and no telemetry. Distillation and optional preference consolidation send
+  content through your chosen `claude`, `codex`, or `kiro-cli` to its provider.
+- **Optional retention configuration.** `retention` previews local settings.
+  Only `retention --apply` plus consent (or `--apply --yes`) edits tool
+  configuration outside `~/.cc-hindsight`. Existing files get private backups;
+  remote retention, telemetry, and managed policy are not changed.
+- **Local GUI.** `gui` binds only to `127.0.0.1`, with a read-only API for
+  library contents. It rejects unrelated hosts/origins, disables caching and
+  embedding, and renders prompt text literally. No raw transcript or arbitrary
+  filesystem routes are exposed. Clipboard copying happens in your browser.
 - **Consent-gated spend.** No LLM call happens until `distill` has printed the
   exact invocation count and you have answered `[y/N]`. `--dry-run` shows the
   full plan and calls nothing.
-- **Pinned dependencies.** There are three runtime dependencies, and the whole
+- **Pinned dependencies.** There are four runtime dependencies, and the whole
   transitive tree is locked via `npm-shrinkwrap.json`.
 - **Verifiable builds.** Releases published through the `release.yml` workflow
   carry an npm provenance attestation that links the tarball to the commit and
@@ -33,7 +41,7 @@ private notes). Those files never leave your machine. Two things to know:
 ## Reporting a vulnerability
 
 If you find a security or privacy issue (for example, a path that writes
-outside `~/.cc-hindsight`, an unexpected network call, or a way tool output
+outside the explicitly selected data/configuration directories, an unexpected network call, or a way tool output
 leaks data you did not consent to send), please report it privately rather than
 opening a public issue:
 

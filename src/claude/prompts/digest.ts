@@ -18,11 +18,11 @@ import type { SourceName } from "../../sources/types.js";
  * `DIGEST_PROMPT_VERSION` is recorded in provenance downstream and MUST be
  * bumped on any meaningful change to the prompt text.
  */
-export const DIGEST_PROMPT_VERSION = 2;
+export const DIGEST_PROMPT_VERSION = 3;
 
 /** Human-facing name of a session's source backend. */
 export function sourceLabel(origin: SourceName | undefined): string {
-  return origin === "kiro" ? "Kiro CLI" : "Claude Code";
+  return origin === "kiro" ? "Kiro CLI" : origin === "codex" ? "Codex" : "Claude Code";
 }
 
 /** Input to {@link buildDigestPrompt}. */
@@ -52,11 +52,17 @@ export function buildDigestPrompt(input: DigestPromptInput): string {
   const legend =
     input.origin === "kiro"
       ? [`(file: ${input.exportName}).`]
-      : [
-          `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
-          "human's verbatim option choices; [command] lines are slash commands they ran;",
-          "[image pasted] marks visual context they supplied.",
-        ];
+      : input.origin === "codex"
+        ? [
+            `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
+            "human's verbatim option choices; [image pasted] marks visual context they supplied.",
+            "[audio supplied] marks audio they supplied.",
+          ]
+        : [
+            `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
+            "human's verbatim option choices; [command] lines are slash commands they ran;",
+            "[image pasted] marks visual context they supplied.",
+          ];
 
   parts.push(
     `You are analyzing one ${sourceLabel(input.origin)} session to produce a structured digest.`,

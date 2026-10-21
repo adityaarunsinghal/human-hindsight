@@ -14,6 +14,7 @@ const ALPHA_DIR = path.join(CLAUDE_HOME, "projects", "-Users-dev-alpha");
 // a test machine's real ~/.kiro can never leak in (the "never read the real
 // store" rule extends to kiro), while auto-mode behavior (e.g. prune) still runs.
 const NO_KIRO = path.join(CLAUDE_HOME, "no-kiro-here");
+const NO_CODEX = path.join(CLAUDE_HOME, "no-codex-here");
 
 const tmpHomes: string[] = [];
 
@@ -53,6 +54,7 @@ function run(extra: Partial<ExportArgs> = {}): {
     home,
     "claude-dir": CLAUDE_HOME,
     "kiro-dir": NO_KIRO,
+    "codex-dir": NO_CODEX,
     output: sink,
     ...extra,
   });
@@ -143,7 +145,13 @@ describe("export — idempotency", () => {
   it("re-running against the same input produces byte-identical files", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink });
+    runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
+      output: sink,
+    });
 
     const dir = path.join(home, "exports");
     const first = new Map<string, Buffer>();
@@ -151,7 +159,13 @@ describe("export — idempotency", () => {
 
     // Run a second time into the same home.
     const { sink: sink2 } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink2 });
+    runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
+      output: sink2,
+    });
 
     const second = new Map<string, Buffer>();
     for (const f of fs.readdirSync(dir)) second.set(f, fs.readFileSync(path.join(dir, f)));
@@ -167,7 +181,13 @@ describe("export — hygiene & permissions", () => {
   it("prunes a stale export whose session vanished, on an unfiltered run", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink });
+    runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
+      output: sink,
+    });
     const stale = path.join(home, "exports", "ghost-deadbeef.md");
     fs.writeFileSync(stale, "# stale");
 
@@ -176,6 +196,7 @@ describe("export — hygiene & permissions", () => {
       home,
       "claude-dir": CLAUDE_HOME,
       "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
       output: sink2,
     });
     expect(fs.existsSync(stale)).toBe(false);
@@ -185,7 +206,13 @@ describe("export — hygiene & permissions", () => {
   it("does NOT prune under a --project filter (subset run)", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": CLAUDE_HOME, "kiro-dir": NO_KIRO, output: sink });
+    runExport({
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
+      output: sink,
+    });
     const other = path.join(home, "exports", "other-project.md");
     fs.writeFileSync(other, "# from another scope");
 
@@ -194,6 +221,7 @@ describe("export — hygiene & permissions", () => {
       home,
       "claude-dir": CLAUDE_HOME,
       "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
       project: "alpha",
       output: sink2,
     });
@@ -299,6 +327,7 @@ function runAnaphora(extra: Partial<ExportArgs> = {}): {
     home,
     "claude-dir": ANAPHORA_HOME,
     "kiro-dir": NO_KIRO,
+    "codex-dir": NO_CODEX,
     output: sink,
     ...extra,
   });
@@ -417,13 +446,25 @@ describe("export — anaphora + outcome artifacts", () => {
   it("re-running is byte-identical for the JSON artifacts (idempotent)", () => {
     const home = freshHome();
     const { sink } = makeSink();
-    runExport({ home, "claude-dir": ANAPHORA_HOME, "kiro-dir": NO_KIRO, output: sink });
+    runExport({
+      home,
+      "claude-dir": ANAPHORA_HOME,
+      "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
+      output: sink,
+    });
     const dir = path.join(home, "exports");
     const first = new Map<string, Buffer>();
     for (const f of fs.readdirSync(dir)) first.set(f, fs.readFileSync(path.join(dir, f)));
 
     const { sink: sink2 } = makeSink();
-    runExport({ home, "claude-dir": ANAPHORA_HOME, "kiro-dir": NO_KIRO, output: sink2 });
+    runExport({
+      home,
+      "claude-dir": ANAPHORA_HOME,
+      "kiro-dir": NO_KIRO,
+      "codex-dir": NO_CODEX,
+      output: sink2,
+    });
     for (const f of fs.readdirSync(dir)) {
       expect(fs.readFileSync(path.join(dir, f)).equals(first.get(f) as Buffer)).toBe(true);
     }
@@ -475,6 +516,7 @@ describe("export — kiro source", () => {
       home,
       "claude-dir": CLAUDE_HOME,
       "kiro-dir": KIRO_HOME,
+      "codex-dir": path.join(home, "no-codex"),
       source: "auto",
       output: sink,
     });

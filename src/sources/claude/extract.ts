@@ -115,15 +115,19 @@ function extractDecisions(entry: Record<string, unknown>): string[] {
   if (!isRecord(result)) return [];
   const questions = result.questions;
   if (!Array.isArray(questions)) return [];
+  // Current AskUserQuestion results keep the questions and store selections in
+  // a separate answers map, keyed by the full question text.
+  const answers = isRecord(result.answers) ? result.answers : {};
   const lines: string[] = [];
   for (const q of questions) {
     if (!isRecord(q)) continue;
     const question = typeof q.question === "string" ? q.question.trim() : "";
     let answer = "";
-    if (typeof q.answer === "string") {
-      answer = q.answer.trim();
-    } else if (Array.isArray(q.answer)) {
-      answer = q.answer.filter((a): a is string => typeof a === "string").join(", ");
+    const value = q.answer ?? answers[question];
+    if (typeof value === "string") {
+      answer = value.trim();
+    } else if (Array.isArray(value)) {
+      answer = value.filter((a): a is string => typeof a === "string").join(", ");
     }
     if (question === "" || answer === "") continue;
     lines.push(`[decision] "${question}" → ${answer}`);
@@ -482,7 +486,9 @@ export function extractTimeline(lines: string[]): TimelineEvent[] {
     // R2 — rejection first, over ALL entry types (single-sourced).
     if (rejectReason(entry) !== null) continue;
 
-    if (entry.type === "user" || entry.type === "attachment") {
+    if (entry.type === "system" && entry.subtype === "compact_boundary") {
+      events.push({ kind: "boundary", timestamp: ts, text: "" });
+    } else if (entry.type === "user" || entry.type === "attachment") {
       const text = humanEntryText(entry, scratchDrops, ts === "" ? undefined : ts);
       if (text !== null) events.push({ kind: "human", timestamp: ts, text });
     } else if (entry.type === "assistant") {

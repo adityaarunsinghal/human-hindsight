@@ -1,6 +1,7 @@
 import type { AnaphoraRecord } from "../../core/anaphora.js";
 import { TAIL_CHARS } from "../../core/anaphora.js";
 import { middleCut } from "../../core/budget.js";
+import type { SourceName } from "../../sources/types.js";
 import type { ClusterTask, Digest } from "../schemas.js";
 
 /**
@@ -19,7 +20,7 @@ import type { ClusterTask, Digest } from "../schemas.js";
  * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change
  * (including changes to the response schema the model is held to).
  */
-export const AUTHOR_PROMPT_VERSION = 3;
+export const AUTHOR_PROMPT_VERSION = 4;
 
 /** One member session's bundle of author inputs. */
 export interface AuthorMemberInput {
@@ -32,7 +33,7 @@ export interface AuthorMemberInput {
   /** Resolved short-turn records for this session. */
   anaphora?: AnaphoraRecord[];
   /** Which backend produced the session (absent ⇒ claude, the old-manifest rule). */
-  origin?: "claude" | "kiro";
+  origin?: SourceName;
 }
 
 /** Input to {@link buildAuthorPrompt}. */
@@ -100,13 +101,19 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
   // surfaces). An all-claude task is byte-identical to the pre-multi-backend
   // prompt; a mixed task keeps the bullets for its claude members.
   const hasClaudeMember = input.members.some((m) => (m.origin ?? "claude") === "claude");
+  const hasCodexMember = input.members.some((m) => m.origin === "codex");
   const legendBullets = hasClaudeMember
     ? [
         "- [decision] lines are the human's verbatim choices — honor them;",
         "- [command] and [image pasted] lines show how they actually prompted (mention",
         "  supplying a screenshot if that was part of the task).",
       ]
-    : [];
+    : hasCodexMember
+      ? [
+          "- [decision] lines are the human's verbatim choices — honor them;",
+          "- [image pasted] and [audio supplied] mark context the human supplied.",
+        ]
+      : [];
 
   return [
     "You are authoring the realistic ideal first prompt for a task a human already",

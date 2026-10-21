@@ -1,0 +1,2 @@
+{"timestamp":"2026-10-20T10:00:00Z","type":"session_meta","payload":{"id":"11111111-1111-1111-1111-111111111111","cwd":"/work/my-webapp","source":"vscode"}}
+{"timestamp":"2026-10-20T10:00:01Z","type":"event_msg","payload":{"type":"user_message","message":"An older duplicate copy should not be exported."}}

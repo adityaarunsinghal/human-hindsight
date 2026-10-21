@@ -24,7 +24,7 @@ import {
 } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
 import type { AgentRunner } from "../runners/types.js";
-import { parseSourceMode } from "../sources/registry.js";
+import { parseSourceMode, type SourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import { renderLibraryTable } from "../ui/library-table.js";
 import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
@@ -42,10 +42,11 @@ import type { ManifestEntry } from "./export.js";
 export interface DistillArgs {
   home?: string;
   "claude-dir"?: string;
+  "codex-dir"?: string;
   "kiro-dir"?: string;
-  /** Which backend(s) to distill from: claude, kiro, or auto (default auto). */
+  /** Which backend(s) to distill from: claude, codex, kiro, or auto (default auto). */
   source?: string;
-  /** Which local CLI distills: claude, kiro, or auto (default auto). */
+  /** Which local CLI distills: claude, codex, kiro, or auto (default auto). */
   runner?: string;
   project?: string;
   /** citty maps `--no-group` to `group: false`; grouping is on by default. */
@@ -220,7 +221,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
         ? "~/.kiro"
         : sourceMode === "claude"
           ? "~/.claude"
-          : "~/.claude and ~/.kiro";
+          : sourceMode === "codex"
+            ? "~/.codex"
+            : "~/.claude, ~/.codex, and ~/.kiro";
     const doExport =
       Boolean(args.yes) ||
       (canPrompt &&
@@ -238,6 +241,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     runExport({
       home: args.home,
       "claude-dir": args["claude-dir"],
+      "codex-dir": args["codex-dir"],
       "kiro-dir": args["kiro-dir"],
       source: args.source,
       project: args.project,
@@ -614,10 +618,10 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 async function offerPreferencesCascade(opts: {
   home: string;
   runner: RunnerFn;
-  runnerName: "claude" | "kiro" | undefined;
+  runnerName: SourceName | undefined;
   yes: boolean;
   canPrompt: boolean;
-  sourceMode: "claude" | "kiro" | "auto";
+  sourceMode: SourceMode;
   model?: string;
   /** Explicit --timeout (ms); absent means the consolidation call scales its own. */
   timeoutMs?: number;
@@ -632,7 +636,7 @@ async function offerPreferencesCascade(opts: {
   const prefs = aggregatePreferences(entries);
   if (prefs.length === 0) return; // nothing observed; keep the ending unchanged
 
-  const cli = runnerName === "kiro" ? "kiro-cli" : "claude";
+  const cli = runnerName === "kiro" ? "kiro-cli" : (runnerName ?? "claude");
   write();
   const proceed =
     yes ||
@@ -693,7 +697,7 @@ export default defineCommand({
     model: { type: "string", description: "Model passed through to the runner's --model" },
     runner: {
       type: "string",
-      description: "Which local CLI distills: claude, kiro, or auto (default: auto)",
+      description: "Which local CLI distills: claude, codex, kiro, or auto (default: auto)",
     },
     fresh: { type: "boolean", description: "Reset distill checkpoints and start over" },
     "dry-run": { type: "boolean", description: "Print the invocation plan and exit; run nothing" },

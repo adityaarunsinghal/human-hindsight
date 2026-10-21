@@ -1,4 +1,6 @@
+import type { SourceName } from "../../sources/types.js";
 import type { Digest } from "../schemas.js";
+import { sourceLabel } from "./digest.js";
 
 /**
  * Stage 2 — cluster prompt builder.
@@ -18,7 +20,7 @@ import type { Digest } from "../schemas.js";
  * `CLUSTER_PROMPT_VERSION` is recorded in provenance downstream; bump it on
  * any meaningful change to the prompt text.
  */
-export const CLUSTER_PROMPT_VERSION = 3;
+export const CLUSTER_PROMPT_VERSION = 4;
 
 /** Render one digest as a compact labeled block. */
 function renderDigest(exportName: string, digest: Digest): string {
@@ -41,7 +43,7 @@ function renderDigest(exportName: string, digest: Digest): string {
  */
 export function buildClusterPrompt(
   digests: Record<string, Digest>,
-  origins?: Record<string, "claude" | "kiro">,
+  origins?: Record<string, SourceName>,
 ): string {
   const ids = Object.keys(digests);
   const blocks = ids.map((id) => {
@@ -50,8 +52,7 @@ export function buildClusterPrompt(
   });
 
   const originSet = new Set(ids.map((id) => origins?.[id] ?? "claude"));
-  const sourceNoun =
-    originSet.size > 1 ? "coding-agent" : originSet.has("kiro") ? "Kiro CLI" : "Claude Code";
+  const sourceNoun = originSet.size > 1 ? "coding-agent" : sourceLabel([...originSet][0]);
 
   return [
     `You are grouping ${sourceNoun} sessions into semantic tasks for a personal`,

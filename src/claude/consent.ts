@@ -1,5 +1,6 @@
 import readline from "node:readline";
 import type { Readable, Writable } from "node:stream";
+import type { SourceName } from "../sources/types.js";
 import { bold, cyan, dim, yellow } from "../ui/style.js";
 
 /**
@@ -21,11 +22,11 @@ export interface DistillPlan {
   /** Estimated authoring calls (one per task; exact count known post-cluster). */
   authorEstimate: number;
   /**
-   * Which local CLI will be invoked ("claude" | "kiro"). Defaults to "claude"
+   * Which local CLI will be invoked ("claude" | "codex" | "kiro"). Defaults to "claude"
    * so the disclosure copy is byte-identical to before when the resolved runner
    * is claude; a kiro runner names kiro (and its credits) instead.
    */
-  runnerName?: "claude" | "kiro";
+  runnerName?: SourceName;
   /** Optional resume line shown when checkpoints already exist. */
   resumeNote?: string;
   /** Input budget in chars — when set, a coverage disclosure line is shown. */
@@ -40,7 +41,7 @@ export interface DistillPlan {
 function runnerCopy(name: DistillPlan["runnerName"]): { cli: string; cost: string } {
   return name === "kiro"
     ? { cli: "kiro-cli", cost: "your Kiro credits" }
-    : { cli: "claude", cost: "your subscription/credits" };
+    : { cli: name ?? "claude", cost: "your subscription/credits" };
 }
 
 export interface ConsentOptions {

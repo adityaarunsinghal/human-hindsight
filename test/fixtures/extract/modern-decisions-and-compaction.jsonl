@@ -1,0 +1,5 @@
+{"type":"assistant","timestamp":"2026-10-20T10:00:00Z","message":{"content":[{"type":"tool_use","name":"AskUserQuestion","input":{"questions":[{"question":"Which database?","options":[{"label":"SQLite"},{"label":"Postgres"}]}]}}]}}
+{"type":"user","timestamp":"2026-10-20T10:00:01Z","message":{"content":[{"type":"tool_result","content":"Answers received"}]},"toolUseResult":{"questions":[{"question":"Which database?"},{"question":"Which checks?"}],"answers":{"Which database?":"SQLite","Which checks?":["Lint","Typecheck"]}}}
+{"type":"system","subtype":"compact_boundary","timestamp":"2026-10-20T10:01:00Z","compactMetadata":{"trigger":"auto","preTokens":100000}}
+{"type":"user","timestamp":"2026-10-20T10:01:01Z","isCompactSummary":true,"message":{"content":"This is an automatically generated summary."}}
+{"type":"user","timestamp":"2026-10-20T10:02:00Z","message":{"content":"Build the migration."}}

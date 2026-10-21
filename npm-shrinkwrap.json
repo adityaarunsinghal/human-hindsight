@@ -1,16 +1,17 @@
 {
   "name": "cc-hindsight",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "cc-hindsight",
-      "version": "1.4.0",
+      "version": "1.5.0",
       "license": "MIT",
       "dependencies": {
         "@clack/prompts": "1.7.0",
         "citty": "0.2.2",
+        "smol-toml": "1.9.1",
         "zod": "4.4.3"
       },
       "bin": {
@@ -1733,6 +1734,18 @@
       "resolved": "https://registry.npmjs.org/sisteransi/-/sisteransi-1.0.5.tgz",
       "integrity": "sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==",
       "license": "MIT"
+    },
+    "node_modules/smol-toml": {
+      "version": "1.9.1",
+      "resolved": "https://registry.npmjs.org/smol-toml/-/smol-toml-1.9.1.tgz",
+      "integrity": "sha512-j7WyPdf0CJoutMzMoPLF/bVXHtKZIT9Rb4eGeEbWw8X2t5oirjPgpL+OpaENZrILYaXqYwnVH+qgUwVbl+pUJQ==",
+      "license": "BSD-3-Clause",
+      "engines": {
+        "node": ">= 18"
+      },
+      "funding": {
+        "url": "https://github.com/sponsors/cyyynthia"
+      }
     },
     "node_modules/source-map-js": {
       "version": "1.2.1",

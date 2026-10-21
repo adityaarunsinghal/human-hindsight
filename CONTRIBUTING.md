@@ -24,19 +24,26 @@ untested.
 
 ## Ground rules
 
-- **Three runtime dependencies** (`citty`, `zod`, `@clack/prompts`): keep the
+- **Four runtime dependencies** (`citty`, `zod`, `@clack/prompts`, `smol-toml`): keep the
   tree auditable in one sitting. A new dependency needs to clearly reduce code
   or pay for itself in UX; when in doubt, hand-roll it or leave it out.
-- **Tests never read `~/.claude` OR `~/.kiro`, or write outside temp dirs.**
+- **Tests never read `~/.claude`, `~/.codex`, or `~/.kiro`, or write outside temp dirs.**
   Every test runs against synthetic fixtures under `test/fixtures/`. Because
   `--source` defaults to `auto` (read whichever backend stores exist), a test
-  that only sets `--claude-dir` would silently pick up a dev's real `~/.kiro`;
-  pin `source: "claude"` (or point `--kiro-dir` at a nonexistent path) in every
-  fixture-scoped test.
+  that only sets `--claude-dir` would silently pick up a dev's other stores;
+  pin `source: "claude"` or point every other tool directory at a nonexistent
+  path in fixture-scoped tests.
 - **No LLM calls outside `distill` / `preferences --consolidate`**, and never
-  without the consent gate. Unit tests mock the spawn layer — the kiro runner
-  spawn is mocked exactly like the claude one; no test ever invokes real
-  `kiro-cli`.
+  without the consent gate. Unit tests mock every agent runner's spawn layer;
+  no test invokes real `claude`, `codex`, or `kiro-cli`.
+- **Retention is opt-in.** Default preview, `--yes` alone, and `--dry-run`
+  must not write. Apply only after `--apply` plus consent, preserve unrelated
+  settings, and back up existing files with owner-only permissions.
+- **Keep the GUI small and local.** Use the bundled vanilla assets and Node's
+  built-in server. Serve only library data on loopback; don't render prompt
+  content as HTML or expose filesystem/mutation endpoints. Check dropdowns in
+  a real browser at narrow widths in both themes: one centered 12 × 8 px
+  chevron, a 12 px right inset, and 36 px reserved right padding.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, …).
 
 ## The extraction fidelity contract
@@ -75,10 +82,10 @@ dedupe (`test/fixtures/export-home/`), and anaphora
 
 ## Multi-backend architecture (the seam)
 
-cc-hindsight reads two backends (Claude Code, kiro-cli) through one seam:
+cc-hindsight reads Claude Code, Codex, and kiro-cli through one seam:
 
 - **`SessionSource`** (`src/sources/types.ts`) is the source-agnostic currency.
-  Each backend's adapter (`src/sources/{claude,kiro}/`) turns raw lines into the
+  Each backend's adapter (`src/sources/{claude,codex,kiro}/`) turns raw lines into the
   same `ExtractResult` + `TimelineEvent[]`; everything downstream (dedupe,
   anaphora, outcome, render, distill) consumes only those and never parses raw
   lines. Adding a backend = one new `sources/<name>/` adapter + a registry entry.
@@ -89,13 +96,20 @@ cc-hindsight reads two backends (Claude Code, kiro-cli) through one seam:
   texts from one shared per-entry function (claude: `humanEntryText`; kiro:
   `promptText`). Each backend has an extract↔timeline agreement test; keep it.
 - **`AgentRunner`** (`src/runners/`) is the distill CLI seam. `shared.ts` holds
-  the backend-agnostic spawn/error/retry primitives; `claude.ts` and `kiro.ts`
+  the backend-agnostic spawn/error/retry primitives; `claude.ts`, `codex.ts`, and `kiro.ts`
   each add their invocation specifics. The kiro runner layers two retries: a
   transient **empty-stdout backoff** (kiro's "having trouble responding" returns
   exit 0 + empty stdout — retry the *same* input, no corrective note) sits
   *below* the shared **corrective retry** (bad JSON → retry once *with* a
   corrective note). Don't collapse them: burning the corrective retry on a
   transport blip wastes it.
+
+Codex fixtures live in `test/fixtures/codex-home/`. Preserve its
+`{timestamp,type,payload}` shape, including paired `response_item`/`event_msg`
+messages; a mirror must not become a second human turn. Discovery includes
+archived rollouts, deduplicates session IDs, and excludes generated subagents
+from export. Runner tests write synthetic final-message files through mocked
+spawns, exercising the same cleanup path as real `codex exec` calls.
 
 ## Prompt changes
 

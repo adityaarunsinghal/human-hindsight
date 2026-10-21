@@ -43,6 +43,7 @@ function renderStaleDigests(keys: string[]): string[] {
 export function renderStatus(opts: {
   home: string;
   claudeDir: string;
+  codexDir?: string;
   kiroDir?: string;
   source?: SourceMode;
 }): string {
@@ -55,8 +56,10 @@ export function renderStatus(opts: {
   let orphanHistories = 0;
   try {
     const mode = opts.source ?? "auto";
-    const kiroDir = opts.kiroDir ?? path.join(process.env.HOME ?? "", ".kiro");
-    const sources = resolveSources(mode, { claudeDir: opts.claudeDir, kiroDir });
+    const defaults = resolvePaths({});
+    const kiroDir = opts.kiroDir ?? defaults.kiroDir;
+    const codexDir = opts.codexDir ?? defaults.codexDir;
+    const sources = resolveSources(mode, { claudeDir: opts.claudeDir, codexDir, kiroDir });
     const bySource = sources.map((src) => ({
       name: src.name,
       count: src.discover({ countEntries: false }).reduce((m, p) => m + p.sessions.length, 0),
@@ -66,7 +69,7 @@ export function renderStatus(opts: {
       discoveredBreakdown = ` (${bySource.map((s) => `${s.count} ${s.name}`).join(", ")})`;
     }
     // Orphan .history files: human sessions whose transcript was deleted.
-    if (mode !== "claude") orphanHistories = countOrphanHistories(kiroDir);
+    if (mode === "auto" || mode === "kiro") orphanHistories = countOrphanHistories(kiroDir);
   } catch {
     discovered = null;
   }
@@ -191,9 +194,9 @@ export default defineCommand({
   },
   args: { ...sharedArgs },
   run({ args }) {
-    const { home, claudeDir, kiroDir } = resolvePaths(args);
+    const { home, claudeDir, codexDir, kiroDir } = resolvePaths(args);
     console.log(
-      renderStatus({ home, claudeDir, kiroDir, source: parseSourceMode(args.source as string) }),
+      renderStatus({ home, claudeDir, codexDir, kiroDir, source: parseSourceMode(args.source) }),
     );
   },
 });

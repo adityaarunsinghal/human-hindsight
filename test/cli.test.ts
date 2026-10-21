@@ -19,6 +19,8 @@ const EXPECTED = [
   "prune",
   "status",
   "preferences",
+  "retention",
+  "gui",
 ];
 
 describe("cc-hindsight root command", () => {
@@ -31,7 +33,7 @@ describe("cc-hindsight root command", () => {
     expect(meta.version).toBe(pkg.version);
   });
 
-  it("registers all 8 subcommands", () => {
+  it("registers all subcommands", () => {
     const subCommands = main.subCommands as Record<string, unknown>;
     expect(Object.keys(subCommands).sort()).toEqual([...EXPECTED].sort());
   });
@@ -138,7 +140,7 @@ describe("root-level path flags reach the subcommand", () => {
     logSpy = vi.spyOn(console, "log").mockImplementation((...p: unknown[]) => {
       logs.push(p.map(String).join(" "));
     });
-    for (const k of ["CC_HINDSIGHT_HOME", "CLAUDE_CONFIG_DIR", "KIRO_CONFIG_DIR"]) {
+    for (const k of ["CC_HINDSIGHT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_CONFIG_DIR"]) {
       delete process.env[k];
     }
   });
@@ -146,7 +148,7 @@ describe("root-level path flags reach the subcommand", () => {
   afterEach(() => {
     logSpy.mockRestore();
     for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
-    for (const k of ["CC_HINDSIGHT_HOME", "CLAUDE_CONFIG_DIR", "KIRO_CONFIG_DIR"]) {
+    for (const k of ["CC_HINDSIGHT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_CONFIG_DIR"]) {
       if (savedEnv[k] === undefined) delete process.env[k];
       else process.env[k] = savedEnv[k];
     }
@@ -158,16 +160,17 @@ describe("root-level path flags reach the subcommand", () => {
     // `status` reads the home's library/exports; a fresh dir reports a zeroed
     // funnel. If the root --home were dropped we would read the real store.
     await runMain(main, {
-      rawArgs: ["--home", home, "--claude-dir", claudeDir, "--source", "claude", "status"],
+      rawArgs: ["--home", home, "--claude-dir", claudeDir, "status", "--source", "claude"],
     });
     expect(process.env.CC_HINDSIGHT_HOME).toBe(home);
     expect(logs.join("\n")).toContain("exported    0 session(s)");
   });
 
-  it("honors --claude-dir and --kiro-dir given BEFORE the subcommand", async () => {
+  it("honors all tool directories given BEFORE the subcommand", async () => {
     const home = mkdir("home2");
     const claudeDir = mkdir("claude2");
     const kiroDir = mkdir("kiro2");
+    const codexDir = mkdir("codex2");
     await runMain(main, {
       rawArgs: [
         "--home",
@@ -176,13 +179,16 @@ describe("root-level path flags reach the subcommand", () => {
         claudeDir,
         "--kiro-dir",
         kiroDir,
+        "--codex-dir",
+        codexDir,
+        "status",
         "--source",
         "claude",
-        "status",
       ],
     });
     expect(process.env.CLAUDE_CONFIG_DIR).toBe(claudeDir);
     expect(process.env.KIRO_CONFIG_DIR).toBe(kiroDir);
+    expect(process.env.CODEX_HOME).toBe(codexDir);
     // An empty claude dir has no sessions to discover.
     expect(logs.join("\n")).toContain("discovered  0 session(s)");
   });
@@ -198,9 +204,9 @@ describe("root-level path flags reach the subcommand", () => {
         rootHome,
         "--claude-dir",
         claudeDir,
+        "status",
         "--source",
         "claude",
-        "status",
         "--home",
         subHome,
       ],
@@ -213,7 +219,7 @@ describe("root-level path flags reach the subcommand", () => {
     const claudeDir = mkdir("claude4");
     process.env.CC_HINDSIGHT_HOME = envHome;
     await runMain(main, {
-      rawArgs: ["--claude-dir", claudeDir, "--source", "claude", "status"],
+      rawArgs: ["--claude-dir", claudeDir, "status", "--source", "claude"],
     });
     expect(process.env.CC_HINDSIGHT_HOME).toBe(envHome);
   });

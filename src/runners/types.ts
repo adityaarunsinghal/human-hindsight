@@ -1,4 +1,5 @@
 import type { ZodType } from "zod";
+import type { SourceName } from "../sources/types.js";
 
 /**
  * runners/types.ts — the backend-agnostic runner contract.
@@ -37,11 +38,13 @@ export interface Capabilities {
   jsonSchema: boolean;
   /** How to disable tool use: `--tools ""`, deny-list, or instruction-only. */
   disableTools: "tools-empty" | "disallowed" | "none";
+  /** Whether Claude can avoid saving generated distillation sessions. */
+  noSessionPersistence?: boolean;
 }
 
 /** A pluggable agent runner. */
 export interface AgentRunner {
-  readonly name: "claude" | "kiro";
+  readonly name: SourceName;
   /** One-line install hint shown when the binary is missing. */
   readonly installHint: string;
   /** Invoke one stage: prompt+schema in, validated object out. */

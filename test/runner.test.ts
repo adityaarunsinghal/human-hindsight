@@ -111,6 +111,67 @@ function mockIo(results: SpawnResult[], which: string | null = "/usr/bin/claude"
 // --- tests -----------------------------------------------------------------
 
 describe("runClaude — success path", () => {
+  it.each([false, true])("prefers modern structured_output (verbose=%s)", async (verbose) => {
+    const terminal = {
+      type: "result",
+      subtype: "success",
+      is_error: false,
+      result: "",
+      structured_output: VALID_DIGEST,
+    };
+    const result = {
+      ...envelope(""),
+      stdout: JSON.stringify(verbose ? [{ type: "system" }, terminal] : terminal),
+    };
+    const { io, calls } = mockIo([result]);
+    await expect(
+      runClaude({ prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN }, io),
+    ).resolves.toEqual(VALID_DIGEST);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("reports current errors arrays without spending a validation retry", async () => {
+    const result = {
+      ...envelope(""),
+      code: 1,
+      stdout: JSON.stringify({
+        type: "result",
+        subtype: "error_during_execution",
+        is_error: true,
+        errors: ["Authentication failed", "Please sign in"],
+      }),
+    };
+    const { io, calls } = mockIo([result]);
+    await expect(
+      runClaude({ prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN }, io),
+    ).rejects.toMatchObject({
+      kind: "cli-error",
+      message: expect.stringContaining("Authentication failed"),
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("does not accept a valid answer from a failed process", async () => {
+    const { io, calls } = mockIo([{ ...envelope(VALID_DIGEST), code: 1 }]);
+    await expect(
+      runClaude({ prompt: "p", schema: DigestSchema, capabilities: CAPS_MODERN }, io),
+    ).rejects.toMatchObject({ kind: "cli-error" });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("avoids retaining generated distillation sessions when the CLI supports it", async () => {
+    const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
+    await runClaude(
+      {
+        prompt: "p",
+        schema: DigestSchema,
+        capabilities: { ...CAPS_MODERN, noSessionPersistence: true },
+      },
+      io,
+    );
+    expect(calls[0]?.args).toContain("--no-session-persistence");
+  });
+
   it("parses the envelope and validates against the schema", async () => {
     const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
     const out = await runClaude(

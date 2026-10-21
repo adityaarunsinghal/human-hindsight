@@ -4,6 +4,35 @@ All notable changes to cc-hindsight are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-10-21
+
+### Added
+
+- Lightweight `cc-hindsight gui`: a local browser for searching, filtering,
+  viewing, and copying prompt libraries. Uses Node HTTP and bundled vanilla
+  HTML/CSS/JavaScript, with no new GUI dependencies; supports light/dark
+  appearance, narrow screens, custom ports, and `--no-open`.
+- Codex history source and distillation runner: `--source codex`, `--runner
+  codex`, `--codex-dir` / `CODEX_HOME`, active and archived rollouts, stable
+  session IDs, mirrored-message deduplication, context filtering, and
+  `AGENTS.md` preferences. Codex runs use structured output, private scratch
+  directories, a read-only sandbox, and ephemeral sessions.
+- Optional `retention` command: preview long local history retention for
+  Claude Code and Codex, then opt in with `--apply`. Existing settings receive
+  private backups; unrelated values and existing longer retention are
+  preserved. Kiro users receive documented persistence/save guidance.
+- Exact-pinned `smol-toml` for safe Codex configuration parsing and edits.
+- GitHub Releases are now created by the release workflow after npm publishing,
+  using the version's changelog as release notes.
+
+### Fixed
+
+- Current Claude `structured_output` envelopes, error arrays, and nonzero
+  process exits are handled alongside older result envelopes. Generated
+  distillation sessions are not persisted when the CLI supports that flag.
+- Current Claude question answers stored separately from the questions are
+  recovered, and compaction boundaries reset antecedent context.
+
 ## [1.4.0] - 2026-08-29
 
 ### Added
@@ -324,7 +353,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.4.0
 [1.3.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.1
 [1.3.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.0

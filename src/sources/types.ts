@@ -15,7 +15,7 @@
  */
 
 /** Which backend a session came from. */
-export type SourceName = "claude" | "kiro";
+export type SourceName = "claude" | "codex" | "kiro";
 
 /**
  * A recovered human message. `text` may join multiple surviving pieces with a
@@ -72,6 +72,8 @@ export type TimelineEvent =
 
 /** A single session transcript discovered in a backend's store. */
 export interface SessionInfo {
+  /** Stable session ID when it differs from the transcript's filename. */
+  id?: string;
   /** File name on disk, e.g. `01ab...ef.jsonl`. */
   file: string;
   /** Absolute path to the session file. */

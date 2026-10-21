@@ -335,6 +335,7 @@ describe("renderStatus — per-source discovered breakdown", () => {
       home,
       claudeDir: path.join(FIXTURES, "export-home"),
       kiroDir: path.join(FIXTURES, "kiro-home"),
+      codexDir: path.join(home, "no-codex"),
       source: "auto",
     });
     // export-home holds 4 claude sessions (alpha + beta); kiro-home holds 5 transcripts.
@@ -350,6 +351,7 @@ describe("renderStatus — per-source discovered breakdown", () => {
       home,
       claudeDir: path.join(FIXTURES, "export-home"),
       kiroDir: path.join(FIXTURES, "does-not-exist"),
+      codexDir: path.join(home, "no-codex"),
       source: "auto",
     });
     expect(out).not.toContain("claude,");

@@ -75,7 +75,11 @@ function parseCapabilities(text: string): Capabilities {
     : /--disallowed-?[tT]ools/.test(text)
       ? "disallowed"
       : "none";
-  return { jsonSchema: text.includes("--json-schema"), disableTools };
+  return {
+    jsonSchema: text.includes("--json-schema"),
+    disableTools,
+    ...(text.includes("--no-session-persistence") ? { noSessionPersistence: true } : {}),
+  };
 }
 
 /**
@@ -137,6 +141,7 @@ interface ClaudeEnvelope {
   subtype?: string;
   is_error?: boolean;
   result?: unknown;
+  structured_output?: unknown;
   [k: string]: unknown;
 }
 
@@ -156,14 +161,22 @@ interface ClaudeEnvelope {
  * last-element fallback for a future stream that renames the type tag.
  */
 function selectEnvelope(parsed: unknown): ClaudeEnvelope | null {
-  if (!Array.isArray(parsed)) return parsed as ClaudeEnvelope;
+  if (!Array.isArray(parsed)) {
+    return typeof parsed === "object" && parsed !== null ? (parsed as ClaudeEnvelope) : null;
+  }
   const events = parsed as ClaudeEnvelope[];
   const resultEvent = events.findLast((e) => e?.type === "result");
   if (resultEvent) return resultEvent;
   // No type-tagged result event: fall back to the last element if it at least
   // looks like a terminal envelope, else signal "no result event" to the caller.
   const last = events.at(-1);
-  if (last && (Object.hasOwn(last, "result") || Object.hasOwn(last, "is_error"))) return last;
+  if (
+    last &&
+    (Object.hasOwn(last, "result") ||
+      Object.hasOwn(last, "structured_output") ||
+      Object.hasOwn(last, "is_error"))
+  )
+    return last;
   return null;
 }
 
@@ -198,15 +211,25 @@ function extractResult(result: SpawnResult): unknown {
     );
   }
 
-  if (envelope.is_error) {
-    const msg = typeof envelope.result === "string" ? envelope.result : "unknown error";
+  if (envelope.is_error || envelope.subtype?.startsWith("error") || result.code !== 0) {
+    const errors = Array.isArray(envelope.errors)
+      ? envelope.errors.filter((e) => typeof e === "string").join("; ")
+      : "";
+    const msg =
+      errors ||
+      (typeof envelope.result === "string" ? envelope.result : "") ||
+      snippet(result.stderr) ||
+      envelope.subtype ||
+      `exit ${result.code}`;
     throw new AgentRunnerError("cli-error", `claude reported an error: ${msg}`, {
       stderr: result.stderr,
       output: result.stdout,
     });
   }
 
-  const r = envelope.result;
+  // Current --json-schema results use structured_output, often with an empty
+  // result string. Keep the older result object/string and verbose-array paths.
+  const r = envelope.structured_output ?? envelope.result;
   if (r === null || r === undefined) {
     // Include a snippet: a bare "missing a 'result' field" is undiagnosable, and
     // that opacity is what hid the verbose-array shape for a whole release.
@@ -231,6 +254,7 @@ function extractResult(result: SpawnResult): unknown {
 
 function buildArgs(caps: Capabilities, opts: RunClaudeOptions<unknown>): string[] {
   const args = ["-p", "--output-format", "json"];
+  if (caps.noSessionPersistence) args.push("--no-session-persistence");
   if (caps.jsonSchema) {
     args.push("--json-schema", JSON.stringify(toJsonSchema(opts.schema)));
   }

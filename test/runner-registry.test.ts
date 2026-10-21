@@ -16,6 +16,7 @@ describe("parseRunnerMode", () => {
   it("defaults to auto and accepts the three modes", () => {
     expect(parseRunnerMode(undefined)).toBe("auto");
     expect(parseRunnerMode("KIRO")).toBe("kiro");
+    expect(parseRunnerMode("CODEX")).toBe("codex");
   });
   it("rejects unknown values", () => {
     expect(() => parseRunnerMode("gpt")).toThrow(/unknown --runner/);
@@ -39,6 +40,14 @@ describe("resolveRunner — explicit modes fail fast on a missing binary", () =>
   it("explicit modes resolve when the binary exists", async () => {
     expect((await resolveRunner("kiro", { io: ioWith("kiro-cli") })).name).toBe("kiro");
     expect((await resolveRunner("claude", { io: ioWith("claude") })).name).toBe("claude");
+    expect((await resolveRunner("codex", { io: ioWith("codex") })).name).toBe("codex");
+  });
+
+  it("explicit Codex fails before consent when its binary is absent", async () => {
+    await expect(resolveRunner("codex", { io: ioWith("claude") })).rejects.toMatchObject({
+      kind: "missing-binary",
+      message: expect.stringContaining("codex"),
+    });
   });
 });
 
@@ -54,6 +63,18 @@ describe("resolveRunner — auto", () => {
   it("falls back to whichever binary exists (kiro-only machine works)", async () => {
     const r = await resolveRunner("auto", { io: ioWith("kiro-cli") });
     expect(r.name).toBe("kiro");
+  });
+
+  it("supports Codex-only machines and an explicit source preference", async () => {
+    expect((await resolveRunner("auto", { io: ioWith("codex") })).name).toBe("codex");
+    expect(
+      (
+        await resolveRunner("auto", {
+          io: ioWith("claude", "codex", "kiro-cli"),
+          preferSource: "codex",
+        })
+      ).name,
+    ).toBe("codex");
   });
 
   it("prefers claude when both exist and no source preference is given", async () => {

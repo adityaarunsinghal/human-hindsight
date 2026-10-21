@@ -39,8 +39,9 @@ export interface ManifestEntry {
 export interface ExportArgs {
   home?: string;
   "claude-dir"?: string;
+  "codex-dir"?: string;
   "kiro-dir"?: string;
-  /** Which backend(s) to read: claude, kiro, or auto (default auto). */
+  /** Which backend(s) to read: claude, codex, kiro, or auto (default auto). */
   source?: string;
   /** Case-insensitive substring filter on project short name. */
   project?: string;
@@ -108,7 +109,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   const out = opts.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
 
-  const { home, claudeDir, kiroDir } = resolvePaths(opts);
+  const { home, claudeDir, codexDir, kiroDir } = resolvePaths(opts);
   const minMessages = parseClampedInt(opts["min-messages"], { fallback: 1, min: 1 });
   const exportsDir = path.join(home, "exports");
   const sourceMode = parseSourceMode(opts.source);
@@ -116,7 +117,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   // Every active backend as a SessionSource. Extraction and timeline run through
   // each source, so the seam is uniform; a single-active-source run (the common
   // claude-only machine) is byte-identical to the pre-multi-backend behavior.
-  const sources = resolveSources(sourceMode, { claudeDir, kiroDir });
+  const sources = resolveSources(sourceMode, { claudeDir, codexDir, kiroDir });
 
   // Read every selected session into the corpus input, tolerating read errors.
   // Extraction runs through the OWNING source; the timeline is deferred to a
@@ -157,7 +158,7 @@ export function runExport(opts: ExportArgs): ExportStats {
         const lines = content.split(/\r?\n/);
         inputs.push({
           project: project.shortName,
-          sessionId: session.file.replace(/\.jsonl$/, ""),
+          sessionId: session.id ?? session.file.replace(/\.jsonl$/, ""),
           sourcePath: session.path,
           extracted: source.extract(lines),
         });
@@ -342,8 +343,10 @@ function reportExport(
   if (origins.length > 1) {
     write(
       dim(
-        `  including ${stats.sessionsByOrigin.kiro ?? 0} kiro session(s); ` +
-          "use --source claude to restore the claude-only scope",
+        `  including ${origins
+          .filter((origin) => origin !== "claude")
+          .map((origin) => `${stats.sessionsByOrigin[origin]} ${origin} session(s)`)
+          .join(" + ")}; use --source ${origins[0]} to read one tool at a time`,
       ),
     );
   }
