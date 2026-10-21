@@ -40,7 +40,7 @@ export function runRate(args: RateArgs, deps: RateDeps = {}): number {
 
   const entry = findEntry(home, slug);
   if (!entry) {
-    write(`no library entry "${slug}" — try \`cc-hindsight list\`.`);
+    write(`no library entry "${slug}" — try \`human-hindsight list\`.`);
     return 1;
   }
 
@@ -52,7 +52,7 @@ export function runRate(args: RateArgs, deps: RateDeps = {}): number {
   writeFilePrivate(path.join(entry.dir, "sources.json"), `${JSON.stringify(sources, null, 2)}\n`);
 
   write(green(`${rating === "up" ? "▲" : "▼"} ${slug} rated ${rating}.`));
-  write(hint("cc-hindsight list"));
+  write(hint("human-hindsight list"));
   return 0;
 }
 

@@ -50,7 +50,7 @@ function eventResult(stdout: string): { text: string; error: string } {
 export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo): Promise<T> {
   const bin = await io.which("codex");
   if (!bin) throw new AgentRunnerError("missing-binary", CODEX_INSTALL_HINT);
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "cc-hindsight-codex-"));
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "human-hindsight-codex-"));
   const schemaFile = path.join(scratch, "schema.json");
   const outputFile = path.join(scratch, "answer.json");
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;

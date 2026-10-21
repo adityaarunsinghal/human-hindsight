@@ -2,7 +2,7 @@
  * core/discover.ts — compatibility shim.
  *
  * Claude Code discovery moved to `src/sources/claude/discover.ts` and the
- * `SessionInfo`/`ProjectInfo` types to `src/sources/types.ts` when cc-hindsight
+ * `SessionInfo`/`ProjectInfo` types to `src/sources/types.ts` when human-hindsight
  * grew a multi-backend seam. This shim re-exports both so existing imports of
  * `core/discover.js` keep working unchanged.
  */

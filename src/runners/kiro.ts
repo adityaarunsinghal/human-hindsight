@@ -44,7 +44,7 @@ export const KIRO_INSTALL_HINT =
   "distill needs a runner.";
 
 /** The local no-tools agent the runner writes into each scratch cwd. */
-export const KIRO_NO_TOOLS_AGENT = "cc-hindsight-distill";
+export const KIRO_NO_TOOLS_AGENT = "human-hindsight-distill";
 
 /** Transient-failure retries (empty stdout, exit 0) below the corrective retry. */
 export const KIRO_EMPTY_RETRIES = 2;
@@ -256,7 +256,7 @@ function writeNoToolsAgent(cwd: string, name: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = {
     name,
-    description: "cc-hindsight distill runner — no tools, answer from provided content only.",
+    description: "human-hindsight distill runner — no tools, answer from provided content only.",
     prompt: "You distill coding-agent sessions. Answer only from the content provided.",
     tools: [],
     mcpServers: {},
@@ -285,7 +285,7 @@ export const defaultKiroEnv: KiroEnv = {
       fs.mkdirSync(base, { recursive: true, mode: 0o700 });
       return fs.mkdtempSync(path.join(base, "run-"));
     }
-    return fs.mkdtempSync(path.join(os.tmpdir(), "cc-hindsight-kiro-"));
+    return fs.mkdtempSync(path.join(os.tmpdir(), "human-hindsight-kiro-"));
   },
   removeScratch(dir) {
     try {

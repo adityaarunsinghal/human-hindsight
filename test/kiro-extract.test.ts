@@ -208,7 +208,7 @@ describe("kiro extract — K2 hybrid precedence (unit)", () => {
 
 describe("kiro extract — K13 self-recognition (classify)", () => {
   const noHistoryMeta: KiroSessionMeta = { hasHistory: false };
-  it("excludes a cc-hindsight distill session even with no other markers", () => {
+  it("excludes a human-hindsight distill session even with no other markers", () => {
     const verdict = classifyKiroLines(noHistoryMeta, lines("k13-self.jsonl"));
     expect(verdict.include).toBe(false);
     expect(verdict.reason).toContain("K13");

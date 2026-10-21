@@ -5,14 +5,14 @@ export const GUI_HTML = `<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light dark">
-  <title>Prompt library · cc-hindsight</title>
+  <title>Prompt library · Human Hindsight</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/app.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">cc-hindsight <span> / Prompt library</span></div>
+    <div class="brand">Human Hindsight <span> / Prompt library</span></div>
     <div class="top-actions"><span class="local">Local</span><button id="refresh" type="button">Refresh</button></div>
   </header>
   <main class="workspace">
@@ -38,7 +38,7 @@ export const GUI_HTML = `<!doctype html>
         <div id="empty" class="empty" hidden>
           <h2>No prompts yet</h2>
           <p>Build your library in the terminal, then refresh this page.</p>
-          <code>cc-hindsight distill</code>
+          <code>human-hindsight distill</code>
         </div>
         <pre id="body" tabindex="0" aria-label="Prompt text"></pre>
         <p id="copy-status" class="copy-status" role="status" aria-live="polite"></p>
@@ -46,7 +46,7 @@ export const GUI_HTML = `<!doctype html>
       </div>
     </section>
   </main>
-  <noscript>This library viewer needs JavaScript enabled. You can also use cc-hindsight list and show in your terminal.</noscript>
+  <noscript>This library viewer needs JavaScript enabled. You can also use human-hindsight list and show in your terminal.</noscript>
 </body>
 </html>`;
 
@@ -245,7 +245,7 @@ async function load() {
     }
     if (domains.includes(previousDomain)) domain.value = previousDomain;
     byId("skipped").hidden = !data.skipped;
-    byId("skipped").textContent = data.skipped + " prompt file(s) could not be read. Run cc-hindsight status for details.";
+    byId("skipped").textContent = data.skipped + " prompt file(s) could not be read. Run human-hindsight status for details.";
     render();
   } catch {
     byId("notice").textContent = "Couldn't load the library. Check that the server is still running, then refresh.";

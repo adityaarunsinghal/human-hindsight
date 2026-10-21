@@ -1,8 +1,26 @@
 # Changelog
 
-All notable changes to cc-hindsight are documented here. The format follows
+All notable changes to Human Hindsight (formerly cc-hindsight) are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [1.6.0] - 2026-10-21
+
+### Changed
+
+- Renamed the npm package, primary CLI, GitHub repository, documentation, and
+  GUI to **Human Hindsight** (`human-hindsight`).
+- Added a deprecated `cc-hindsight` compatibility package that forwards
+  arguments, stdin, output, exit codes, and signals to the matching new release.
+- Fresh installations use `~/.human-hindsight`; existing `~/.cc-hindsight`
+  libraries remain discoverable without moving or rewriting data.
+  `HUMAN_HINDSIGHT_HOME` takes precedence over the retained `CC_HINDSIGHT_HOME`
+  alias, and `--home` takes precedence over both.
+- Preserved recognition of old distillation markers so historical generated
+  Kiro sessions remain excluded from human exports.
+- CI now validates and publishes both packages, with the main package first
+  and the GitHub release after both publications succeed. A resumed workflow
+  can finish a partial release without republishing a version.
 
 ## [1.5.0] - 2026-10-21
 
@@ -353,13 +371,14 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.5.0...HEAD
-[1.5.0]: https://github.com/adityaarunsinghal/cc-hindsight/compare/v1.4.0...v1.5.0
-[1.4.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.4.0
-[1.3.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.1
-[1.3.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.3.0
-[1.2.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.2.0
-[1.1.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.1.0
-[1.0.2]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.2
-[1.0.1]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.1
-[1.0.0]: https://github.com/adityaarunsinghal/cc-hindsight/releases/tag/v1.0.0
+[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.5.0...v1.6.0
+[1.5.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.4.0
+[1.3.1]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.3.1
+[1.3.0]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.3.0
+[1.2.0]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.2.0
+[1.1.0]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.1.0
+[1.0.2]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.0.2
+[1.0.1]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.0.1
+[1.0.0]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.0.0

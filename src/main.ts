@@ -20,7 +20,7 @@ import status from "./commands/status.js";
  *
  * `--help` presents `--home`, `--claude-dir` and `--kiro-dir` as ROOT options,
  * but citty does not thread a parent's parsed args into a subcommand: each one
- * re-declares the same names and reads only its own. So `cc-hindsight --home X
+ * re-declares the same names and reads only its own. So `human-hindsight --home X
  * export` parsed `--home`, dropped it, and wrote to the DEFAULT store. The
  * failure was silent and it targeted exactly the flags that decide where data
  * is read from and written to (observed for real: an `export` intended for a
@@ -29,7 +29,7 @@ import status from "./commands/status.js";
  * The fix rides the precedence `resolvePaths` already implements
  * (flag > env > default): write the root flag into the environment, so it beats
  * the default while a subcommand-level flag still beats it. Only ever fills a
- * variable the user did not set, so `CC_HINDSIGHT_HOME=… cc-hindsight …` is
+ * variable the user did not set, so `HUMAN_HINDSIGHT_HOME=… human-hindsight …` is
  * untouched. Runs in `setup`, which citty calls BEFORE the subcommand; the root
  * `run` fires after it and would be too late.
  *
@@ -39,7 +39,7 @@ import status from "./commands/status.js";
  */
 function publishRootPaths(args: Record<string, unknown>): void {
   const envForFlag = {
-    home: "CC_HINDSIGHT_HOME",
+    home: "HUMAN_HINDSIGHT_HOME",
     "claude-dir": "CLAUDE_CONFIG_DIR",
     "codex-dir": "CODEX_HOME",
     "kiro-dir": "KIRO_CONFIG_DIR",
@@ -53,7 +53,7 @@ function publishRootPaths(args: Record<string, unknown>): void {
 /** Root command. Running with no subcommand performs the safe default: scan. */
 export const main = defineCommand({
   meta: {
-    name: "cc-hindsight",
+    name: pkg.name,
     version: pkg.version,
     description: pkg.description,
   },

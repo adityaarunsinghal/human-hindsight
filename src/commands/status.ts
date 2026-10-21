@@ -122,7 +122,7 @@ export function renderStatus(opts: {
     lines.push(...renderStaleDigests(staleDigestKeys));
     lines.push(...renderLibraryIssues(libraryIssues));
     lines.push("");
-    lines.push(hint(exported === 0 ? "cc-hindsight export" : "cc-hindsight distill"));
+    lines.push(hint(exported === 0 ? "human-hindsight export" : "human-hindsight distill"));
     return lines.join("\n");
   }
 
@@ -156,7 +156,7 @@ export function renderStatus(opts: {
       if (!viable) {
         lines.push(`  · ${task.slug} ${yellow(`skipped (no successful sessions: ${outcomes})`)}`);
       } else {
-        lines.push(`  · ${task.slug} ${dim("pending — run cc-hindsight distill")}`);
+        lines.push(`  · ${task.slug} ${dim("pending — run human-hindsight distill")}`);
       }
     }
   }
@@ -183,7 +183,7 @@ export function renderStatus(opts: {
   lines.push(...renderStaleDigests(staleDigestKeys));
   lines.push(...renderLibraryIssues(libraryIssues));
   lines.push("");
-  lines.push(hint(current.length > 0 ? "cc-hindsight list" : "cc-hindsight distill"));
+  lines.push(hint(current.length > 0 ? "human-hindsight list" : "human-hindsight distill"));
   return lines.join("\n");
 }
 

@@ -1,6 +1,6 @@
 {
-  "name": "cc-hindsight",
-  "version": "1.5.0",
+  "name": "human-hindsight",
+  "version": "1.6.0",
   "description": "Mine your coding-agent session history (Claude Code, Codex, kiro-cli) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",
@@ -21,14 +21,14 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/adityaarunsinghal/cc-hindsight.git"
+    "url": "git+https://github.com/adityaarunsinghal/human-hindsight.git"
   },
-  "homepage": "https://github.com/adityaarunsinghal/cc-hindsight#readme",
+  "homepage": "https://github.com/adityaarunsinghal/human-hindsight#readme",
   "bugs": {
-    "url": "https://github.com/adityaarunsinghal/cc-hindsight/issues"
+    "url": "https://github.com/adityaarunsinghal/human-hindsight/issues"
   },
   "bin": {
-    "cc-hindsight": "./dist/cli.js"
+    "human-hindsight": "./dist/cli.js"
   },
   "files": [
     "dist",
@@ -58,5 +58,9 @@
     "tsdown": "^0.22.7",
     "typescript": "^5.9.3",
     "vitest": "^4.1.10"
+  },
+  "exports": {
+    "./cli": "./dist/cli.js",
+    "./package.json": "./package.json"
   }
 }

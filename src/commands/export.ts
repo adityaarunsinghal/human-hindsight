@@ -434,7 +434,7 @@ function reportExport(
     }
   }
 
-  write(hint("cc-hindsight distill"));
+  write(hint("human-hindsight distill"));
 }
 
 export default defineCommand({

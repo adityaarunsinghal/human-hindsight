@@ -78,7 +78,7 @@ describe("runKiro — happy path", () => {
     expect(calls[0]?.args).toEqual(["chat", "--no-interactive", "--agent", KIRO_NO_TOOLS_AGENT]);
     expect(calls[0]?.cwd).toBe(SCRATCH);
     // Prompt carries the self-recognition sentinel as its first line.
-    expect(calls[0]?.input.startsWith("[cc-hindsight distill]")).toBe(true);
+    expect(calls[0]?.input.startsWith("[human-hindsight distill]")).toBe(true);
   });
 });
 
@@ -157,13 +157,13 @@ describe("kiro runner — session-store cleanup via finalize (deletion-safety in
     {
       cwd: SCRATCH,
       sessions: [
-        { sessionId: "mine-1", title: "[cc-hindsight distill] digest this" },
+        { sessionId: "mine-1", title: "[human-hindsight distill] digest this" },
         { sessionId: "not-mine", title: "some human session that happened to share cwd" },
       ],
     },
     {
       cwd: "/home/user/real-project",
-      sessions: [{ sessionId: "REAL", title: "[cc-hindsight distill] looks like ours" }],
+      sessions: [{ sessionId: "REAL", title: "[human-hindsight distill] looks like ours" }],
     },
   ];
 
@@ -190,7 +190,7 @@ describe("kiro runner — session-store cleanup via finalize (deletion-safety in
     const deleted: string[] = [];
     const { env } = makeEnv([spawnResult({ code: 1, stderr: "boom" })], {
       listSessions: async () => [
-        { cwd: SCRATCH, sessions: [{ sessionId: "s1", title: "[cc-hindsight distill] x" }] },
+        { cwd: SCRATCH, sessions: [{ sessionId: "s1", title: "[human-hindsight distill] x" }] },
       ],
       deleteSession: async (id) => {
         deleted.push(id);
@@ -248,9 +248,9 @@ describe("kiro runner — scratch cwd location", () => {
         return SCRATCH;
       },
     };
-    const runner = makeKiroRunner(recordingEnv, "/home/u/.cc-hindsight/runner-scratch");
+    const runner = makeKiroRunner(recordingEnv, "/home/u/.human-hindsight/runner-scratch");
     await runner.run(OPTS);
-    expect(bases).toEqual(["/home/u/.cc-hindsight/runner-scratch"]);
+    expect(bases).toEqual(["/home/u/.human-hindsight/runner-scratch"]);
   });
 });
 
@@ -260,7 +260,7 @@ describe("runKiro — sentinel echo in output (negative fixture)", () => {
     // it must land in the corrective retry — the store is untouched either way
     // (cleanup scope + K13 protect it).
     const { env, calls } = makeEnv([
-      spawnResult({ stdout: '> [cc-hindsight distill] {"ok":true,"note":"echoed"}' }),
+      spawnResult({ stdout: '> [human-hindsight distill] {"ok":true,"note":"echoed"}' }),
       spawnResult({ stdout: '{"ok":true,"note":"clean"}' }),
     ]);
     const out = await runKiro(OPTS, SCRATCH, env);

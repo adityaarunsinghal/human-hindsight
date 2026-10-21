@@ -1,4 +1,4 @@
-# Contributing to cc-hindsight
+# Contributing to human-hindsight
 
 Thanks for helping. This codebase keeps a compact dependency tree, documents
 what its extraction keeps and drops, and runs its tests only against synthetic
@@ -7,7 +7,7 @@ fixtures.
 ## Setup
 
 ```bash
-git clone <repo> && cd cc-hindsight
+git clone <repo> && cd human-hindsight
 npm install
 npm test                 # vitest run
 npm run lint             # biome check .
@@ -16,7 +16,7 @@ npm run build            # tsdown → dist/
 node dist/cli.js --help
 ```
 
-Node ≥ 22 is required (cc-hindsight uses `util.styleText` and `util.parseArgs` via citty).
+Node ≥ 22 is required (human-hindsight uses `util.styleText` and `util.parseArgs` via citty).
 CI runs biome → typecheck → tests → build → a packed-file-list assertion
 (`scripts/check-pack.mjs`) on Ubuntu and macOS; all of it must stay green.
 Supported platforms are macOS and Linux; Windows code paths exist but are
@@ -44,6 +44,9 @@ untested.
   content as HTML or expose filesystem/mutation endpoints. Check dropdowns in
   a real browser at narrow widths in both themes: one centered 12 × 8 px
   chevron, a 12 px right inset, and 36 px reserved right padding.
+- **Preserve rename compatibility.** Keep `CC_HINDSIGHT_HOME`, existing
+  `~/.cc-hindsight` libraries, and old `[cc-hindsight distill]` markers readable.
+  Historical fixtures deliberately retain the former name.
 - Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, …).
 
 ## The extraction fidelity contract
@@ -61,7 +64,7 @@ Claude Code's JSONL format drifts. If you hit a session that exports wrongly
 (human text dropped, machine text admitted), here's the drill:
 
 1. **Find the offending line(s)** in the source file under
-   `~/.claude/projects/…/*.jsonl`. Run `cc-hindsight export --verbose`; every
+   `~/.claude/projects/…/*.jsonl`. Run `human-hindsight export --verbose`; every
    dropped piece is logged with its rule and a snippet.
 2. **Synthesize a minimal fixture.** Copy the *shape*, not your data: replace
    every string with something generic ("do the thing", "/tmp/x.ts"). One JSON
@@ -82,7 +85,7 @@ dedupe (`test/fixtures/export-home/`), and anaphora
 
 ## Multi-backend architecture (the seam)
 
-cc-hindsight reads Claude Code, Codex, and kiro-cli through one seam:
+human-hindsight reads Claude Code, Codex, and kiro-cli through one seam:
 
 - **`SessionSource`** (`src/sources/types.ts`) is the source-agnostic currency.
   Each backend's adapter (`src/sources/{claude,codex,kiro}/`) turns raw lines into the
@@ -125,7 +128,21 @@ provenance in `sources.json` stays honest.
 npm test && npm run lint && npm run typecheck && npm run build
 npm pack --dry-run --json > pack.json
 node scripts/check-pack.mjs pack.json   # dist/, package.json, npm-shrinkwrap.json, README, LICENSE; nothing else
+node scripts/check-release.mjs
+npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
+node scripts/check-pack.mjs pack-compat.json --compat
 ```
+
+For a version bump, update the main package/shrinkwrap and
+`compat/cc-hindsight/package.json` together, including the wrapper's exact
+`human-hindsight` dependency. The release workflow verifies both identities,
+publishes the new package first, then the deprecated wrapper, then creates the
+GitHub release. Reruns skip versions already published from the same commit.
+
+Each npm package needs a trusted publisher for
+`adityaarunsinghal/human-hindsight`, workflow `release.yml`, with direct
+`npm publish` allowed. New package names require a one-time authenticated
+bootstrap before their trusted-publisher settings can be configured.
 
 Runtime dependencies are exact-pinned and the transitive tree ships via
 `npm-shrinkwrap.json`; after any dependency change, re-run `npm shrinkwrap`

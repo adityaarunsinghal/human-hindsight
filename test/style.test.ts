@@ -66,8 +66,8 @@ describe("table()", () => {
 
 describe("hint()", () => {
   it("formats the funnel hint", () => {
-    expect(stripVTControlCharacters(hint("cc-hindsight export"))).toBe(
-      "→ next: cc-hindsight export",
+    expect(stripVTControlCharacters(hint("human-hindsight export"))).toBe(
+      "→ next: human-hindsight export",
     );
   });
 });

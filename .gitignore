@@ -3,6 +3,7 @@ dist
 coverage
 *.tgz
 pack.json
+pack-compat.json
 .DS_Store
 
 # Local-only working notes and session memory (never publish)

@@ -56,7 +56,7 @@ describe("middleCut", () => {
       const stated = Number(/truncated (\d+) characters/.exec(text)?.[1]);
       expect(stated).toBe(dropped);
       const markerLen =
-        `\n\n[... cc-hindsight truncated ${stated} characters from the middle of this session ...]\n\n`
+        `\n\n[... human-hindsight truncated ${stated} characters from the middle of this session ...]\n\n`
           .length;
       expect(content.length - (budget - markerLen)).toBe(dropped);
     }

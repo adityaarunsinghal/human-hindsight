@@ -90,19 +90,19 @@ function targetHeader(
     case "kiro":
       // A kiro steering file (~/.kiro/steering/*.md) — auto-loaded by the agent.
       return {
-        comment: `<!-- cc-hindsight preferences · generated ${date} · paste into ~/.kiro/steering/hindsight-preferences.md -->`,
+        comment: `<!-- human-hindsight preferences · generated ${date} · paste into ~/.kiro/steering/hindsight-preferences.md -->`,
         heading: "## Working preferences",
       };
     case "agents":
       // An AGENTS.md section — portable across kiro and other agent CLIs.
       return {
-        comment: `<!-- cc-hindsight preferences · generated ${date} · add to AGENTS.md -->`,
+        comment: `<!-- human-hindsight preferences · generated ${date} · add to AGENTS.md -->`,
         heading: "## Working preferences",
       };
     default:
       // claude: the original CLAUDE.md block — byte-identical to before.
       return {
-        comment: `<!-- cc-hindsight preferences · generated ${date} -->`,
+        comment: `<!-- human-hindsight preferences · generated ${date} -->`,
         heading: "## Working preferences",
       };
   }

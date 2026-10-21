@@ -25,6 +25,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: node scripts/check-release.mjs
       - run: npx biome ci .
       - run: npx tsc --noEmit
       - run: npx vitest run
@@ -38,3 +39,5 @@ jobs:
       # precisely so a mid-pack build can never corrupt this file.
       - run: npm pack --dry-run --json --ignore-scripts > pack.json
       - run: node scripts/check-pack.mjs pack.json
+      - run: npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
+      - run: node scripts/check-pack.mjs pack-compat.json --compat

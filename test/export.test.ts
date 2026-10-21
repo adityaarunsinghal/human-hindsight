@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { type ExportArgs, type ManifestEntry, runExport } from "../src/commands/export.js";
 
 // Drive export with the synthetic fixture claude dir, never the real one;
-// every home directory is a fresh mkdtemp, never a real ~/.cc-hindsight.
+// every home directory is a fresh mkdtemp, never a real ~/.human-hindsight.
 const CLAUDE_HOME = path.join(import.meta.dirname, "fixtures", "export-home");
 const ALPHA_DIR = path.join(CLAUDE_HOME, "projects", "-Users-dev-alpha");
 // A kiro dir that does not exist, so `--source auto` collapses to claude-only:
@@ -19,7 +19,7 @@ const NO_CODEX = path.join(CLAUDE_HOME, "no-codex-here");
 const tmpHomes: string[] = [];
 
 function freshHome(): string {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "cc-hindsight-export-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "human-hindsight-export-"));
   tmpHomes.push(home);
   return home;
 }
@@ -133,7 +133,7 @@ describe("export — default run", () => {
   it("prints the summary line and the distill funnel hint", () => {
     const { out } = run();
     expect(out).toContain("exported 3 sessions (7 messages, 3 duplicates dropped)");
-    expect(out).toContain("→ next: cc-hindsight distill");
+    expect(out).toContain("→ next: human-hindsight distill");
     expect(out).toContain("1 session(s) had no human messages");
     // Anaphora/outcome summary line (export-home has no plans/questions).
     expect(out).toContain("short turns attached (0 had a pending plan/question)");

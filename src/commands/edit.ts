@@ -47,7 +47,7 @@ export function runEdit(args: EditArgs, deps: EditDeps = {}): number {
   const slug = String(args.slug ?? "");
   const entry = findEntry(home, slug);
   if (!entry) {
-    write(`no library entry "${slug}" — try \`cc-hindsight list\`.`);
+    write(`no library entry "${slug}" — try \`human-hindsight list\`.`);
     return 1;
   }
   if (!fs.existsSync(entry.oneshotPath)) {
@@ -68,7 +68,7 @@ export function runEdit(args: EditArgs, deps: EditDeps = {}): number {
   } else {
     write(dim(`${slug} unchanged.`));
   }
-  write(hint(`cc-hindsight show ${slug}`));
+  write(hint(`human-hindsight show ${slug}`));
   return 0;
 }
 

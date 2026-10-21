@@ -46,7 +46,9 @@ export function runScan(args: {
       console.log("No Claude Code, Codex, or kiro-cli sessions found.");
       console.log(dim("Use --claude-dir, --codex-dir, or --kiro-dir to select a different store."));
     }
-    console.log(dim("Optional: cc-hindsight retention — review local history retention settings."));
+    console.log(
+      dim("Optional: human-hindsight retention — review local history retention settings."),
+    );
     return;
   }
 
@@ -77,8 +79,8 @@ export function runScan(args: {
       );
     }
   }
-  console.log(hint("cc-hindsight export"));
-  console.log(dim("Optional: cc-hindsight retention — keep more history for future exports."));
+  console.log(hint("human-hindsight export"));
+  console.log(dim("Optional: human-hindsight retention — keep more history for future exports."));
 }
 
 export default defineCommand({

@@ -75,7 +75,7 @@ export async function runPreferences(
   const entries = readLibrary(home);
   if (entries.length === 0) {
     write("library is empty — nothing distilled yet.");
-    write(hint("cc-hindsight distill"));
+    write(hint("human-hindsight distill"));
     return 1;
   }
 

@@ -39,7 +39,7 @@ export async function runPrune(args: PruneArgs, deps: PruneDeps = {}): Promise<n
   const tasks = loadTasks(home);
   if (!tasks) {
     write("no distill checkpoint — cannot tell orphans from current entries.");
-    write(hint("cc-hindsight status"));
+    write(hint("human-hindsight status"));
     return 1;
   }
 
@@ -91,7 +91,7 @@ export async function runPrune(args: PruneArgs, deps: PruneDeps = {}): Promise<n
     write(`  removed ${e.slug}`);
   }
   write(green(`${removable.length} entr${removable.length === 1 ? "y" : "ies"} pruned.`));
-  write(hint("cc-hindsight list"));
+  write(hint("human-hindsight list"));
   return 0;
 }
 

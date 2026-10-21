@@ -81,7 +81,7 @@ describe("detectKiroFormat: v2 vs v3 sniffing", () => {
 describe("kiro v3 classify: recall-oriented precedence", () => {
   const noHistory: KiroSessionMeta = { hasHistory: false };
 
-  it("EXCLUDES a cc-hindsight distill session (K13 self-recognition)", () => {
+  it("EXCLUDES a human-hindsight distill session (K13 self-recognition)", () => {
     const verdict = classifyKiroV3Lines(noHistory, lines("classify-distill.jsonl"));
     expect(verdict.include).toBe(false);
     expect(verdict.reason).toContain("K13");

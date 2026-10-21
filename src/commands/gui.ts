@@ -37,7 +37,7 @@ export async function runGui(
     process.removeListener("SIGINT", stop);
     process.removeListener("SIGTERM", stop);
   });
-  output.write(`cc-hindsight library: ${gui.url}\nPress Ctrl+C to stop.\n`);
+  output.write(`human-hindsight library: ${gui.url}\nPress Ctrl+C to stop.\n`);
   if (args.open !== false) {
     const opened = await (deps.openBrowser ?? openBrowser)(gui.url).catch(() => false);
     if (!opened) output.write("Could not open a browser automatically; open the address above.\n");

@@ -57,7 +57,7 @@ export function resolveTimeoutMs(raw: string | undefined): number | undefined {
 
 /** The inline truncation note (also seen by the model). Kept stable for tests. */
 export function truncationNote(dropped: number): string {
-  return `\n\n[... cc-hindsight truncated ${dropped} characters from the middle of this session ...]\n\n`;
+  return `\n\n[... human-hindsight truncated ${dropped} characters from the middle of this session ...]\n\n`;
 }
 
 /**

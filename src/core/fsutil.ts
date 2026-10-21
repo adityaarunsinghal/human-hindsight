@@ -5,7 +5,7 @@ import fs from "node:fs";
  *
  * Exports contain "anything sensitive you ever pasted into a session" (README),
  * yet default file modes are world-readable (0644). A tool this explicit about
- * the sensitivity of its output should keep `~/.cc-hindsight` and everything
+ * the sensitivity of its output should keep `~/.human-hindsight` and everything
  * under it readable only by its owner. POSIX only — Node ignores `mode` on
  * Windows, which is a harmless no-op there.
  */

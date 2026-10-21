@@ -23,7 +23,7 @@ export default defineCommand({
     const slug = String(args.slug);
     const entry = findEntry(home, slug);
     if (!entry) {
-      console.error(`no library entry "${slug}" — try \`cc-hindsight list\`.`);
+      console.error(`no library entry "${slug}" — try \`human-hindsight list\`.`);
       process.exitCode = 1;
       return;
     }
@@ -45,7 +45,7 @@ export default defineCommand({
     if (result.ok) {
       console.log(green(`copied "${slug}" to the clipboard (${words} words, via ${result.tool})`));
       console.log(dim("paste it into a fresh session with your coding agent."));
-      console.log(hint("cc-hindsight preferences"));
+      console.log(hint("human-hindsight preferences"));
     } else {
       console.error(`could not copy (${result.error}). Here is the prompt:`);
       console.log();

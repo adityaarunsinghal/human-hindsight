@@ -5,9 +5,10 @@ name: Release
 # repo, and every release carries a verified provenance attestation linking the
 # package back to this workflow run and commit.
 #
-# ONE-TIME SETUP (npmjs.com, after the first manual publish): package Settings →
-# Trusted Publisher → add this repo + workflow `release.yml`. Until that trust is
-# configured, this workflow fails safe (it cannot publish without it).
+# Configure a trusted publisher for EACH package (human-hindsight and the
+# cc-hindsight wrapper), using this repo + workflow `release.yml`, with direct
+# `npm publish` allowed. New npm namespaces need a one-time authenticated
+# bootstrap before their package settings are available.
 #
 # This never retro-fires on tags that predate the workflow; it runs only for
 # tags pushed after it lands on the default branch.
@@ -41,21 +42,24 @@ jobs:
 
       - run: npm ci
 
-      # Guard: the tag must match the version being published, so a stray
-      # `git tag v9.9.9` can never publish whatever happens to be in package.json.
-      - name: Verify tag matches package.json version
-        run: |
-          TAG="${GITHUB_REF_NAME#v}"
-          PKG="$(node -p "require('./package.json').version")"
-          if [ "$TAG" != "$PKG" ]; then
-            echo "::error::tag v$TAG does not match package.json version $PKG"
-            exit 1
-          fi
-          echo "publishing v$PKG"
+      - name: Verify package identities and release versions
+        run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
 
       # prepublishOnly runs lint + typecheck + tests + build + the pack-contents
       # assertion before this succeeds, so a broken or stale build cannot ship.
-      - run: npm publish --provenance --access public
+      - name: Publish Human Hindsight
+        run: node scripts/publish-package.mjs
+
+      # Publish the wrapper only after its exact dependency is available. A
+      # rerun skips versions already published from this commit.
+      - name: Check compatibility package contents
+        run: |
+          npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
+          node scripts/check-pack.mjs pack-compat.json --compat
+          rm pack-compat.json
+
+      - name: Publish deprecated cc-hindsight wrapper
+        run: node scripts/publish-package.mjs compat/cc-hindsight
 
       - name: Create GitHub release from the changelog
         env:

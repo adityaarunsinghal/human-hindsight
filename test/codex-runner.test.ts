@@ -39,7 +39,7 @@ describe("Codex runner", () => {
       runCodex({ prompt: "source content", schema, model: "requested-model" }, io),
     ).resolves.toEqual({ answer: "ready" });
     expect(calls).toBe(1);
-    expect(path.basename(scratch)).toMatch(/^cc-hindsight-codex-/);
+    expect(path.basename(scratch)).toMatch(/^human-hindsight-codex-/);
     expect(fs.existsSync(scratch)).toBe(false);
   });
 

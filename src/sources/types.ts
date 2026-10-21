@@ -1,7 +1,7 @@
 /**
  * sources/types.ts — the source-agnostic currency of the pipeline.
  *
- * A cc-hindsight backend (Claude Code, kiro-cli, …) is a {@link SessionSource}:
+ * A human-hindsight backend (Claude Code, kiro-cli, …) is a {@link SessionSource}:
  * it discovers sessions in its own on-disk store and turns each session's raw
  * lines into the SAME three artifacts every downstream stage consumes —
  * {@link ExtractedMessage}s (with observable {@link Drop}s), and a

@@ -159,7 +159,7 @@ describe("renderClaudeMdBlock", () => {
       new Date("2026-07-13T00:00:00Z"),
     );
     expect(block.split("\n")).toEqual([
-      "<!-- cc-hindsight preferences · generated 2026-07-13 -->",
+      "<!-- human-hindsight preferences · generated 2026-07-13 -->",
       "## Working preferences",
       "",
       "<!-- stated in 2 of 3 tasks -->",
@@ -224,7 +224,7 @@ describe("runPreferences", () => {
     const code = await runPreferences({ home: tmpHome() }, { output: cap.out });
     expect(code).toBe(1);
     expect(cap.text()).toContain("library is empty");
-    expect(cap.text()).toContain("cc-hindsight distill");
+    expect(cap.text()).toContain("human-hindsight distill");
   });
 
   it("prints the deterministic block without any claude involvement", async () => {

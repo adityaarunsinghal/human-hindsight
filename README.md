@@ -1,22 +1,22 @@
-# cc-hindsight
+# Human Hindsight
 
 > **The prompt you'd write if you knew then what you know now.**
 
-[![npm](https://img.shields.io/npm/v/cc-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/cc-hindsight)
-[![CI](https://github.com/adityaarunsinghal/cc-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/adityaarunsinghal/cc-hindsight/actions/workflows/ci.yml)
-[![node](https://img.shields.io/node/v/cc-hindsight?logo=node.js&color=339933)](https://nodejs.org)
-[![license](https://img.shields.io/github/license/adityaarunsinghal/cc-hindsight?color=blue)](LICENSE)
+[![npm](https://img.shields.io/npm/v/human-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/human-hindsight)
+[![CI](https://github.com/adityaarunsinghal/human-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/adityaarunsinghal/human-hindsight/actions/workflows/ci.yml)
+[![node](https://img.shields.io/node/v/human-hindsight?logo=node.js&color=339933)](https://nodejs.org)
+[![license](https://img.shields.io/github/license/adityaarunsinghal/human-hindsight?color=blue)](LICENSE)
 [![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/adityaarunsinghal/cc-hindsight/main/.github/assets/demo.gif" alt="cc-hindsight building a oneshot prompt library from coding-agent session history" width="800">
+  <img src="https://raw.githubusercontent.com/adityaarunsinghal/human-hindsight/main/.github/assets/demo.gif" alt="Human Hindsight local prompt library" width="800">
 </p>
 
 ```bash
-npx cc-hindsight
+npx human-hindsight
 ```
 
-cc-hindsight mines your coding-agent session history (Claude Code, Codex, kiro-cli)
+Human Hindsight mines your coding-agent session history (Claude Code, Codex, kiro-cli)
 into two things you can use tomorrow morning:
 
 1. **A oneshot prompt library.** For each real task you've done, the realistic
@@ -25,6 +25,29 @@ into two things you can use tomorrow morning:
 2. **A distilled preference set.** The things you keep re-telling your agent
    ("diagnose before acting", "pin the versions", "be terse"), surfaced as a
    paste-ready `CLAUDE.md` or `AGENTS.md` block so every future session starts aligned.
+
+Previously published as **cc-hindsight**. The `cc-hindsight` npm package is now a
+deprecated compatibility command that forwards to the matching Human Hindsight
+release. Existing libraries, edits, ratings, and checkpoints remain usable.
+
+### Upgrading from cc-hindsight
+
+```bash
+npx human-hindsight@latest gui
+# Or install the new command globally:
+npm install -g human-hindsight
+```
+
+No data move or re-distillation is required. Data-directory precedence is:
+`--home` → `HUMAN_HINDSIGHT_HOME` → legacy `CC_HINDSIGHT_HOME` → an existing
+`~/.human-hindsight` → an existing `~/.cc-hindsight` → `~/.human-hindsight` for
+a fresh installation. If both directories exist, the new one wins; use
+`--home` to choose explicitly. Directories are never merged automatically.
+
+Updating the old npm package installs the small compatibility wrapper, so
+`npx cc-hindsight@latest gui` also works. Both global commands can coexist:
+the main package owns `human-hindsight`, and the wrapper owns `cc-hindsight`.
+The GitHub repository was renamed in place; old repository links redirect.
 
 ## The t=0 problem
 
@@ -50,7 +73,7 @@ better prompting.**
 
 > help me script blocking a device on my home router
 
-**After** (what cc-hindsight distilled from how that session actually went):
+**After** (what human-hindsight distilled from how that session actually went):
 
 > I want to automate my home router, starting with blocking a device. Get API
 > access working first, and store any credentials securely instead of asking me
@@ -66,7 +89,7 @@ The second prompt was knowable at t=0. You just hadn't written it yet.
 One command builds the whole library and shows it to you when it's done:
 
 ```bash
-npx cc-hindsight distill    # offers to export first, then digest → cluster →
+npx human-hindsight distill    # offers to export first, then digest → cluster →
                             # author (asks before any runner call), then shows
                             # you the finished library
 ```
@@ -74,24 +97,24 @@ npx cc-hindsight distill    # offers to export first, then digest → cluster �
 Prefer to drive each stage yourself? The pipeline is just three verbs:
 
 ```bash
-npx cc-hindsight            # 1. scan: inventory your projects (read-only)
-npx cc-hindsight export     # 2. export: human-only markdown per session
-npx cc-hindsight distill    # 3. distill: digest → cluster → author (asks first)
+npx human-hindsight            # 1. scan: inventory your projects (read-only)
+npx human-hindsight export     # 2. export: human-only markdown per session
+npx human-hindsight distill    # 3. distill: digest → cluster → author (asks first)
 ```
 
 Then browse and curate the results:
 
 ```bash
-npx cc-hindsight list                # your library (✎ edited / ▲▼ rating badges)
-npx cc-hindsight gui                 # browse, search, and copy in your browser
-npx cc-hindsight show <slug>         # read a oneshot
-npx cc-hindsight copy <slug>         # → clipboard, paste into a fresh session
-npx cc-hindsight edit <slug>         # open in $EDITOR; your edits are protected
-npx cc-hindsight rate <slug> up      # record a verdict (up|down)
-npx cc-hindsight prune               # remove orphaned entries (asks first)
-npx cc-hindsight preferences         # → CLAUDE.md block
-npx cc-hindsight status              # pipeline funnel + orphan/skip flags
-npx cc-hindsight retention           # optional: preview longer local retention
+npx human-hindsight list                # your library (✎ edited / ▲▼ rating badges)
+npx human-hindsight gui                 # browse, search, and copy in your browser
+npx human-hindsight show <slug>         # read a oneshot
+npx human-hindsight copy <slug>         # → clipboard, paste into a fresh session
+npx human-hindsight edit <slug>         # open in $EDITOR; your edits are protected
+npx human-hindsight rate <slug> up      # record a verdict (up|down)
+npx human-hindsight prune               # remove orphaned entries (asks first)
+npx human-hindsight preferences         # → CLAUDE.md block
+npx human-hindsight status              # pipeline funnel + orphan/skip flags
+npx human-hindsight retention           # optional: preview longer local retention
 ```
 
 Requires Node ≥ 22 on macOS or Linux (Windows is untested and currently
@@ -102,10 +125,10 @@ with a consent prompt (or your explicit `--yes`).
 ### A small local library viewer
 
 ```bash
-npx cc-hindsight gui                    # start locally and open your browser
-npx cc-hindsight gui --no-open          # print the address without opening it
-npx cc-hindsight gui --port 3210        # choose a port (default: any available port)
-npx cc-hindsight gui --home /path/to/library-home
+npx human-hindsight gui                    # start locally and open your browser
+npx human-hindsight gui --no-open          # print the address without opening it
+npx human-hindsight gui --port 3210        # choose a port (default: any available port)
+npx human-hindsight gui --home /path/to/library-home
 ```
 
 Search prompt titles and text, filter by domain, sort, and copy the prompt
@@ -146,10 +169,10 @@ then falls back in the order Claude → Codex → Kiro. Models are passed throug
 with `--model`; without it, the chosen CLI uses its configured default.
 
 ```bash
-npx cc-hindsight export --source codex
-npx cc-hindsight distill --source codex --runner codex
-npx cc-hindsight distill --source claude --runner codex
-npx cc-hindsight preferences --target codex  # AGENTS.md; alias of --target agents
+npx human-hindsight export --source codex
+npx human-hindsight distill --source codex --runner codex
+npx human-hindsight distill --source claude --runner codex
+npx human-hindsight preferences --target codex  # AGENTS.md; alias of --target agents
 ```
 
 `preferences --target claude|codex|kiro|agents` emits a `CLAUDE.md` block,
@@ -163,10 +186,10 @@ It disables session persistence when the installed CLI advertises the flag.
 ### Optional: keep more local history
 
 ```bash
-npx cc-hindsight retention                    # read-only preview
-npx cc-hindsight retention --apply            # preview, then confirm
-npx cc-hindsight retention --apply --yes      # explicit opt-in for scripting
-npx cc-hindsight retention --source codex --apply
+npx human-hindsight retention                    # read-only preview
+npx human-hindsight retention --apply            # preview, then confirm
+npx human-hindsight retention --apply --yes      # explicit opt-in for scripting
+npx human-hindsight retention --source codex --apply
 ```
 
 The default reviews existing tool directories. An explicit `--source` can
@@ -207,7 +230,7 @@ For a tool that reads your entire conversation history, auditability is the
 product:
 
 - **Local-only.** Everything is read from your disk and written to your disk
-  (`~/.cc-hindsight`). No server, no accounts, no telemetry. The only network
+  (`~/.human-hindsight`). No server, no accounts, no telemetry. The only network
   traffic is through your chosen agent CLI during consented distillation or
   preference consolidation.
 - **Four runtime dependencies.** [`citty`](https://github.com/unjs/citty)
@@ -279,12 +302,12 @@ library entries orphaned by re-clustering.
 | sniffly | ✓ | analytics dashboard | backward (behavior) |
 | claude-code-transcripts | ✓ | shareable HTML transcripts | backward (record) |
 | cctrace / exporters | ✓ | markdown/XML exports | backward (archive) |
-| **cc-hindsight** | ✓ | **oneshot prompt library + CLAUDE.md preferences** | **forward (better next session)** |
+| **human-hindsight** | ✓ | **oneshot prompt library + CLAUDE.md preferences** | **forward (better next session)** |
 
 Closest kin is Simon Willison's `claude-code-transcripts`: same local-first
 values, same belief that transcripts are undervalued artifacts. The difference
 is the direction of gaze: it renders your sessions (backward, for others);
-cc-hindsight distills them (forward, for you).
+human-hindsight distills them (forward, for you).
 
 ## FAQ
 
@@ -305,7 +328,7 @@ provenance) or narrow the scope. Digest and author calls run 3 at a time by
 default (`--concurrency`; `1` = sequential).
 
 **Subscription or API?**
-cc-hindsight shells out to `claude -p`, `codex exec`, or `kiro-cli chat`;
+human-hindsight shells out to `claude -p`, `codex exec`, or `kiro-cli chat`;
 however your chosen CLI is authenticated is how calls are billed. `--model`
 passes through without pinning a model version.
 
@@ -319,7 +342,7 @@ dropped piece with a reason. If genuine human input was dropped, that's a
 bug: file an extraction-fidelity report.
 
 **Can I regenerate everything from scratch?**
-`cc-hindsight distill --fresh` clears the checkpoints (after confirming) and
+`human-hindsight distill --fresh` clears the checkpoints (after confirming) and
 re-runs. Old library entries from previous generations are flagged as orphans
 in `status`.
 
@@ -353,6 +376,6 @@ fixture when you hit an unhandled transcript shape.
 
 ## Author
 
-Built by [Aditya Singhal](https://adityasinghal.com). If cc-hindsight surfaces
+Built by [Aditya Singhal](https://adityasinghal.com). If human-hindsight surfaces
 a pattern you didn't know you had, [I'd love to hear about
-it](https://github.com/adityaarunsinghal/cc-hindsight/issues).
+it](https://github.com/adityaarunsinghal/human-hindsight/issues).

@@ -3,7 +3,7 @@
  *
  * The claude runner split into `src/runners/shared.ts` (IO, spawn, errors,
  * retry primitives) + `src/runners/claude.ts` (envelope, args, probe, runClaude)
- * when cc-hindsight grew a multi-backend seam. This shim re-exports both halves
+ * when human-hindsight grew a multi-backend seam. This shim re-exports both halves
  * so existing imports of `claude/runner.js` keep working unchanged, including
  * the `ClaudeRunnerError` name (a class alias of `AgentRunnerError`, so
  * `instanceof` still holds).

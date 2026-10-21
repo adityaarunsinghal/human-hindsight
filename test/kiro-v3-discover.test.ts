@@ -107,7 +107,7 @@ describe("kiroSource.classify: v3 sessions via the merged store", () => {
   it("INCLUDES a plain v3 session with no .history (recall default)", () => {
     expect(verdict(V3_SESS4)).toBe("interactive");
   });
-  it("EXCLUDES a v3 cc-hindsight distill session", () => {
+  it("EXCLUDES a v3 human-hindsight distill session", () => {
     expect(verdict(V3_SESS5)).toBe("automation");
   });
   it("INCLUDES a v3 fork (parentSessionId set, no .history)", () => {

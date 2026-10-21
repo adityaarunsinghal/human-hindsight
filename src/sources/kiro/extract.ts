@@ -19,12 +19,19 @@ import type { KiroSessionMeta } from "./discover.js";
 // --- K-rule constants ------------------------------------------------------
 
 /**
- * K13 — self-recognition sentinel. cc-hindsight's own distill runner spawns
+ * K13 — self-recognition sentinel. human-hindsight's own distill runner spawns
  * kiro sessions whose prompt begins with this marker; every headless run
  * persists a session in the flat store, so extraction must reject them or the
  * corpus would ingest its own distillation prompts on the next export.
  */
-export const KIRO_DISTILL_SENTINEL = "[cc-hindsight distill]";
+export const KIRO_DISTILL_SENTINEL = "[human-hindsight distill]";
+
+/** Older releases left the old marker in saved sessions; exclude both forms. */
+export function isHindsightDistillPrompt(prompt: string | null): boolean {
+  return Boolean(
+    prompt?.startsWith(KIRO_DISTILL_SENTINEL) || prompt?.startsWith("[cc-hindsight distill]"),
+  );
+}
 
 /** K6 — bracketed machine-injection markers dropped wherever they lead a piece. */
 const BRACKET_MARKERS: readonly string[] = [
@@ -409,15 +416,15 @@ function firstPromptText(lines: string[]): string | null {
  * `session_created_reason` is deliberately NOT used — it reports "subagent"
  * even for interactive human sessions (verified on-machine).
  *
- * K13 — a session whose first prompt is cc-hindsight's own distill sentinel is
+ * K13 — a session whose first prompt is human-hindsight's own distill sentinel is
  * always excluded (self-recognition), regardless of the above.
  */
 export function classifyKiroSession(
   meta: KiroSessionMeta,
   firstPrompt: string | null,
 ): { include: boolean; reason: string } {
-  if (firstPrompt?.startsWith(KIRO_DISTILL_SENTINEL)) {
-    return { include: false, reason: "K13: cc-hindsight distill session (self-recognition)" };
+  if (isHindsightDistillPrompt(firstPrompt)) {
+    return { include: false, reason: "K13: human-hindsight distill session (self-recognition)" };
   }
   if (meta.hasHistory) {
     return { include: true, reason: "K2: .history present (human typed here)" };

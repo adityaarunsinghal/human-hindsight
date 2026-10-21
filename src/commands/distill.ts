@@ -211,8 +211,10 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     // read surface as the default `scan`, so this is not a new trust boundary;
     // the LLM consent gate below is untouched.
     if (args["dry-run"]) {
-      write("nothing exported yet — run `cc-hindsight export` first (free, local), then re-run.");
-      write(hint("cc-hindsight export"));
+      write(
+        "nothing exported yet — run `human-hindsight export` first (free, local), then re-run.",
+      );
+      write(hint("human-hindsight export"));
       return 1;
     }
     // Name the store(s) the offered export will read, per --source.
@@ -228,12 +230,12 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       Boolean(args.yes) ||
       (canPrompt &&
         (await askYesNo(
-          `No exports yet. Run export now? (reads ${reads}, writes ~/.cc-hindsight; no LLM, nothing sent anywhere)`,
+          `No exports yet. Run export now? (reads ${reads}, writes ${home}; no LLM, nothing sent anywhere)`,
           { input: deps.input, output: deps.output, defaultYes: true },
         )));
     if (!doExport) {
       write("nothing exported yet");
-      write(hint("cc-hindsight export"));
+      write(hint("human-hindsight export"));
       return 1;
     }
     write();
@@ -576,8 +578,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
               `${libraryEntries.length} librar${libraryEntries.length === 1 ? "y entry" : "y entries"}`,
             ),
           );
-          write(hint("cc-hindsight show <slug>"));
-          write(hint("cc-hindsight copy <slug>"));
+          write(hint("human-hindsight show <slug>"));
+          write(hint("human-hindsight copy <slug>"));
           await offerPreferencesCascade({
             home,
             runner,
@@ -600,7 +602,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return finishRun(1);
   }
 
-  write(hint("cc-hindsight list"));
+  write(hint("human-hindsight list"));
   // Exit non-zero if anything failed (digest or author), but only AFTER the
   // reachable work completed and checkpointed.
   return finishRun(hadFailure ? 1 : 0);

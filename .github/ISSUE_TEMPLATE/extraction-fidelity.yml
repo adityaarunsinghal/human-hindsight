@@ -12,8 +12,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: cc-hindsight version + Claude Code version
-      placeholder: cc-hindsight 1.0.0 / claude 2.1.210
+      label: Human Hindsight version + agent CLI version
+      placeholder: human-hindsight 1.6.0 / claude, codex, or kiro-cli version
     validations:
       required: true
   - type: dropdown

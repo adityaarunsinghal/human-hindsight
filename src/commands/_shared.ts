@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -5,7 +6,8 @@ import path from "node:path";
 export const sharedArgs = {
   home: {
     type: "string",
-    description: "cc-hindsight data directory (env CC_HINDSIGHT_HOME)",
+    description:
+      "Data directory (env HUMAN_HINDSIGHT_HOME; legacy CC_HINDSIGHT_HOME is also supported)",
   },
   "claude-dir": {
     type: "string",
@@ -38,6 +40,31 @@ export interface ResolvedPaths {
 }
 
 /**
+ * Keep existing libraries in place. An explicit flag or environment variable
+ * wins; otherwise prefer the new directory when present, then the old one.
+ * Merely resolving a path never creates, moves, or merges directories.
+ */
+export function resolveDataHome(
+  explicit?: string,
+  opts: { env?: NodeJS.ProcessEnv; homedir?: string } = {},
+): string {
+  const env = opts.env ?? process.env;
+  const configured = explicit ?? env.HUMAN_HINDSIGHT_HOME ?? env.CC_HINDSIGHT_HOME;
+  if (configured !== undefined) return configured;
+  const userHome = opts.homedir ?? os.homedir();
+  const preferred = path.join(userHome, ".human-hindsight");
+  const legacy = path.join(userHome, ".cc-hindsight");
+  const isDirectory = (dir: string) => {
+    try {
+      return fs.statSync(dir).isDirectory();
+    } catch {
+      return false;
+    }
+  };
+  return !isDirectory(preferred) && isDirectory(legacy) ? legacy : preferred;
+}
+
+/**
  * Resolve data directories: flag > env > default under os.homedir(). The
  * `kiro-dir` points at the kiro CONFIG root (sessions are read from
  * `<kiroDir>/sessions/cli`), parallel to `--claude-dir`.
@@ -48,8 +75,7 @@ export function resolvePaths(args: {
   "codex-dir"?: string;
   "kiro-dir"?: string;
 }): ResolvedPaths {
-  const home =
-    args.home ?? process.env.CC_HINDSIGHT_HOME ?? path.join(os.homedir(), ".cc-hindsight");
+  const home = resolveDataHome(args.home);
   const claudeDir =
     args["claude-dir"] ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), ".claude");
   const codexDir = args["codex-dir"] ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");

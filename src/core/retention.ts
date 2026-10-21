@@ -220,9 +220,9 @@ export function applyRetentionPlan(plan: RetentionPlan): string | undefined {
   checkRetentionPlan(plan);
   fs.mkdirSync(path.dirname(plan.target), { recursive: true, mode: DIR_MODE });
   const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
-  const backup = plan.before === null ? undefined : `${plan.target}.cc-hindsight-${stamp}.bak`;
+  const backup = plan.before === null ? undefined : `${plan.target}.human-hindsight-${stamp}.bak`;
   if (backup) fs.writeFileSync(backup, plan.before ?? "", { flag: "wx", mode: FILE_MODE });
-  const temp = `${plan.target}.cc-hindsight-${stamp}.tmp`;
+  const temp = `${plan.target}.human-hindsight-${stamp}.tmp`;
   try {
     fs.writeFileSync(temp, plan.after, { flag: "wx", mode: FILE_MODE });
     fs.renameSync(temp, plan.target);

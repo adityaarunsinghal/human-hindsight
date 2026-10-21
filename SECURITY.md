@@ -1,18 +1,21 @@
 # Security
 
-cc-hindsight reads your coding-agent conversation history, so its security
+human-hindsight reads your coding-agent conversation history, so its security
 posture and its privacy posture are the same thing. The design goal is a data
 path that is small enough to review directly.
 
 ## The trust model
 
 - **Local-only.** Everything is read from your disk and written to your disk
-  (`~/.cc-hindsight`, owner-only permissions). There is no server, no account,
+  (`~/.human-hindsight`, owner-only permissions). There is no server, no account,
   and no telemetry. Distillation and optional preference consolidation send
   content through your chosen `claude`, `codex`, or `kiro-cli` to its provider.
+- **Existing data stays in place.** The legacy `~/.cc-hindsight` directory and
+  `CC_HINDSIGHT_HOME` variable remain supported. The deprecated `cc-hindsight`
+  package delegates to the exact matching Human Hindsight version.
 - **Optional retention configuration.** `retention` previews local settings.
   Only `retention --apply` plus consent (or `--apply --yes`) edits tool
-  configuration outside `~/.cc-hindsight`. Existing files get private backups;
+  configuration outside `~/.human-hindsight`. Existing files get private backups;
   remote retention, telemetry, and managed policy are not changed.
 - **Local GUI.** `gui` binds only to `127.0.0.1`, with a read-only API for
   library contents. It rejects unrelated hosts/origins, disables caching and
@@ -29,11 +32,11 @@ path that is small enough to review directly.
 
 ## Your exported data
 
-`export` writes your raw prompts to `~/.cc-hindsight/exports`, including
+`export` writes your raw prompts to `~/.human-hindsight/exports`, including
 anything sensitive you once pasted into a session (keys, internal hostnames,
 private notes). Those files never leave your machine. Two things to know:
 
-- Treat `~/.cc-hindsight` like any other directory of personal notes. It is not
+- Treat `~/.human-hindsight` like any other directory of personal notes. It is not
   encrypted at rest beyond your filesystem's own permissions.
 - Before sharing a oneshot or an export publicly, read it first. A `--redact`
   option is on the roadmap; until then, redaction is manual.
@@ -46,11 +49,11 @@ leaks data you did not consent to send), please report it privately rather than
 opening a public issue:
 
 - Use GitHub's [private vulnerability
-  reporting](https://github.com/adityaarunsinghal/cc-hindsight/security/advisories/new)
+  reporting](https://github.com/adityaarunsinghal/human-hindsight/security/advisories/new)
   for this repository, or
 - Reach the author through [adityasinghal.com](https://adityasinghal.com).
 
-Please include the version (`cc-hindsight --version`), your OS, and the
+Please include the version (`human-hindsight --version`), your OS, and the
 smallest reproduction you can share. Expect an acknowledgement within a few
 days. Because this is a solo-maintained project, please allow reasonable time
 for a fix before any public disclosure.
@@ -58,5 +61,5 @@ for a fix before any public disclosure.
 ## Supported versions
 
 This is pre-2.0 software under active development. Security fixes land on the
-latest released version; please upgrade to the newest `cc-hindsight` before
+latest released version; please upgrade to the newest `human-hindsight` before
 reporting.

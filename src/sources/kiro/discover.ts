@@ -21,7 +21,7 @@ export const KIRO_SESSIONS_SUBDIR = path.join("sessions", "cli");
 
 /**
  * Per-session metadata we surface to classification/provenance. Only the fields
- * cc-hindsight uses are typed; the companion JSON carries much more.
+ * human-hindsight uses are typed; the companion JSON carries much more.
  */
 export interface KiroSessionMeta {
   /** Working directory the session ran in — the project identity. */

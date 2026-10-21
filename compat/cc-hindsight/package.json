@@ -1,0 +1,32 @@
+{
+  "name": "cc-hindsight",
+  "version": "1.6.0",
+  "description": "Compatibility command for Human Hindsight. Install human-hindsight for the renamed application.",
+  "deprecated": "Renamed to human-hindsight. Use npx human-hindsight or npm install -g human-hindsight. This package forwards the legacy cc-hindsight command.",
+  "type": "module",
+  "author": "Aditya Singhal (https://adityasinghal.com)",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/adityaarunsinghal/human-hindsight.git",
+    "directory": "compat/cc-hindsight"
+  },
+  "homepage": "https://github.com/adityaarunsinghal/human-hindsight#readme",
+  "bugs": {
+    "url": "https://github.com/adityaarunsinghal/human-hindsight/issues"
+  },
+  "bin": {
+    "cc-hindsight": "./cli.js"
+  },
+  "files": [
+    "cli.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "human-hindsight": "1.6.0"
+  }
+}

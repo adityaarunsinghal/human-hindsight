@@ -16,17 +16,16 @@ if (!input) {
 
 const report = JSON.parse(fs.readFileSync(input, "utf8"));
 const files = report[0].files.map((f) => f.path).sort();
+const compat = process.argv[3] === "--compat";
 
 // Everything shipped must match one of these.
-const allowed = [
-  /^dist\//,
-  /^package\.json$/,
-  /^npm-shrinkwrap\.json$/,
-  /^README\.md$/,
-  /^LICENSE$/,
-];
+const allowed = compat
+  ? [/^cli\.js$/, /^package\.json$/, /^README\.md$/, /^LICENSE$/]
+  : [/^dist\//, /^package\.json$/, /^npm-shrinkwrap\.json$/, /^README\.md$/, /^LICENSE$/];
 // These must be present for the package to work / be trustworthy.
-const required = ["dist/cli.js", "package.json", "npm-shrinkwrap.json", "README.md", "LICENSE"];
+const required = compat
+  ? ["cli.js", "package.json", "README.md", "LICENSE"]
+  : ["dist/cli.js", "package.json", "npm-shrinkwrap.json", "README.md", "LICENSE"];
 
 const unexpected = files.filter((f) => !allowed.some((re) => re.test(f)));
 const missing = required.filter((r) => !files.includes(r));

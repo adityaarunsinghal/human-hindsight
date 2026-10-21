@@ -3,7 +3,7 @@ import type { Writable } from "node:stream";
 /**
  * ui/epipe.ts — quiet EPIPE handling for piped output.
  *
- * When a downstream reader closes early (`cc-hindsight list | head`), writes to
+ * When a downstream reader closes early (`human-hindsight list | head`), writes to
  * our stdout/stderr raise EPIPE. That's normal Unix behavior, not a crash: exit
  * 0 quietly like cat/grep/ls rather than dumping a stack trace. Any other stream
  * error is genuinely unexpected and is re-thrown.

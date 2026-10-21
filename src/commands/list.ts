@@ -16,13 +16,13 @@ export default defineCommand({
 
     if (entries.length === 0) {
       console.log("library is empty — nothing distilled yet.");
-      console.log(hint("cc-hindsight distill"));
+      console.log(hint("human-hindsight distill"));
       return;
     }
 
     console.log(renderLibraryTable(entries));
     console.log();
     console.log(green(`${entries.length} librar${entries.length === 1 ? "y entry" : "y entries"}`));
-    console.log(hint("cc-hindsight show <slug>"));
+    console.log(hint("human-hindsight show <slug>"));
   },
 });

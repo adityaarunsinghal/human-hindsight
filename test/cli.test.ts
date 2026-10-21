@@ -23,10 +23,10 @@ const EXPECTED = [
   "gui",
 ];
 
-describe("cc-hindsight root command", () => {
+describe("human-hindsight root command", () => {
   it("has the right name and reports the package version", () => {
     const meta = main.meta as { name: string; version: string };
-    expect(meta.name).toBe("cc-hindsight");
+    expect(meta.name).toBe("human-hindsight");
     // Read from package.json so a version bump can never silently drift this
     // assertion (the CLI's contract is "report the package version", not a
     // hardcoded literal).
@@ -117,7 +117,7 @@ describe("root dispatch", () => {
 //
 // `--help` documents --home/--claude-dir/--kiro-dir as ROOT options, but citty
 // does not thread a parent's parsed args into a subcommand: the subcommand
-// re-declares the same names and sees only its own. So `cc-hindsight --home X
+// re-declares the same names and sees only its own. So `human-hindsight --home X
 // export` parsed --home, discarded it, and wrote to the DEFAULT store instead.
 // Silent, and aimed squarely at the flags that redirect where data is read and
 // written. Observed for real: an `export` meant for a scratch dir ran against
@@ -140,7 +140,13 @@ describe("root-level path flags reach the subcommand", () => {
     logSpy = vi.spyOn(console, "log").mockImplementation((...p: unknown[]) => {
       logs.push(p.map(String).join(" "));
     });
-    for (const k of ["CC_HINDSIGHT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_CONFIG_DIR"]) {
+    for (const k of [
+      "HUMAN_HINDSIGHT_HOME",
+      "CC_HINDSIGHT_HOME",
+      "CLAUDE_CONFIG_DIR",
+      "CODEX_HOME",
+      "KIRO_CONFIG_DIR",
+    ]) {
       delete process.env[k];
     }
   });
@@ -148,7 +154,13 @@ describe("root-level path flags reach the subcommand", () => {
   afterEach(() => {
     logSpy.mockRestore();
     for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
-    for (const k of ["CC_HINDSIGHT_HOME", "CLAUDE_CONFIG_DIR", "CODEX_HOME", "KIRO_CONFIG_DIR"]) {
+    for (const k of [
+      "HUMAN_HINDSIGHT_HOME",
+      "CC_HINDSIGHT_HOME",
+      "CLAUDE_CONFIG_DIR",
+      "CODEX_HOME",
+      "KIRO_CONFIG_DIR",
+    ]) {
       if (savedEnv[k] === undefined) delete process.env[k];
       else process.env[k] = savedEnv[k];
     }
@@ -162,7 +174,7 @@ describe("root-level path flags reach the subcommand", () => {
     await runMain(main, {
       rawArgs: ["--home", home, "--claude-dir", claudeDir, "status", "--source", "claude"],
     });
-    expect(process.env.CC_HINDSIGHT_HOME).toBe(home);
+    expect(process.env.HUMAN_HINDSIGHT_HOME).toBe(home);
     expect(logs.join("\n")).toContain("exported    0 session(s)");
   });
 
@@ -211,17 +223,30 @@ describe("root-level path flags reach the subcommand", () => {
         subHome,
       ],
     });
-    expect(process.env.CC_HINDSIGHT_HOME).toBe(subHome);
+    expect(process.env.HUMAN_HINDSIGHT_HOME).toBe(subHome);
   });
 
   it("leaves an existing env var alone when no root flag is given", async () => {
     const envHome = mkdir("env");
     const claudeDir = mkdir("claude4");
-    process.env.CC_HINDSIGHT_HOME = envHome;
+    process.env.HUMAN_HINDSIGHT_HOME = envHome;
     await runMain(main, {
       rawArgs: ["--claude-dir", claudeDir, "status", "--source", "claude"],
     });
-    expect(process.env.CC_HINDSIGHT_HOME).toBe(envHome);
+    expect(process.env.HUMAN_HINDSIGHT_HOME).toBe(envHome);
+  });
+
+  it("reads an explicitly configured legacy home through the renamed command", async () => {
+    const legacyHome = mkdir("legacy-env");
+    const claudeDir = mkdir("legacy-claude");
+    fs.mkdirSync(path.join(legacyHome, "exports"));
+    fs.writeFileSync(path.join(legacyHome, "exports", "manifest.json"), '[{"export":"old.md"}]');
+    process.env.CC_HINDSIGHT_HOME = legacyHome;
+    await runMain(main, {
+      rawArgs: ["--claude-dir", claudeDir, "status", "--source", "claude"],
+    });
+    expect(process.env.HUMAN_HINDSIGHT_HOME).toBeUndefined();
+    expect(logs.join("\n")).toContain("exported    1 session(s)");
   });
 });
 

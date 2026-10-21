@@ -1,8 +1,8 @@
 import type { Drop, ExtractedMessage, ExtractResult, TimelineEvent } from "../types.js";
 import type { KiroSessionMeta } from "./discover.js";
 import {
+  isHindsightDistillPrompt,
   KIRO_AUTOMATION_FIRST_LINES,
-  KIRO_DISTILL_SENTINEL,
   KIRO_HARNESS_NUDGES,
 } from "./extract.js";
 
@@ -179,7 +179,7 @@ function firstUserPromptV3(lines: string[]): string | null {
  * V3 session-level human-vs-automation classification, recall-oriented, mirroring
  * the v2 K2 precedence with v3-appropriate signals:
  *
- *   1. first user prompt begins with the cc-hindsight distill sentinel → EXCLUDE
+ *   1. first user prompt begins with the human-hindsight distill sentinel → EXCLUDE
  *      (self-recognition, absolute; see K13);
  *   2. a `.history` companion exists (a human typed here) → INCLUDE;
  *   3. first user prompt is an automation marker (`[AGENT SYSTEM PROMPT]`, an
@@ -194,8 +194,8 @@ export function classifyKiroV3Session(
   meta: KiroSessionMeta,
   firstPrompt: string | null,
 ): { include: boolean; reason: string } {
-  if (firstPrompt?.startsWith(KIRO_DISTILL_SENTINEL)) {
-    return { include: false, reason: "K13: cc-hindsight distill session (self-recognition)" };
+  if (isHindsightDistillPrompt(firstPrompt)) {
+    return { include: false, reason: "K13: human-hindsight distill session (self-recognition)" };
   }
   if (meta.hasHistory) {
     return { include: true, reason: "V3: .history present (human typed here)" };

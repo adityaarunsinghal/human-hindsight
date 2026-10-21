@@ -208,7 +208,7 @@ describe("confirm", () => {
 // closes) resolved to "" and was read as No. Observed in the wild as the
 // tell-tale `Proceed? [y/N] ydeclined; nothing was invoked.` — the user's `y`
 // echoed and was then ignored. Consent silently inverted is the worst possible
-// place for this: the user said yes and cc-hindsight said they declined.
+// place for this: the user said yes and human-hindsight said they declined.
 describe("confirm — answer without a trailing newline", () => {
   it("accepts 'y' terminated by EOF instead of declining", async () => {
     const cap = captureOutput();
@@ -395,7 +395,7 @@ describe("runDistill", () => {
     const code = await runDistill({ home: tmpHome(null) }, { output: cap.out });
     expect(code).toBe(1);
     expect(cap.text()).toContain("nothing exported yet");
-    expect(cap.text()).toContain("cc-hindsight export");
+    expect(cap.text()).toContain("human-hindsight export");
   });
 
   it("exits 0 when nothing meets the substance threshold", async () => {
@@ -554,7 +554,7 @@ describe("runDistill", () => {
     const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
     expect(code).toBe(0);
     expect(cap.text()).not.toContain("Consolidate your preferences");
-    expect(cap.text()).toContain("cc-hindsight list");
+    expect(cap.text()).toContain("human-hindsight list");
   });
 
   it("proceeds past a failed digest, authors the rest, and exits 1", async () => {

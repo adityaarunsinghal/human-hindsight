@@ -27,7 +27,7 @@ export default defineCommand({
     const slug = String(args.slug);
     const entry = findEntry(home, slug);
     if (!entry) {
-      console.error(`no library entry "${slug}" — try \`cc-hindsight list\`.`);
+      console.error(`no library entry "${slug}" — try \`human-hindsight list\`.`);
       process.exitCode = 1;
       return;
     }
@@ -64,6 +64,6 @@ export default defineCommand({
       console.log(renderMarkdownAnsi(body));
     }
     console.log();
-    console.log(hint(`cc-hindsight copy ${slug}`));
+    console.log(hint(`human-hindsight copy ${slug}`));
   },
 });

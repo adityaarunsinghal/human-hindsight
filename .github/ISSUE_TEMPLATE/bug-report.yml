@@ -5,8 +5,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: cc-hindsight version
-      description: "`npx cc-hindsight --version`"
+      label: human-hindsight version
+      description: "`npx human-hindsight --version`"
     validations:
       required: true
   - type: input
