@@ -20,7 +20,7 @@ import type { ClusterTask, Digest } from "../schemas.js";
  * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change
  * (including changes to the response schema the model is held to).
  */
-export const AUTHOR_PROMPT_VERSION = 4;
+export const AUTHOR_PROMPT_VERSION = 5;
 
 /** One member session's bundle of author inputs. */
 export interface AuthorMemberInput {
@@ -100,7 +100,9 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
   // (Claude Code exports; kiro transcripts have no [decision]/[command]
   // surfaces). An all-claude task is byte-identical to the pre-multi-backend
   // prompt; a mixed task keeps the bullets for its claude members.
-  const hasClaudeMember = input.members.some((m) => (m.origin ?? "claude") === "claude");
+  const hasClaudeMember = input.members.some(
+    (m) => (m.origin ?? "claude") === "claude" || m.origin === "opencode",
+  );
   const hasCodexMember = input.members.some((m) => m.origin === "codex");
   const legendBullets = hasClaudeMember
     ? [

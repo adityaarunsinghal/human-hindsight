@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { type OpenCodePaths, resolveOpenCodePaths } from "../sources/opencode/paths.js";
 
 /** Global flags shared by every subcommand. */
 export const sharedArgs = {
@@ -21,6 +22,14 @@ export const sharedArgs = {
     type: "string",
     description: "kiro-cli config directory (env KIRO_CONFIG_DIR; default ~/.kiro)",
   },
+  "opencode-dir": {
+    type: "string",
+    description: "OpenCode data directory (env HUMAN_HINDSIGHT_OPENCODE_DIR; honors XDG_DATA_HOME)",
+  },
+  "opencode-db": {
+    type: "string",
+    description: "OpenCode database (env OPENCODE_DB; relative to --opencode-dir)",
+  },
   source: {
     type: "string",
     // Unlike the path flags above, this one has no environment variable, so the
@@ -28,11 +37,11 @@ export const sharedArgs = {
     // gives a subcommand only its OWN parsed args. Say so rather than advertise
     // a placement that is silently ignored.
     description:
-      "Which backend(s) to read: claude, codex, kiro, or auto (default: auto). Pass after the subcommand",
+      "Which backend(s) to read: claude, codex, kiro, opencode, or auto (default: auto). Pass after the subcommand",
   },
 } as const;
 
-export interface ResolvedPaths {
+export interface ResolvedPaths extends OpenCodePaths {
   home: string;
   claudeDir: string;
   codexDir: string;
@@ -74,6 +83,8 @@ export function resolvePaths(args: {
   "claude-dir"?: string;
   "codex-dir"?: string;
   "kiro-dir"?: string;
+  "opencode-dir"?: string;
+  "opencode-db"?: string;
 }): ResolvedPaths {
   const home = resolveDataHome(args.home);
   const claudeDir =
@@ -81,7 +92,13 @@ export function resolvePaths(args: {
   const codexDir = args["codex-dir"] ?? process.env.CODEX_HOME ?? path.join(os.homedir(), ".codex");
   const kiroDir =
     args["kiro-dir"] ?? process.env.KIRO_CONFIG_DIR ?? path.join(os.homedir(), ".kiro");
-  return { home, claudeDir, codexDir, kiroDir };
+  return {
+    home,
+    claudeDir,
+    codexDir,
+    kiroDir,
+    ...resolveOpenCodePaths({ dir: args["opencode-dir"], db: args["opencode-db"] }),
+  };
 }
 
 /**

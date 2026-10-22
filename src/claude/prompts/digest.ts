@@ -18,11 +18,17 @@ import type { SourceName } from "../../sources/types.js";
  * `DIGEST_PROMPT_VERSION` is recorded in provenance downstream and MUST be
  * bumped on any meaningful change to the prompt text.
  */
-export const DIGEST_PROMPT_VERSION = 3;
+export const DIGEST_PROMPT_VERSION = 4;
 
 /** Human-facing name of a session's source backend. */
 export function sourceLabel(origin: SourceName | undefined): string {
-  return origin === "kiro" ? "Kiro CLI" : origin === "codex" ? "Codex" : "Claude Code";
+  return origin === "kiro"
+    ? "Kiro CLI"
+    : origin === "codex"
+      ? "Codex"
+      : origin === "opencode"
+        ? "OpenCode"
+        : "Claude Code";
 }
 
 /** Input to {@link buildDigestPrompt}. */
@@ -52,17 +58,22 @@ export function buildDigestPrompt(input: DigestPromptInput): string {
   const legend =
     input.origin === "kiro"
       ? [`(file: ${input.exportName}).`]
-      : input.origin === "codex"
+      : input.origin === "opencode"
         ? [
-            `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
-            "human's verbatim option choices; [image pasted] marks visual context they supplied.",
-            "[audio supplied] marks audio they supplied.",
+            `(file: ${input.exportName}). [decision] lines preserve the human's question answers;`,
+            "[command] lines are commands the human ran; [image pasted] and [file attached] mark supplied context.",
           ]
-        : [
-            `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
-            "human's verbatim option choices; [command] lines are slash commands they ran;",
-            "[image pasted] marks visual context they supplied.",
-          ];
+        : input.origin === "codex"
+          ? [
+              `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
+              "human's verbatim option choices; [image pasted] marks visual context they supplied.",
+              "[audio supplied] marks audio they supplied.",
+            ]
+          : [
+              `(file: ${input.exportName}). Lines like [decision] "Q" → answer are the`,
+              "human's verbatim option choices; [command] lines are slash commands they ran;",
+              "[image pasted] marks visual context they supplied.",
+            ];
 
   parts.push(
     `You are analyzing one ${sourceLabel(input.origin)} session to produce a structured digest.`,
@@ -95,6 +106,11 @@ export function buildDigestPrompt(input: DigestPromptInput): string {
       "Final assistant tail (MACHINE-AUTHORED — use only to judge how the session ended;",
       "never treat as human intent):",
       input.outcome.final_assistant_tail ? input.outcome.final_assistant_tail : "(none captured)",
+      ...(input.outcome.final_execution_status
+        ? [
+            `Tool-recorded execution status (use as outcome evidence, not as human intent): ${JSON.stringify(input.outcome.final_execution_status)}`,
+          ]
+        : []),
       "=== END OUTCOME EVIDENCE ===",
     );
   } else {

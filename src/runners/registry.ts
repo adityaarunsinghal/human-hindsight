@@ -2,6 +2,7 @@ import type { SourceName } from "../sources/types.js";
 import { CLAUDE_INSTALL_HINT, claudeRunner } from "./claude.js";
 import { CODEX_INSTALL_HINT, codexRunner } from "./codex.js";
 import { KIRO_INSTALL_HINT, kiroRunner, makeKiroRunner } from "./kiro.js";
+import { makeOpenCodeRunner, OPENCODE_INSTALL_HINT } from "./opencode.js";
 import { AgentRunnerError, defaultIo, type RunnerIo } from "./shared.js";
 import type { AgentRunner } from "./types.js";
 
@@ -20,8 +21,15 @@ export type RunnerMode = SourceName | "auto";
 /** Parse/validate a raw `--runner` value; defaults to `auto`. */
 export function parseRunnerMode(raw: string | undefined): RunnerMode {
   const value = (raw ?? "auto").toLowerCase();
-  if (value === "auto" || value === "claude" || value === "codex" || value === "kiro") return value;
-  throw new Error(`unknown --runner "${raw}" (expected claude, codex, kiro, or auto)`);
+  if (
+    value === "auto" ||
+    value === "claude" ||
+    value === "codex" ||
+    value === "kiro" ||
+    value === "opencode"
+  )
+    return value;
+  throw new Error(`unknown --runner "${raw}" (expected claude, codex, kiro, opencode, or auto)`);
 }
 
 /** Options for {@link resolveRunner}. */
@@ -66,15 +74,23 @@ export async function resolveRunner(
     if (!(await has("kiro-cli"))) throw new AgentRunnerError("missing-binary", KIRO_INSTALL_HINT);
     return kiro();
   }
+  if (mode === "opencode") {
+    if (!(await has("opencode")))
+      throw new AgentRunnerError("missing-binary", OPENCODE_INSTALL_HINT);
+    return makeOpenCodeRunner(io, opts.scratchBase);
+  }
 
   // auto — prefer the runner matching the active source when it is installed.
   if (opts.preferSource === "kiro" && (await has("kiro-cli"))) return kiro();
   if (opts.preferSource === "claude" && (await has("claude"))) return claudeRunner;
   if (opts.preferSource === "codex" && (await has("codex"))) return codexRunner;
+  if (opts.preferSource === "opencode" && (await has("opencode")))
+    return makeOpenCodeRunner(io, opts.scratchBase);
   // Otherwise first installed of claude → codex → kiro.
   if (await has("claude")) return claudeRunner;
   if (await has("codex")) return codexRunner;
   if (await has("kiro-cli")) return kiro();
+  if (await has("opencode")) return makeOpenCodeRunner(io, opts.scratchBase);
   // Neither found: return claude so its install hint surfaces on use.
   return claudeRunner;
 }

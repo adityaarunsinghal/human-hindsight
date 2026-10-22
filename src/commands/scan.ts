@@ -19,11 +19,14 @@ export function runScan(args: {
   "claude-dir"?: string;
   "codex-dir"?: string;
   "kiro-dir"?: string;
+  "opencode-dir"?: string;
+  "opencode-db"?: string;
   source?: string;
 }): void {
-  const { claudeDir, codexDir, kiroDir } = resolvePaths(args);
+  const paths = resolvePaths(args);
+  const { claudeDir, codexDir, kiroDir, opencodeDir } = paths;
   const mode = parseSourceMode(args.source);
-  const sources = resolveSources(mode, { claudeDir, codexDir, kiroDir });
+  const sources = resolveSources(mode, paths);
   // Merge every active backend's projects. With a single active source (the
   // common claude-only machine) this is exactly the old single-store list.
   const projects: ProjectInfo[] = sources.flatMap((s) => s.discover());
@@ -37,14 +40,23 @@ export function runScan(args: {
     } else if (mode === "codex") {
       console.log(`No Codex sessions found under ${codexDir}/sessions or archived_sessions`);
       console.log(dim("Point at a different location with --codex-dir <path> (or CODEX_HOME)."));
+    } else if (mode === "opencode") {
+      console.log(`No OpenCode sessions found under ${opencodeDir}`);
+      console.log(
+        dim("Use --opencode-dir <path> or --opencode-db <file> to select a different store."),
+      );
     } else if (mode === "claude") {
       console.log(`No Claude Code projects found under ${claudeDir}/projects`);
       console.log(
         dim("Point at a different location with --claude-dir <path> (or set CLAUDE_CONFIG_DIR)."),
       );
     } else {
-      console.log("No Claude Code, Codex, or kiro-cli sessions found.");
-      console.log(dim("Use --claude-dir, --codex-dir, or --kiro-dir to select a different store."));
+      console.log("No Claude Code, Codex, kiro-cli, or OpenCode sessions found.");
+      console.log(
+        dim(
+          "Use --claude-dir, --codex-dir, --kiro-dir, or --opencode-dir to select a different store.",
+        ),
+      );
     }
     console.log(
       dim("Optional: human-hindsight retention — review local history retention settings."),
@@ -86,7 +98,7 @@ export function runScan(args: {
 export default defineCommand({
   meta: {
     name: "scan",
-    description: "Inventory Claude Code, Codex, and kiro-cli projects and sessions",
+    description: "Inventory Claude Code, Codex, Kiro, and OpenCode projects and sessions",
   },
   args: { ...sharedArgs },
   run({ args }) {

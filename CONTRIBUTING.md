@@ -16,7 +16,9 @@ npm run build            # tsdown → dist/
 node dist/cli.js --help
 ```
 
-Node ≥ 22 is required (human-hindsight uses `util.styleText` and `util.parseArgs` via citty).
+Development/build tools require Node 22.18+ or Node 24.11+.
+The published CLI supports Node 22.13+ on Node 22, or Node 23.4+ on newer releases.
+OpenCode history uses Node's built-in SQLite, loaded only when that store is read.
 CI runs biome → typecheck → tests → build → a packed-file-list assertion
 (`scripts/check-pack.mjs`) on Ubuntu and macOS; all of it must stay green.
 Supported platforms are macOS and Linux; Windows code paths exist but are
@@ -24,18 +26,19 @@ untested.
 
 ## Ground rules
 
-- **Four runtime dependencies** (`citty`, `zod`, `@clack/prompts`, `smol-toml`): keep the
+- **Five runtime dependencies** (`citty`, `zod`, `@clack/prompts`, `smol-toml`, `jsonc-parser`): keep the
   tree auditable in one sitting. A new dependency needs to clearly reduce code
   or pay for itself in UX; when in doubt, hand-roll it or leave it out.
-- **Tests never read `~/.claude`, `~/.codex`, or `~/.kiro`, or write outside temp dirs.**
+- **Tests never read real agent stores or write outside temp dirs.**
   Every test runs against synthetic fixtures under `test/fixtures/`. Because
   `--source` defaults to `auto` (read whichever backend stores exist), a test
   that only sets `--claude-dir` would silently pick up a dev's other stores;
   pin `source: "claude"` or point every other tool directory at a nonexistent
-  path in fixture-scoped tests.
+  path in fixture-scoped tests. `test/setup.ts` also isolates default tool paths.
 - **No LLM calls outside `distill` / `preferences --consolidate`**, and never
   without the consent gate. Unit tests mock every agent runner's spawn layer;
-  no test invokes real `claude`, `codex`, or `kiro-cli`.
+  no unit test invokes real agent CLIs. The separate OpenCode integration script
+  uses a loopback mock provider and temporary stores, with no paid requests.
 - **Retention is opt-in.** Default preview, `--yes` alone, and `--dry-run`
   must not write. Apply only after `--apply` plus consent, preserve unrelated
   settings, and back up existing files with owner-only permissions.
@@ -85,13 +88,16 @@ dedupe (`test/fixtures/export-home/`), and anaphora
 
 ## Multi-backend architecture (the seam)
 
-human-hindsight reads Claude Code, Codex, and kiro-cli through one seam:
+human-hindsight reads Claude Code, Codex, Kiro, and OpenCode through one seam:
 
 - **`SessionSource`** (`src/sources/types.ts`) is the source-agnostic currency.
-  Each backend's adapter (`src/sources/{claude,codex,kiro}/`) turns raw lines into the
+  Each backend's adapter (`src/sources/{claude,codex,kiro,opencode}/`) turns raw lines into the
   same `ExtractResult` + `TimelineEvent[]`; everything downstream (dedupe,
   anaphora, outcome, render, distill) consumes only those and never parses raw
   lines. Adding a backend = one new `sources/<name>/` adapter + a registry entry.
+  Database sources implement `read(session)` and `dispose()`, with a stable
+  `session.key` distinct from the physical database path. Store-level failures
+  use `SourceReadError` so export aborts before replacing any existing artifacts.
 - **The SessionSource law:** every message in `extract(lines).messages` MUST
   appear as a `human` `TimelineEvent` from `timeline(lines)` with identical
   `(timestamp, text)`, in file order. The dedupe key and the anaphora↔export
@@ -99,7 +105,7 @@ human-hindsight reads Claude Code, Codex, and kiro-cli through one seam:
   texts from one shared per-entry function (claude: `humanEntryText`; kiro:
   `promptText`). Each backend has an extract↔timeline agreement test; keep it.
 - **`AgentRunner`** (`src/runners/`) is the distill CLI seam. `shared.ts` holds
-  the backend-agnostic spawn/error/retry primitives; `claude.ts`, `codex.ts`, and `kiro.ts`
+  the backend-agnostic spawn/error/retry primitives; `claude.ts`, `codex.ts`, `kiro.ts`, and `opencode.ts`
   each add their invocation specifics. The kiro runner layers two retries: a
   transient **empty-stdout backoff** (kiro's "having trouble responding" returns
   exit 0 + empty stdout — retry the *same* input, no corrective note) sits
@@ -113,6 +119,24 @@ messages; a mirror must not become a second human turn. Discovery includes
 archived rollouts, deduplicates session IDs, and excludes generated subagents
 from export. Runner tests write synthetic final-message files through mocked
 spawns, exercising the same cleanup path as real `codex exec` calls.
+
+OpenCode tests synthesize SQLite and legacy JSON stores in temporary directories.
+Keep v1/v2 extraction, migration duplicates, WAL reads, failure preservation, and
+the extraction/timeline agreement covered. Its runner owns a private config and,
+on POSIX, the CLI process group; cleanup requires both the session ID and exact
+title/directory ownership. Never delete sessions by title alone.
+
+For real CLI validation with a synthetic provider:
+
+```bash
+node scripts/smoke-opencode.mjs /absolute/path/to/opencode
+```
+
+CI pins one CLI from each supported family. The smoke verifies JSON output,
+zero tool definitions, exclusion of ambient instructions/plugins/MCP, and
+session cleanup. Recheck the pinned upstream schema when adding new record types.
+The minimum-runtime job builds on Node 24, then uses `scripts/smoke-runtime.mjs`
+to exercise installed tarballs on Node 22.13 without development dependencies.
 
 ## Prompt changes
 

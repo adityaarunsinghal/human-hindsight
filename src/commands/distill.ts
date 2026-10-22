@@ -44,6 +44,8 @@ export interface DistillArgs {
   "claude-dir"?: string;
   "codex-dir"?: string;
   "kiro-dir"?: string;
+  "opencode-dir"?: string;
+  "opencode-db"?: string;
   /** Which backend(s) to distill from: claude, codex, kiro, or auto (default auto). */
   source?: string;
   /** Which local CLI distills: claude, codex, kiro, or auto (default auto). */
@@ -225,7 +227,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           ? "~/.claude"
           : sourceMode === "codex"
             ? "~/.codex"
-            : "~/.claude, ~/.codex, and ~/.kiro";
+            : sourceMode === "opencode"
+              ? resolvePaths(args).opencodeDir
+              : "your Claude Code, Codex, Kiro, and OpenCode stores";
     const doExport =
       Boolean(args.yes) ||
       (canPrompt &&
@@ -245,6 +249,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       "claude-dir": args["claude-dir"],
       "codex-dir": args["codex-dir"],
       "kiro-dir": args["kiro-dir"],
+      "opencode-dir": args["opencode-dir"],
+      "opencode-db": args["opencode-db"],
       source: args.source,
       project: args.project,
       output: deps.output,
@@ -699,7 +705,8 @@ export default defineCommand({
     model: { type: "string", description: "Model passed through to the runner's --model" },
     runner: {
       type: "string",
-      description: "Which local CLI distills: claude, codex, kiro, or auto (default: auto)",
+      description:
+        "Which local CLI distills: claude, codex, kiro, opencode, or auto (default: auto)",
     },
     fresh: { type: "boolean", description: "Reset distill checkpoints and start over" },
     "dry-run": { type: "boolean", description: "Print the invocation plan and exit; run nothing" },

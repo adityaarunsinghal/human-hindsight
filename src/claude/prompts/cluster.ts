@@ -20,7 +20,7 @@ import { sourceLabel } from "./digest.js";
  * `CLUSTER_PROMPT_VERSION` is recorded in provenance downstream; bump it on
  * any meaningful change to the prompt text.
  */
-export const CLUSTER_PROMPT_VERSION = 4;
+export const CLUSTER_PROMPT_VERSION = 5;
 
 /** Render one digest as a compact labeled block. */
 function renderDigest(exportName: string, digest: Digest): string {

@@ -45,6 +45,8 @@ export function renderStatus(opts: {
   claudeDir: string;
   codexDir?: string;
   kiroDir?: string;
+  opencodeDir?: string;
+  opencodeDb?: string;
   source?: SourceMode;
 }): string {
   const lines: string[] = [];
@@ -59,7 +61,13 @@ export function renderStatus(opts: {
     const defaults = resolvePaths({});
     const kiroDir = opts.kiroDir ?? defaults.kiroDir;
     const codexDir = opts.codexDir ?? defaults.codexDir;
-    const sources = resolveSources(mode, { claudeDir: opts.claudeDir, codexDir, kiroDir });
+    const sources = resolveSources(mode, {
+      claudeDir: opts.claudeDir,
+      codexDir,
+      kiroDir,
+      opencodeDir: opts.opencodeDir,
+      opencodeDb: opts.opencodeDb,
+    });
     const bySource = sources.map((src) => ({
       name: src.name,
       count: src.discover({ countEntries: false }).reduce((m, p) => m + p.sessions.length, 0),
@@ -194,9 +202,7 @@ export default defineCommand({
   },
   args: { ...sharedArgs },
   run({ args }) {
-    const { home, claudeDir, codexDir, kiroDir } = resolvePaths(args);
-    console.log(
-      renderStatus({ home, claudeDir, codexDir, kiroDir, source: parseSourceMode(args.source) }),
-    );
+    const paths = resolvePaths(args);
+    console.log(renderStatus({ ...paths, source: parseSourceMode(args.source) }));
   },
 });

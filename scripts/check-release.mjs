@@ -18,6 +18,16 @@ assert.equal(lock.name, pkg.name);
 assert.equal(lock.version, pkg.version);
 assert.equal(lock.packages[""].name, pkg.name);
 assert.equal(lock.packages[""].version, pkg.version);
+assert.deepEqual(
+  lock.packages[""].engines,
+  pkg.engines,
+  "The shrinkwrap must match the runtime requirement.",
+);
+assert.deepEqual(
+  compat.engines,
+  pkg.engines,
+  "The wrapper must advertise the same runtime requirement.",
+);
 assert.deepEqual(Object.keys(pkg.bin), ["human-hindsight"]);
 assert.deepEqual(Object.keys(compat.bin), ["cc-hindsight"]);
 assert.ok(
