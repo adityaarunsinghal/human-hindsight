@@ -15,8 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            node: "22.13.0"
           - os: macos-latest
             node: "22"
           - os: ubuntu-latest
@@ -47,6 +45,28 @@ jobs:
       - run: node scripts/check-pack.mjs pack.json
       - run: npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
       - run: node scripts/check-pack.mjs pack-compat.json --compat
+
+  minimum-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      # Build tools require newer Node than the published CLI.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Pack and install both release candidates
+        run: |
+          mkdir -p "$RUNNER_TEMP/packages"
+          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packages"
+          npm pack ./compat/cc-hindsight --ignore-scripts --pack-destination "$RUNNER_TEMP/packages"
+          npm install --prefix "$RUNNER_TEMP/installed" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packages/"*.tgz
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22.13.0"
+      - name: Exercise the published CLI surface on the minimum runtime
+        run: node scripts/smoke-runtime.mjs "$RUNNER_TEMP/installed"
 
   opencode:
     runs-on: ubuntu-latest

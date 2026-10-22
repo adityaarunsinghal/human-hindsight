@@ -16,7 +16,8 @@ npm run build            # tsdown → dist/
 node dist/cli.js --help
 ```
 
-Node 22.13+ on Node 22, or Node 23.4+ on newer releases, is required.
+Development/build tools require Node 22.18+ or Node 24.11+.
+The published CLI supports Node 22.13+ on Node 22, or Node 23.4+ on newer releases.
 OpenCode history uses Node's built-in SQLite, loaded only when that store is read.
 CI runs biome → typecheck → tests → build → a packed-file-list assertion
 (`scripts/check-pack.mjs`) on Ubuntu and macOS; all of it must stay green.
@@ -134,6 +135,8 @@ node scripts/smoke-opencode.mjs /absolute/path/to/opencode
 CI pins one CLI from each supported family. The smoke verifies JSON output,
 zero tool definitions, exclusion of ambient instructions/plugins/MCP, and
 session cleanup. Recheck the pinned upstream schema when adding new record types.
+The minimum-runtime job builds on Node 24, then uses `scripts/smoke-runtime.mjs`
+to exercise installed tarballs on Node 22.13 without development dependencies.
 
 ## Prompt changes
 
