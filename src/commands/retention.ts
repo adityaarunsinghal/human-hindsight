@@ -10,6 +10,8 @@ export interface RetentionArgs {
   "claude-dir"?: string;
   "codex-dir"?: string;
   "kiro-dir"?: string;
+  "opencode-dir"?: string;
+  "opencode-db"?: string;
   source?: string;
   apply?: boolean;
   "dry-run"?: boolean;
@@ -27,7 +29,9 @@ export async function runRetention(
   const plans = planRetention(mode, resolvePaths(args));
   write("Local data retention (optional)");
   if (!plans.length) {
-    write("No tool directories found. Select --source claude|codex|kiro or set a tool directory.");
+    write(
+      "No tool directories found. Select --source claude|codex|kiro|opencode or set a tool directory.",
+    );
     return 0;
   }
   for (const plan of plans) {

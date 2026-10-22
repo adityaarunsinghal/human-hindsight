@@ -57,6 +57,8 @@ export async function runPreferences(
     "claude-dir"?: string;
     "codex-dir"?: string;
     "kiro-dir"?: string;
+    "opencode-dir"?: string;
+    "opencode-db"?: string;
     source?: string;
     runner?: string;
     target?: string;
@@ -256,11 +258,17 @@ export async function runConsolidation(opts: {
 export function resolveTarget(raw: string | undefined, sourceMode: SourceMode): PreferencesTarget {
   if (raw) {
     const v = raw.toLowerCase();
-    if (v === "codex") return "agents";
+    if (v === "codex" || v === "opencode") return "agents";
     if (v === "claude" || v === "kiro" || v === "agents") return v;
-    throw new Error(`unknown --target "${raw}" (expected claude, codex, kiro, or agents)`);
+    throw new Error(
+      `unknown --target "${raw}" (expected claude, codex, kiro, opencode, or agents)`,
+    );
   }
-  return sourceMode === "kiro" ? "kiro" : sourceMode === "codex" ? "agents" : "claude";
+  return sourceMode === "kiro"
+    ? "kiro"
+    : sourceMode === "codex" || sourceMode === "opencode"
+      ? "agents"
+      : "claude";
 }
 
 /**
@@ -283,7 +291,7 @@ function targetFooter(target: PreferencesTarget): string[] {
       return [
         dim("add the block to your ") +
           cyan("AGENTS.md") +
-          dim(" — Codex, kiro, and other agent CLIs auto-inherit it."),
+          dim(" — Codex, Kiro, OpenCode, and other agent CLIs auto-inherit it."),
         dim("or run with --consolidate to merge near-duplicates with one runner call."),
       ];
     default:
@@ -349,7 +357,7 @@ export default defineCommand({
     target: {
       type: "string",
       description:
-        "Output target: claude (CLAUDE.md), codex/agents (AGENTS.md), or kiro (steering file). Default: inferred from --source",
+        "Output target: claude (CLAUDE.md), codex/opencode/agents (AGENTS.md), or kiro (steering file). Default: inferred from --source",
     },
     consolidate: {
       type: "boolean",
@@ -357,7 +365,8 @@ export default defineCommand({
     },
     runner: {
       type: "string",
-      description: "Which local CLI consolidates: claude, codex, kiro, or auto (default: auto)",
+      description:
+        "Which local CLI consolidates: claude, codex, kiro, opencode, or auto (default: auto)",
     },
     model: {
       type: "string",

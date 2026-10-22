@@ -63,6 +63,10 @@ export interface SpawnOptions {
    * auto-saved sessions are isolated for cleanup; the claude runner never sets it.
    */
   cwd?: string;
+  /** Child-only overrides; undefined removes an inherited variable. */
+  env?: NodeJS.ProcessEnv;
+  /** Own and terminate the CLI's process group (POSIX only). */
+  processGroup?: boolean;
 }
 
 /** All process interaction the runner needs — injectable for testing. */
@@ -96,10 +100,18 @@ function defaultWhich(bin: string): string | null {
 
 function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<SpawnResult> {
   return new Promise((resolve, reject) => {
+    const ownGroup = opts.processGroup === true && process.platform !== "win32";
     const child = nodeSpawn(bin, args, {
       stdio: ["pipe", "pipe", "pipe"],
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.env ? { env: { ...process.env, ...opts.env } } : {}),
+      ...(ownGroup ? { detached: true } : {}),
     });
+    const untrack = ownGroup && child.pid ? trackGroup(child.pid) : () => {};
+    const kill = (signal: NodeJS.Signals) => {
+      if (ownGroup && child.pid) killGroup(child.pid, signal);
+      else child.kill(signal);
+    };
     let stdout = "";
     let stderr = "";
     let timedOut = false;
@@ -108,8 +120,8 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
     const timer = setTimeout(() => {
       timedOut = true;
       // Ask politely first so the child can flush; force-kill only if it lingers.
-      child.kill("SIGTERM");
-      killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+      kill("SIGTERM");
+      killTimer = setTimeout(() => kill("SIGKILL"), KILL_GRACE_MS);
       killTimer.unref?.(); // never keep the event loop alive on our account
     }, opts.timeoutMs);
 
@@ -118,17 +130,21 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
       if (killTimer) clearTimeout(killTimer);
     };
 
-    child.stdout?.on("data", (d: Buffer) => {
-      stdout += d.toString();
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (d: string) => {
+      stdout += d;
     });
-    child.stderr?.on("data", (d: Buffer) => {
-      stderr += d.toString();
+    child.stderr?.on("data", (d: string) => {
+      stderr += d;
     });
     let settled = false;
     const settle = (code: number | null, signal: NodeJS.Signals | null) => {
       if (settled) return;
       settled = true;
       clearTimers();
+      if (ownGroup) kill("SIGKILL");
+      untrack();
       // Settling on `exit` (or killing on timeout) leaves the stdio streams
       // open whenever a grandchild inherited the pipes or the child died
       // mid-write. Those streams are ref'd libuv handles, so they keep THIS
@@ -148,6 +164,8 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
       if (settled) return;
       settled = true;
       clearTimers();
+      if (ownGroup) kill("SIGKILL");
+      untrack();
       child.stdout?.destroy();
       child.stderr?.destroy();
       child.stdin?.destroy();
@@ -181,6 +199,42 @@ function defaultSpawn(bin: string, args: string[], opts: SpawnOptions): Promise<
     child.stdin?.write(opts.input);
     child.stdin?.end();
   });
+}
+
+const ownedGroups = new Set<number>();
+function killGroup(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(-pid, signal);
+  } catch {
+    // The owned group may already have exited.
+  }
+}
+const onExit = () => {
+  for (const pid of ownedGroups) killGroup(pid, "SIGKILL");
+};
+const onInterrupt = () => {
+  onExit();
+  process.exit(130);
+};
+const onTerminate = () => {
+  onExit();
+  process.exit(143);
+};
+function trackGroup(pid: number): () => void {
+  if (ownedGroups.size === 0) {
+    process.on("exit", onExit);
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onTerminate);
+  }
+  ownedGroups.add(pid);
+  return () => {
+    ownedGroups.delete(pid);
+    if (ownedGroups.size === 0) {
+      process.off("exit", onExit);
+      process.off("SIGINT", onInterrupt);
+      process.off("SIGTERM", onTerminate);
+    }
+  };
 }
 
 /** The default IO, used when none is injected. */

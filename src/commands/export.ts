@@ -12,6 +12,7 @@ import { buildCorpus, type Corpus, type CorpusSession, type DedupeInput } from "
 import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { buildOutcome, FINAL_TURNS, OUTCOME_NOTE, type OutcomeEvidence } from "../core/outcome.js";
 import { exportFileName, renderExport } from "../core/render.js";
+import { readSession, SourceReadError } from "../sources/read.js";
 import { parseSourceMode, resolveSources } from "../sources/registry.js";
 import type { SourceName, TimelineEvent } from "../sources/types.js";
 import { dim, hint } from "../ui/style.js";
@@ -41,6 +42,8 @@ export interface ExportArgs {
   "claude-dir"?: string;
   "codex-dir"?: string;
   "kiro-dir"?: string;
+  "opencode-dir"?: string;
+  "opencode-db"?: string;
   /** Which backend(s) to read: claude, codex, kiro, or auto (default auto). */
   source?: string;
   /** Case-insensitive substring filter on project short name. */
@@ -109,7 +112,8 @@ export function runExport(opts: ExportArgs): ExportStats {
   const out = opts.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
 
-  const { home, claudeDir, codexDir, kiroDir } = resolvePaths(opts);
+  const paths = resolvePaths(opts);
+  const { home } = paths;
   const minMessages = parseClampedInt(opts["min-messages"], { fallback: 1, min: 1 });
   const exportsDir = path.join(home, "exports");
   const sourceMode = parseSourceMode(opts.source);
@@ -117,7 +121,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   // Every active backend as a SessionSource. Extraction and timeline run through
   // each source, so the seam is uniform; a single-active-source run (the common
   // claude-only machine) is byte-identical to the pre-multi-backend behavior.
-  const sources = resolveSources(sourceMode, { claudeDir, codexDir, kiroDir });
+  const sources = resolveSources(sourceMode, paths);
 
   // Read every selected session into the corpus input, tolerating read errors.
   // Extraction runs through the OWNING source; the timeline is deferred to a
@@ -133,38 +137,43 @@ export function runExport(opts: ExportArgs): ExportStats {
   let readErrors = 0;
   const readErrorPaths: string[] = [];
   for (const source of sources) {
-    // Entry counts are unused by export (content is read below); skip the count.
-    for (const project of source.discover({ countEntries: false })) {
-      // Apply the --project filter; count the sessions it excludes for reporting.
-      if (opts.project && !projectMatches(project.shortName, opts.project)) {
-        skippedByFilter += project.sessions.length;
-        continue;
-      }
-      for (const session of project.sessions) {
-        // Session-level classification (kiro: exclude subagent/automation
-        // sessions). Claude classifies per-entry inside extract and has none.
-        if (source.classify?.({ ...session, project: project.shortName }) === "automation") {
-          automationSkipped++;
+    try {
+      // Entry counts are unused by export (content is read below); skip the count.
+      for (const project of source.discover({ countEntries: false })) {
+        // Apply the --project filter; count the sessions it excludes for reporting.
+        if (opts.project && !projectMatches(project.shortName, opts.project)) {
+          skippedByFilter += project.sessions.length;
           continue;
         }
-        let content: string;
-        try {
-          content = fs.readFileSync(session.path, "utf8");
-        } catch {
-          readErrors++;
-          readErrorPaths.push(session.path);
-          continue;
+        for (const session of project.sessions) {
+          // Session-level classification (kiro: exclude subagent/automation
+          // sessions). Claude classifies per-entry inside extract and has none.
+          if (source.classify?.({ ...session, project: project.shortName }) === "automation") {
+            automationSkipped++;
+            continue;
+          }
+          let lines: string[];
+          try {
+            lines = readSession(source, session);
+          } catch (error) {
+            if (error instanceof SourceReadError) throw error;
+            readErrors++;
+            readErrorPaths.push(session.path);
+            continue;
+          }
+          const key = session.key ?? session.path;
+          inputs.push({
+            project: project.shortName,
+            sessionId: session.id ?? session.file.replace(/\.jsonl$/, ""),
+            sourcePath: key,
+            extracted: source.extract(lines),
+          });
+          timelineOf.set(key, () => source.timeline(lines));
+          originOf.set(key, source.name);
         }
-        const lines = content.split(/\r?\n/);
-        inputs.push({
-          project: project.shortName,
-          sessionId: session.id ?? session.file.replace(/\.jsonl$/, ""),
-          sourcePath: session.path,
-          extracted: source.extract(lines),
-        });
-        timelineOf.set(session.path, () => source.timeline(lines));
-        originOf.set(session.path, source.name);
       }
+    } finally {
+      source.dispose?.();
     }
   }
 

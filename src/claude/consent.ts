@@ -41,7 +41,9 @@ export interface DistillPlan {
 function runnerCopy(name: DistillPlan["runnerName"]): { cli: string; cost: string } {
   return name === "kiro"
     ? { cli: "kiro-cli", cost: "your Kiro credits" }
-    : { cli: name ?? "claude", cost: "your subscription/credits" };
+    : name === "opencode"
+      ? { cli: "opencode", cost: "your configured provider account" }
+      : { cli: name ?? "claude", cost: "your subscription/credits" };
 }
 
 export interface ConsentOptions {

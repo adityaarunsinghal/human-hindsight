@@ -7,9 +7,9 @@ path that is small enough to review directly.
 ## The trust model
 
 - **Local-only.** Everything is read from your disk and written to your disk
-  (`~/.human-hindsight`, owner-only permissions). There is no server, no account,
+  (`~/.human-hindsight`, owner-only permissions). There is no hosted service or account,
   and no telemetry. Distillation and optional preference consolidation send
-  content through your chosen `claude`, `codex`, or `kiro-cli` to its provider.
+  content through your chosen `claude`, `codex`, `kiro-cli`, or `opencode` to its provider.
 - **Existing data stays in place.** The legacy `~/.cc-hindsight` directory and
   `CC_HINDSIGHT_HOME` variable remain supported. The deprecated `cc-hindsight`
   package delegates to the exact matching Human Hindsight version.
@@ -24,7 +24,13 @@ path that is small enough to review directly.
 - **Consent-gated spend.** No LLM call happens until `distill` has printed the
   exact invocation count and you have answered `[y/N]`. `--dry-run` shows the
   full plan and calls nothing.
-- **Pinned dependencies.** There are four runtime dependencies, and the whole
+- **OpenCode history.** SQLite access is read-only and never runs OpenCode
+  migrations. Database failures abort export before existing artifacts are
+  replaced. The runner uses a private provider-only configuration and a
+  dedicated agent with tools denied. It deletes only captured session IDs
+  whose title and directory prove ownership; cleanup failures leave marked,
+  excluded sessions rather than widening the deletion scope.
+- **Pinned dependencies.** There are five runtime dependencies, and the whole
   transitive tree is locked via `npm-shrinkwrap.json`.
 - **Verifiable builds.** Releases published through the `release.yml` workflow
   carry an npm provenance attestation that links the tarball to the commit and

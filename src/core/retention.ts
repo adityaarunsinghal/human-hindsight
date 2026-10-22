@@ -179,13 +179,33 @@ export function planRetention(mode: SourceMode, dirs: ResolvedPaths): RetentionP
     { name: "claude", dir: dirs.claudeDir },
     { name: "codex", dir: dirs.codexDir },
     { name: "kiro", dir: dirs.kiroDir },
+    { name: "opencode", dir: dirs.opencodeDir },
   ];
   return tools
-    .filter((tool) => (mode === "auto" ? fs.existsSync(tool.dir) : mode === tool.name))
+    .filter((tool) =>
+      mode === "auto"
+        ? fs.existsSync(tool.dir) ||
+          (tool.name === "opencode" &&
+            (fs.existsSync(dirs.opencodeConfigDir) || fs.existsSync(dirs.opencodeDb)))
+        : mode === tool.name,
+    )
     .map(({ name, dir }) => {
       try {
         if (name === "claude") return claudePlan(path.join(dir, "settings.json"));
         if (name === "codex") return codexPlan(path.join(dir, "config.toml"));
+        if (name === "opencode")
+          return {
+            tool: name,
+            changes: [],
+            notes: [
+              `OpenCode data: ${dirs.opencodeDb}; configuration: ${dirs.opencodeConfigDir}.`,
+              "OpenCode stores sessions locally; no supported full-session age/size retention limit is documented.",
+              "OpenCode 2 keeps earlier messages after compaction and ignores the old compaction.prune setting.",
+              "Temporary overflow tool-output files have separate cleanup (7 days in OpenCode 2.1); output size limits do not change that lifetime.",
+              "For an extra archive: OpenCode 2 uses opencode session export <id>; OpenCode 1 uses opencode export <id>.",
+              "Compaction and tool-output settings are left unchanged; no keep-forever key is invented.",
+            ],
+          };
         return {
           tool: name,
           changes: [],

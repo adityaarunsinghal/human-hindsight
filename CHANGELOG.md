@@ -4,6 +4,38 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.7.0] - 2026-10-22
+
+### Added
+
+- OpenCode as a history source and distillation engine, covering current 1.19
+  and 2.1 release families. Includes SQLite and legacy JSON stores, archived
+  sessions, question answers, attachment markers, compaction boundaries,
+  execution status, and migration-copy deduplication.
+- `--source opencode`, `--runner opencode`, `--opencode-dir`,
+  `--opencode-db`, and `preferences --target opencode` for `AGENTS.md`.
+  OpenCode prompts use the existing lightweight library GUI.
+- A private OpenCode runner configuration with tools denied, provider/model
+  settings read from JSONC, JSON answer validation, and one corrective retry.
+  OpenCode 2 uses an owned private server. Generated sessions are excluded
+  from exports and removed only after verifying ID/title/directory ownership.
+- Advisory OpenCode retention guidance that distinguishes stored conversations
+  from temporary tool-output cleanup without changing compaction settings.
+- Synthetic SQLite fixtures and real CLI integration tests against a local
+  mock provider, including tool isolation and generated-session cleanup.
+
+### Changed
+
+- Minimum Node version is now 22.13 on Node 22, or 23.4 on newer releases,
+  for built-in SQLite without a database dependency.
+- Added exact-pinned `jsonc-parser` for safe OpenCode configuration reading.
+  Runtime dependencies remain small; no GUI dependency was added.
+- Store-owned session loading supports multiple sessions per database.
+  An unreadable, busy, unsupported, or incompletely migrated OpenCode database
+  aborts export before rewriting its manifest or pruning earlier exports.
+- Prompt versions now record OpenCode source legends and execution-status
+  evidence. Existing libraries and resumable checkpoints remain usable.
+
 ## [1.6.0] - 2026-10-21
 
 ### Changed
@@ -371,7 +403,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/adityaarunsinghal/human-hindsight/releases/tag/v1.4.0

@@ -5,6 +5,8 @@ import { codexSource } from "./codex/index.js";
 import { KIRO_SESSIONS_SUBDIR } from "./kiro/discover.js";
 import { kiroV3StoreExists } from "./kiro/discover-v3.js";
 import { kiroSource } from "./kiro/index.js";
+import { opencodeSource } from "./opencode/index.js";
+import { resolveOpenCodePaths } from "./opencode/paths.js";
 import type { SessionSource, SourceName } from "./types.js";
 
 /**
@@ -31,6 +33,8 @@ export interface SourceDirs {
   claudeDir: string;
   codexDir: string;
   kiroDir: string;
+  opencodeDir?: string;
+  opencodeDb?: string;
 }
 
 /** True when a Claude Code store exists (a `projects` dir under claudeDir). */
@@ -59,8 +63,15 @@ function kiroStoreExists(kiroDir: string): boolean {
 /** Parse/validate a raw `--source` flag value; defaults to `auto`. */
 export function parseSourceMode(raw: string | undefined): SourceMode {
   const value = (raw ?? "auto").toLowerCase();
-  if (value === "auto" || value === "claude" || value === "codex" || value === "kiro") return value;
-  throw new Error(`unknown --source "${raw}" (expected claude, codex, kiro, or auto)`);
+  if (
+    value === "auto" ||
+    value === "claude" ||
+    value === "codex" ||
+    value === "kiro" ||
+    value === "opencode"
+  )
+    return value;
+  throw new Error(`unknown --source "${raw}" (expected claude, codex, kiro, opencode, or auto)`);
 }
 
 /**
@@ -73,6 +84,9 @@ export function resolveSources(mode: SourceMode, dirs: SourceDirs): SessionSourc
   if (mode === "claude") return [claudeSource(dirs.claudeDir)];
   if (mode === "codex") return [codexSource(dirs.codexDir)];
   if (mode === "kiro") return [kiroSource(dirs.kiroDir)];
+  const paths = resolveOpenCodePaths({ dir: dirs.opencodeDir, db: dirs.opencodeDb });
+  const opencode = opencodeSource(paths.opencodeDir, paths.opencodeDb);
+  if (mode === "opencode") return [opencode];
 
   // auto — include each backend whose store exists and holds ≥1 project (the
   // discover call is a cheap directory listing; countEntries stays off).
@@ -87,5 +101,6 @@ export function resolveSources(mode: SourceMode, dirs: SourceDirs): SessionSourc
     const kiro = kiroSource(dirs.kiroDir);
     if (kiro.discover({ countEntries: false }).length > 0) sources.push(kiro);
   }
+  if (opencode.discover({ countEntries: false }).length > 0) sources.push(opencode);
   return sources;
 }

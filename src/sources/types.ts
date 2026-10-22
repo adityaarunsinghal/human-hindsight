@@ -15,7 +15,7 @@
  */
 
 /** Which backend a session came from. */
-export type SourceName = "claude" | "codex" | "kiro";
+export type SourceName = "claude" | "codex" | "kiro" | "opencode";
 
 /**
  * A recovered human message. `text` may join multiple surviving pieces with a
@@ -68,6 +68,7 @@ export type TimelineEvent =
   | { kind: "assistant"; timestamp: string; text: string }
   | { kind: "plan"; timestamp: string; text: string }
   | { kind: "question"; timestamp: string; text: string }
+  | { kind: "status"; timestamp: string; text: string }
   | { kind: "boundary"; timestamp: string; text: string };
 
 /** A single session transcript discovered in a backend's store. */
@@ -78,6 +79,8 @@ export interface SessionInfo {
   file: string;
   /** Absolute path to the session file. */
   path: string;
+  /** Unique provenance locator when several sessions share one physical file. */
+  key?: string;
   /**
    * Cheap entry count: number of non-empty newline-delimited lines. Each JSONL
    * line is one transcript entry; we deliberately do NOT `JSON.parse` per line
@@ -123,6 +126,10 @@ export interface SessionSource {
   readonly name: SourceName;
   /** Enumerate projects+sessions in this backend's store; missing store → []. */
   discover(opts?: { countEntries?: boolean }): ProjectInfo[];
+  /** Load a database/structured session; absent means read the JSONL at session.path. */
+  read?(session: SessionInfo): string[];
+  /** Close owned read handles after export, including when a read fails. */
+  dispose?(): void;
   /** Fidelity contract: raw lines → human messages + observable drops. */
   extract(lines: string[]): ExtractResult;
   /** Full-conversation timeline for anaphora/outcome context. */

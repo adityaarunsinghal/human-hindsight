@@ -16,7 +16,7 @@
 npx human-hindsight
 ```
 
-Human Hindsight mines your coding-agent session history (Claude Code, Codex, kiro-cli)
+Human Hindsight mines your coding-agent session history (Claude Code, Codex, Kiro, OpenCode)
 into two things you can use tomorrow morning:
 
 1. **A oneshot prompt library.** For each real task you've done, the realistic
@@ -64,7 +64,8 @@ All the evidence of what you *should* have said is already on disk. Claude Code
 saves session JSONL under `~/.claude/projects/`; Codex keeps rollouts under
 `~/.codex/sessions/` and `~/.codex/archived_sessions/`; kiro-cli keeps its
 own store under `~/.kiro/sessions` (both the flat `cli/<uuid>.jsonl` layout and
-the newer per-session `<hash>/sess_<uuid>/messages.jsonl` layout). Plenty of
+the newer per-session `<hash>/sess_<uuid>/messages.jsonl` layout). OpenCode keeps
+its SQLite history under `~/.local/share/opencode/`. Plenty of
 tools read that data for
 dashboards and transcripts. **Nobody closes the loop from history back to
 better prompting.**
@@ -117,9 +118,9 @@ npx human-hindsight status              # pipeline funnel + orphan/skip flags
 npx human-hindsight retention           # optional: preview longer local retention
 ```
 
-Requires Node ≥ 22 on macOS or Linux (Windows is untested and currently
+Requires Node 22.13+ on Node 22, or Node 23.4+ on newer releases, on macOS or Linux (Windows is untested and currently
 unsupported). `scan` and `export` are fully deterministic: no LLM, no
-network. `distill` uses your installed `claude`, `codex`, or `kiro-cli`,
+network. `distill` uses your installed `claude`, `codex`, `kiro-cli`, or `opencode`,
 with a consent prompt (or your explicit `--yes`).
 
 ### A small local library viewer
@@ -142,9 +143,9 @@ no additional dependencies, frontend framework, database, or external assets.
 It listens only on `127.0.0.1`, serves a read-only library API, and stops with
 Ctrl+C. The GUI doesn't invoke an agent or modify your library.
 
-### Multiple backends (Claude Code + Codex + kiro-cli)
+### Multiple backends (Claude Code + Codex + Kiro + OpenCode)
 
-Every command takes `--source claude|codex|kiro|auto` (default `auto`: read
+Every command takes `--source claude|codex|kiro|opencode|auto` (default `auto`: read
 whichever stores exist). Select the source after the subcommand. Directory
 flags work before or after it:
 
@@ -153,6 +154,15 @@ flags work before or after it:
 | Claude Code | `--claude-dir` | `CLAUDE_CONFIG_DIR` | `~/.claude` |
 | Codex | `--codex-dir` | `CODEX_HOME` | `~/.codex` |
 | kiro-cli | `--kiro-dir` | `KIRO_CONFIG_DIR` | `~/.kiro` |
+| OpenCode | `--opencode-dir` | `HUMAN_HINDSIGHT_OPENCODE_DIR`, then `XDG_DATA_HOME` | `~/.local/share/opencode` |
+
+For OpenCode, `--opencode-db` selects a database explicitly; relative names
+resolve under the data directory. It overrides `HUMAN_HINDSIGHT_OPENCODE_DB`
+and OpenCode's `OPENCODE_DB`, with `opencode.db` as the default. An in-memory
+database has no persisted history to read. Configuration is separate:
+`OPENCODE_CONFIG_DIR` or the XDG config directory, normally `~/.config/opencode`.
+Human Hindsight's directory/database flags select source history; the OpenCode
+runner uses the CLI's normal data location and authentication.
 
 Multiple stores merge into one library; the manifest tags each session's
 `origin` and the export summary breaks the count down. Codex discovery includes
@@ -163,9 +173,9 @@ survive extraction. The kiro backend
 reads both on-disk store layouts (the flat v2 store and the newer v3 per-session
 store), preferring the v3 copy when a session was migrated into both.
 
-`distill --runner claude|codex|kiro|auto` chooses which CLI does the distilling,
+`distill --runner claude|codex|kiro|opencode|auto` chooses which CLI does the distilling,
 independently of `--source`. `auto` prefers the CLI matching an explicit source,
-then falls back in the order Claude → Codex → Kiro. Models are passed through
+then falls back in the order Claude → Codex → Kiro → OpenCode. Models are passed through
 with `--model`; without it, the chosen CLI uses its configured default.
 
 ```bash
@@ -173,15 +183,55 @@ npx human-hindsight export --source codex
 npx human-hindsight distill --source codex --runner codex
 npx human-hindsight distill --source claude --runner codex
 npx human-hindsight preferences --target codex  # AGENTS.md; alias of --target agents
+npx human-hindsight export --source opencode
+npx human-hindsight distill --source opencode --runner opencode
+npx human-hindsight distill --source claude --runner opencode --model provider/model
+npx human-hindsight preferences --target opencode  # AGENTS.md
 ```
 
-`preferences --target claude|codex|kiro|agents` emits a `CLAUDE.md` block,
+`preferences --target claude|codex|kiro|opencode|agents` emits a `CLAUDE.md` block,
 an `AGENTS.md` section, or a block for `~/.kiro/steering/`. An explicit Codex
 source defaults to `AGENTS.md`. The Codex runner uses `codex exec` with a JSON
 schema, a read-only sandbox, and ephemeral sessions; generated distill sessions
 do not become new source history. Claude supports current `structured_output`
 results as well as legacy `result` objects/strings and verbose event arrays.
 It disables session persistence when the installed CLI advertises the flag.
+
+### OpenCode 1 and 2
+
+OpenCode support covers both current release families: `opencode-ai` 1.19
+(verified with 1.19.4) and `@opencode/cli` 2.1 (verified with 2.1.3).
+Both install an `opencode` command. Source discovery does not need the CLI.
+
+The reader handles OpenCode 1's session/message/part SQLite tables, OpenCode 2's
+ordered message records, and recognized older `storage/session`, `storage/message`,
+and `storage/part` JSON directories. It includes archived sessions, preserves
+question answers and attachment markers, and excludes generated subagent and
+distillation sessions. Completed compaction resets short-reply context;
+explicit execution failures are included in the outcome evidence.
+
+Read-only SQLite connections include committed WAL data. Human Hindsight never
+migrates the source database. An unreadable, busy, unsupported, or incompletely
+migrated OpenCode database stops export before replacing the manifest or pruning
+existing exports. If migrated copies coexist, matching human turns are deduplicated;
+divergent older copies keep distinct export names. Reverted tails are excluded.
+Only committed conversation messages are read, not pending inbox items.
+
+The OpenCode runner uses JSON events, validates the final answer, and permits one
+corrective retry. It copies provider/model settings from JSON or JSONC into an
+owner-only temporary configuration, while OpenCode continues to handle credentials.
+Project instructions, external agent plugins, and MCP configuration are not copied.
+A dedicated agent denies tools; OpenCode 2 uses an owned private server.
+Providers that require external agent plugins may need a built-in or compatible
+provider configuration for this runner.
+
+Generated sessions are marked and excluded from future exports. After the run,
+cleanup deletes only captured IDs whose title and working directory prove they
+belong to that run. Interrupted runs or cleanup failures can leave marked sessions
+behind. User settings and unrelated sessions are preserved.
+
+OpenCode preferences can go into the project's `AGENTS.md`, or the global
+`AGENTS.md` under your OpenCode config directory.
 
 ### Optional: keep more local history
 
@@ -208,6 +258,13 @@ create that tool's settings file. `--yes` alone never applies changes, and
 - **kiro-cli:** explains automatic persistence and `/chat save <path>` for
   additional copies. Its public settings reference does not document a
   retention-limit switch, so no configuration key is invented.
+- **OpenCode:** reports the local data/config locations and archival guidance.
+  No supported full-session age/size retention setting is documented. OpenCode 2
+  keeps earlier messages after compaction and ignores the older `compaction.prune`
+  setting. Temporary overflow tool-output files have separate cleanup (seven days
+  in 2.1); output-size limits do not change that lifetime. This integration is
+  advisory and leaves compaction settings untouched. For an extra copy, use
+  `opencode session export <id>` on OpenCode 2 or `opencode export <id>` on OpenCode 1.
 
 Applying creates owner-only backups next to existing configuration files, then
 replaces each file atomically. Other settings are preserved; common Codex TOML
@@ -223,6 +280,10 @@ recover already deleted history.
 Setting references: [Claude retention](https://code.claude.com/docs/en/settings-reference#cleanupperioddays),
 [Codex configuration](https://developers.openai.com/codex/config-reference),
 and [Kiro conversation persistence](https://kiro.dev/docs/cli/chat/).
+OpenCode references, pinned to the supported v2 release:
+[compaction](https://github.com/anomalyco/opencode/blob/v2.1.3/services/www/src/docs/content/compaction.mdx),
+[migration](https://github.com/anomalyco/opencode/blob/v2.1.3/services/www/src/docs/content/migrate-v1.mdx), and
+[session commands](https://github.com/anomalyco/opencode/blob/v2.1.3/services/www/src/docs/content/cli/commands.mdx).
 
 ## Privacy & trust
 
@@ -230,15 +291,17 @@ For a tool that reads your entire conversation history, auditability is the
 product:
 
 - **Local-only.** Everything is read from your disk and written to your disk
-  (`~/.human-hindsight`). No server, no accounts, no telemetry. The only network
+  (`~/.human-hindsight`). No hosted service, accounts, or telemetry. The only network
   traffic is through your chosen agent CLI during consented distillation or
   preference consolidation.
-- **Four runtime dependencies.** [`citty`](https://github.com/unjs/citty)
+- **Five runtime dependencies.** [`citty`](https://github.com/unjs/citty)
   (zero-dependency CLI framework), [`zod`](https://zod.dev) (schema
   validation), and [`@clack/prompts`](https://github.com/bombshell-dev/clack)
   (progress spinners), plus [`smol-toml`](https://github.com/squirrelchat/smol-toml)
   for safely preserving Codex configuration values during optional retention
-  edits. All four are
+  edits, and [`jsonc-parser`](https://github.com/microsoft/node-jsonc-parser)
+  for reading OpenCode provider configuration without executing it. SQLite
+  comes from Node itself; no database addon or native compilation is required. All five are
   exact-pinned, and the entire transitive tree ships locked via
   `npm-shrinkwrap.json`. The whole data path is small enough to audit in one
   sitting.
@@ -258,12 +321,15 @@ flowchart TD
     A["~/.claude/projects/**/*.jsonl"] -->|"scan (read-only)"| B["inventory"]
     X["~/.codex/{sessions,archived_sessions}/**/rollout-*.jsonl"] --> B
     K["~/.kiro/sessions/"] --> B
+    O["~/.local/share/opencode/opencode.db"] --> B
     A -->|"export (deterministic)"| C["exports/*.md + manifest.json"]
     X --> C
     K --> C
+    O --> C
     A -->|"anaphora + outcome evidence"| D["anaphora.json + outcomes.json"]
     X --> D
     K --> D
+    O --> D
     C --> E
     D --> E
     subgraph distill ["distill: opt-in, consent-gated, resumable"]
@@ -328,7 +394,7 @@ provenance) or narrow the scope. Digest and author calls run 3 at a time by
 default (`--concurrency`; `1` = sequential).
 
 **Subscription or API?**
-human-hindsight shells out to `claude -p`, `codex exec`, or `kiro-cli chat`;
+human-hindsight shells out to `claude -p`, `codex exec`, `kiro-cli chat`, or `opencode run`;
 however your chosen CLI is authenticated is how calls are billed. `--model`
 passes through without pinning a model version.
 

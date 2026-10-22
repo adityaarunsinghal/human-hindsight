@@ -43,6 +43,8 @@ function publishRootPaths(args: Record<string, unknown>): void {
     "claude-dir": "CLAUDE_CONFIG_DIR",
     "codex-dir": "CODEX_HOME",
     "kiro-dir": "KIRO_CONFIG_DIR",
+    "opencode-dir": "HUMAN_HINDSIGHT_OPENCODE_DIR",
+    "opencode-db": "HUMAN_HINDSIGHT_OPENCODE_DB",
   } as const;
   for (const [flag, envVar] of Object.entries(envForFlag)) {
     const value = args[flag];

@@ -42,6 +42,8 @@ export interface OutcomeEvidence {
   final_human_turns: string[];
   /** Tail of the last assistant text turn in the file; "" when there is none. */
   final_assistant_tail: string;
+  /** Tool-recorded execution result, independent of the assistant's claims. */
+  final_execution_status?: string;
 }
 
 /**
@@ -65,5 +67,20 @@ export function buildOutcome(session: CorpusSession, timeline: TimelineEvent[]):
     }
   }
 
-  return { final_human_turns, final_assistant_tail };
+  // A later human prompt starts another attempt; an earlier idle marker must
+  // not label that new attempt as completed.
+  let final_execution_status: string | undefined;
+  for (let i = timeline.length - 1; i >= 0; i--) {
+    const event = timeline[i];
+    if (event?.kind === "human" || event?.kind === "boundary") break;
+    if (event?.kind === "status") {
+      final_execution_status = event.text.slice(0, TAIL_CHARS);
+      break;
+    }
+  }
+  return {
+    final_human_turns,
+    final_assistant_tail,
+    ...(final_execution_status ? { final_execution_status } : {}),
+  };
 }
