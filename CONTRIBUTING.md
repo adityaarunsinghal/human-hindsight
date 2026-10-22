@@ -26,9 +26,11 @@ untested.
 
 ## Ground rules
 
-- **Five runtime dependencies** (`citty`, `zod`, `@clack/prompts`, `smol-toml`, `jsonc-parser`): keep the
-  tree auditable in one sitting. A new dependency needs to clearly reduce code
-  or pay for itself in UX; when in doubt, hand-roll it or leave it out.
+- **Publish a self-contained CLI.** Bundle the required JavaScript libraries,
+  include their license texts, and publish no npm dependencies or install hooks.
+  Keep the development lockfile out of the artifact. A new library needs to
+  justify its code size; the registry-style install test must still fetch only
+  the app (or the app plus its deprecated wrapper).
 - **Tests never read real agent stores or write outside temp dirs.**
   Every test runs against synthetic fixtures under `test/fixtures/`. Because
   `--source` defaults to `auto` (read whichever backend stores exist), a test
@@ -43,10 +45,15 @@ untested.
   must not write. Apply only after `--apply` plus consent, preserve unrelated
   settings, and back up existing files with owner-only permissions.
 - **Keep the GUI small and local.** Use the bundled vanilla assets and Node's
-  built-in server. Serve only library data on loopback; don't render prompt
-  content as HTML or expose filesystem/mutation endpoints. Check dropdowns in
+  built-in server. Markdown is parsed with Marked and sanitized with DOMPurify
+  before inserting a DOM fragment. Raw HTML is escaped and images never fetch
+  remote content. Always copy the source Markdown. Do not expose filesystem
+  or mutation endpoints. Check dropdowns in
   a real browser at narrow widths in both themes: one centered 12 × 8 px
   chevron, a 12 px right inset, and 36 px reserved right padding.
+- **Follow-ups require a terminal and an explicit y.** Keep source/path/model
+  selections, never forward `--yes`, `--fresh`, or `--apply`, and keep the
+  model-spending consent gate. Honor `--no-follow-up`, pipes, and dry runs.
 - **Preserve rename compatibility.** Keep `CC_HINDSIGHT_HOME`, existing
   `~/.cc-hindsight` libraries, and old `[cc-hindsight distill]` markers readable.
   Historical fixtures deliberately retain the former name.
@@ -150,14 +157,21 @@ provenance in `sources.json` stays honest.
 
 ```bash
 npm test && npm run lint && npm run typecheck && npm run build
-npm pack --dry-run --json > pack.json
-node scripts/check-pack.mjs pack.json   # dist/, package.json, npm-shrinkwrap.json, README, LICENSE; nothing else
 node scripts/check-release.mjs
-npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
-node scripts/check-pack.mjs pack-compat.json --compat
+npm run stage:release
+node scripts/pack-release.mjs
+node scripts/smoke-install.mjs
+python3 scripts/smoke-flow.py
+node scripts/smoke-gui.mjs
 ```
 
-For a version bump, update the main package/shrinkwrap and
+The build embeds the browser bundle and produces third-party license notices.
+The stage step creates `.release/human-hindsight` and `.release/cc-hindsight`
+with minimal publish manifests. Pack checks inspect those actual tarballs,
+including dependencies and scripts. A loopback npm registry exercises the
+normal `npx ...@latest` path with an empty cache.
+
+For a version bump, update the main package/development lockfile and
 `compat/cc-hindsight/package.json` together, including the wrapper's exact
 `human-hindsight` dependency. The release workflow verifies both identities,
 publishes the new package first, then the deprecated wrapper, then creates the
@@ -168,7 +182,7 @@ Each npm package needs a trusted publisher for
 `npm publish` allowed. New package names require a one-time authenticated
 bootstrap before their trusted-publisher settings can be configured.
 
-Runtime dependencies are exact-pinned and the transitive tree ships via
-`npm-shrinkwrap.json`; after any dependency change, re-run `npm shrinkwrap`
-and commit the result. CI actions are SHA-pinned; bump the SHA and the tag
+Library dependencies are exact-pinned and the development tree is locked in
+`package-lock.json`. Commit lockfile updates with dependency changes; never
+ship a development shrinkwrap. CI actions are SHA-pinned; bump the SHA and the tag
 comment together.

@@ -17,6 +17,7 @@ import { parseSourceMode, resolveSources } from "../sources/registry.js";
 import type { SourceName, TimelineEvent } from "../sources/types.js";
 import { dim, hint } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
+import { flowArgs, nextCommandText, offerNext } from "./next.js";
 
 /** One entry of `exports/manifest.json`. */
 export interface ManifestEntry {
@@ -109,6 +110,7 @@ function projectMatches(shortName: string, filter: string): boolean {
  * byte-identical output.
  */
 export function runExport(opts: ExportArgs): ExportStats {
+  opts = flowArgs(opts);
   const out = opts.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
 
@@ -443,7 +445,7 @@ function reportExport(
     }
   }
 
-  write(hint("human-hindsight distill"));
+  write(hint(nextCommandText("distill", opts)));
 }
 
 export default defineCommand({
@@ -461,7 +463,8 @@ export default defineCommand({
     },
     verbose: { type: "boolean", description: "Report every dropped piece and dedupe drop" },
   },
-  run({ args }) {
-    runExport(args as unknown as ExportArgs);
+  async run({ args }) {
+    const result = runExport(args as unknown as ExportArgs);
+    if (result.exportedSessions > 0) await offerNext("distill", args, { hintPrinted: true });
   },
 });

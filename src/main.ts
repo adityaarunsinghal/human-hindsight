@@ -11,7 +11,7 @@ import preferences from "./commands/preferences.js";
 import prune from "./commands/prune.js";
 import rate from "./commands/rate.js";
 import retention from "./commands/retention.js";
-import scan, { runScan } from "./commands/scan.js";
+import scan, { runScanAndNext } from "./commands/scan.js";
 import show from "./commands/show.js";
 import status from "./commands/status.js";
 
@@ -45,11 +45,16 @@ function publishRootPaths(args: Record<string, unknown>): void {
     "kiro-dir": "KIRO_CONFIG_DIR",
     "opencode-dir": "HUMAN_HINDSIGHT_OPENCODE_DIR",
     "opencode-db": "HUMAN_HINDSIGHT_OPENCODE_DB",
+    runner: "HUMAN_HINDSIGHT_RUNNER",
+    model: "HUMAN_HINDSIGHT_MODEL",
+    project: "HUMAN_HINDSIGHT_PROJECT",
   } as const;
   for (const [flag, envVar] of Object.entries(envForFlag)) {
     const value = args[flag];
     if (typeof value === "string" && value !== "") process.env[envVar] = value;
   }
+  if (typeof args["follow-up"] === "boolean")
+    process.env.HUMAN_HINDSIGHT_FOLLOW_UP = args["follow-up"] ? "1" : "0";
 }
 
 /** Root command. Running with no subcommand performs the safe default: scan. */
@@ -78,7 +83,7 @@ export const main = defineCommand({
     retention,
     gui,
   },
-  run({ args }) {
+  async run({ args }) {
     // citty invokes the root run() even after dispatching a subcommand, so we
     // must decide whether this invocation was bare. Use the PARSED positionals
     // (args._): a raw-args scan can't tell a subcommand token from an option
@@ -86,6 +91,6 @@ export const main = defineCommand({
     // parser is schema-aware and has already consumed string-flag values, so a
     // non-empty args._ means a real positional/subcommand was given.
     if (Array.isArray(args._) && args._.length > 0) return;
-    runScan(args);
+    await runScanAndNext(args);
   },
 });

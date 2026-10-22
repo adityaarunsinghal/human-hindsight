@@ -6,6 +6,7 @@ import { isEdited, readLibrary } from "../core/library.js";
 import { loadTasks } from "../distill/pipeline.js";
 import { dim, green, hint, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { type NextCommand, nextCommandText, offerNext } from "./next.js";
 
 /**
  * commands/prune.ts — delete orphaned library entries.
@@ -28,6 +29,7 @@ export interface PruneArgs {
 export interface PruneDeps {
   input?: Readable;
   output?: Writable;
+  next?: (command: NextCommand) => void;
 }
 
 /** Testable core of `prune`. Returns the process exit code (2 = declined). */
@@ -39,7 +41,8 @@ export async function runPrune(args: PruneArgs, deps: PruneDeps = {}): Promise<n
   const tasks = loadTasks(home);
   if (!tasks) {
     write("no distill checkpoint — cannot tell orphans from current entries.");
-    write(hint("human-hindsight status"));
+    write(hint(nextCommandText("status", args)));
+    deps.next?.("status");
     return 1;
   }
 
@@ -91,7 +94,8 @@ export async function runPrune(args: PruneArgs, deps: PruneDeps = {}): Promise<n
     write(`  removed ${e.slug}`);
   }
   write(green(`${removable.length} entr${removable.length === 1 ? "y" : "ies"} pruned.`));
-  write(hint("human-hindsight list"));
+  write(hint(nextCommandText("list", args)));
+  deps.next?.("list");
   return 0;
 }
 
@@ -107,7 +111,13 @@ export default defineCommand({
     "dry-run": { type: "boolean", description: "List what would be removed; remove nothing" },
   },
   async run({ args }) {
-    const code = await runPrune(args as unknown as PruneArgs);
+    let next: NextCommand | undefined;
+    const code = await runPrune(args as unknown as PruneArgs, {
+      next: (command) => {
+        next = command;
+      },
+    });
     if (code !== 0) process.exitCode = code;
+    if (next) await offerNext(next, args, { hintPrinted: true });
   },
 });

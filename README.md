@@ -87,12 +87,28 @@ The second prompt was knowable at t=0. You just hadn't written it yet.
 
 ## Quickstart
 
-One command builds the whole library and shows it to you when it's done:
+Start the guided terminal workflow:
+
+```bash
+npx human-hindsight@latest
+```
+
+After scanning, the CLI suggests **export** and asks whether to run it.
+Type `y` to continue. Export offers **distill**, and a successful distillation
+offers the browser library. Your library directory, source, project filter,
+runner, and model stay selected through the handoffs.
+
+Distillation still shows its model-call plan and asks for spending consent.
+Follow-up offers default to No and appear only in an interactive terminal.
+Use `--no-follow-up` for one command at a time; pipes, dry runs, and scripted
+`--yes` invocations never start these follow-up commands automatically.
+
+You can also start directly with distillation:
 
 ```bash
 npx human-hindsight distill    # offers to export first, then digest → cluster →
                             # author (asks before any runner call), then shows
-                            # you the finished library
+                            # offers the finished library in your browser
 ```
 
 Prefer to drive each stage yourself? The pipeline is just three verbs:
@@ -132,14 +148,20 @@ npx human-hindsight gui --port 3210        # choose a port (default: any availab
 npx human-hindsight gui --home /path/to/library-home
 ```
 
-Search prompt titles and text, filter by domain, sort, and copy the prompt
-body with one click. The viewer shows your existing library, including local
-edits, ratings, and session counts. Use **Refresh** after changing files.
-Light and dark appearance follow your system setting, and the layout works
-on narrow screens. Press `/` to focus search.
+Search titles and text, filter by domain, sort, and copy prompts with one click.
+**Preview** renders Markdown headings, lists, tables, links, blockquotes, task
+lists, and code blocks. **Markdown** shows the original source. Copy always
+uses that original Markdown, including when the preview is selected.
+
+The viewer uses a minimal black-and-white palette and system monospace fonts.
+Light and dark appearance follow your system setting. Local edits, ratings,
+and session counts remain visible. Use **Refresh** after changing files and
+press `/` to focus search.
 
 The GUI uses Node's built-in HTTP server and bundled HTML/CSS/JavaScript:
-no additional dependencies, frontend framework, database, or external assets.
+no frontend framework, database, font download, or external assets.
+Markdown parsing and sanitization ship inside the bundle. Raw HTML stays
+inert and remote images are represented by their alt text, without fetching them.
 It listens only on `127.0.0.1`, serves a read-only library API, and stops with
 Ctrl+C. The GUI doesn't invoke an agent or modify your library.
 
@@ -294,17 +316,13 @@ product:
   (`~/.human-hindsight`). No hosted service, accounts, or telemetry. The only network
   traffic is through your chosen agent CLI during consented distillation or
   preference consolidation.
-- **Five runtime dependencies.** [`citty`](https://github.com/unjs/citty)
-  (zero-dependency CLI framework), [`zod`](https://zod.dev) (schema
-  validation), and [`@clack/prompts`](https://github.com/bombshell-dev/clack)
-  (progress spinners), plus [`smol-toml`](https://github.com/squirrelchat/smol-toml)
-  for safely preserving Codex configuration values during optional retention
-  edits, and [`jsonc-parser`](https://github.com/microsoft/node-jsonc-parser)
-  for reading OpenCode provider configuration without executing it. SQLite
-  comes from Node itself; no database addon or native compilation is required. All five are
-  exact-pinned, and the entire transitive tree ships locked via
-  `npm-shrinkwrap.json`. The whole data path is small enough to audit in one
-  sitting.
+- **One self-contained npm package.** JavaScript libraries are bundled into
+  the CLI; the published package has no npm dependencies or installation
+  scripts. SQLite comes from Node. Starting the app does not install compilers,
+  platform bindings, or build tools. The development dependency tree is pinned
+  in the repository's `package-lock.json`, which is not published. Bundled
+  libraries include citty, Zod, Clack, smol-toml, jsonc-parser, Marked, and
+  DOMPurify; their license texts ship in `dist/THIRD_PARTY_NOTICES.txt`.
 - **Consent-gated LLM use.** `distill` states the exact invocation count and
   waits for `[y/N]` before anything runs on your subscription/credits.
   `--dry-run` shows the full plan for free. If you decline, it exits without

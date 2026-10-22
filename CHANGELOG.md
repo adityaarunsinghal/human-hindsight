@@ -4,6 +4,31 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.0] - 2026-10-22
+
+### Fixed
+
+- Removed the development shrinkwrap from published packages. The CLI now
+  bundles its JavaScript dependencies and ships without npm dependencies or
+  install scripts, preventing `npx gui` from downloading build tools and
+  foreign-platform binaries. Development uses a repository-only package lock.
+- Release checks now inspect actual tarball manifests and exercise
+  registry-style `npx` installation with a fresh cache: one package for the
+  app, two for the deprecated compatibility command.
+
+### Added
+
+- Safe Markdown preview for headings, lists, tables, code, quotes, tasks,
+  and links, with a source view and exact Markdown copying in either mode.
+  HTML remains inert and remote images do not load automatically.
+- A minimal black-and-white GUI with system monospace typography, responsive
+  layouts, and matching light/dark surfaces.
+- Interactive command handoffs: scan offers export, export offers distill,
+  and distillation offers the GUI. Library and status commands also offer
+  their next useful action. Source, directory, project, runner, and model
+  selections are retained. Offers default to No, honor `--no-follow-up`,
+  and never bypass model-call consent or run automatically in scripts.
+
 ## [1.7.0] - 2026-10-22
 
 ### Added
@@ -403,7 +428,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.7.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.0...HEAD
+[1.8.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.4.0...v1.5.0

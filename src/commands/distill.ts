@@ -30,6 +30,7 @@ import { renderLibraryTable } from "../ui/library-table.js";
 import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
+import { flowArgs, nextCommandText, offerNext } from "./next.js";
 import { offerCopyBlock, resolveTarget, runConsolidation } from "./preferences.js";
 
 // One entry of `exports/manifest.json` — defined next to the code that writes
@@ -170,6 +171,8 @@ function computeOversized(
 
 /** Injectable dependencies (testing). */
 export interface DistillDeps {
+  /** CLI handoffs replace the legacy post-run display/consolidation offers. */
+  managedFollowUp?: boolean;
   confirm?: (plan: DistillPlan, opts: ConsentOptions) => Promise<ConsentResult>;
   /** Stage runner passed to the pipeline (default: real runClaude). */
   runner?: RunnerFn;
@@ -186,6 +189,7 @@ export interface DistillDeps {
  * assert without exiting.
  */
 export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Promise<number> {
+  args = flowArgs(args);
   const confirm = deps.confirm ?? defaultConfirm;
   const out = deps.output ?? process.stdout;
   const write = (s = "") => out.write(`${s}\n`);
@@ -564,7 +568,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     // Offer to show the freshly-built library — the payoff of the one-shot flow
     // is watching it appear. Pure local display (no cost), so the default is
     // yes; --yes shows it without prompting; a pipe/CI without --yes just skips.
-    if (authoredTotal > 0) {
+    if (authoredTotal > 0 && !deps.managedFollowUp) {
       const show =
         Boolean(args.yes) ||
         (canPrompt &&
@@ -608,7 +612,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return finishRun(1);
   }
 
-  write(hint("human-hindsight list"));
+  write(hint(nextCommandText(deps.managedFollowUp ? "gui" : "list", args)));
   // Exit non-zero if anything failed (digest or author), but only AFTER the
   // reachable work completed and checkpointed.
   return finishRun(hadFailure ? 1 : 0);
@@ -734,7 +738,11 @@ export default defineCommand({
     },
   },
   async run({ args }) {
-    const code = await runDistill(args as unknown as DistillArgs);
+    const managedFollowUp = !args.yes || args["follow-up"] === false;
+    const code = await runDistill(args as unknown as DistillArgs, { managedFollowUp });
     if (code !== 0) process.exitCode = code;
+    if (code === 0 && readLibrary(resolvePaths(args).home).length > 0) {
+      await offerNext("gui", args, { hintPrinted: managedFollowUp });
+    }
   },
 });

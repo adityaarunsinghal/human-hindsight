@@ -5,6 +5,7 @@ import { writeFilePrivate } from "../core/fsutil.js";
 import { findEntry } from "../core/library.js";
 import { green, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { nextCommandText, offerNext } from "./next.js";
 
 /**
  * commands/rate.ts — record a verdict on a oneshot.
@@ -52,7 +53,7 @@ export function runRate(args: RateArgs, deps: RateDeps = {}): number {
   writeFilePrivate(path.join(entry.dir, "sources.json"), `${JSON.stringify(sources, null, 2)}\n`);
 
   write(green(`${rating === "up" ? "▲" : "▼"} ${slug} rated ${rating}.`));
-  write(hint("human-hindsight list"));
+  write(hint(nextCommandText("list", args)));
   return 0;
 }
 
@@ -74,8 +75,9 @@ export default defineCommand({
       required: true,
     },
   },
-  run({ args }) {
+  async run({ args }) {
     const code = runRate(args as unknown as RateArgs);
     if (code !== 0) process.exitCode = code;
+    else await offerNext("list", args, { hintPrinted: true });
   },
 });

@@ -4,6 +4,7 @@ import { parseSourceMode, resolveSources } from "../sources/registry.js";
 import type { ProjectInfo } from "../sources/types.js";
 import { cyan, dim, green, hint, table } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { flowArgs, nextCommandText, offerNext } from "./next.js";
 
 /** Format a Date as a human, sortable day stamp: `2026-07-13`. */
 function formatDate(d: Date): string {
@@ -22,14 +23,22 @@ export function runScan(args: {
   "opencode-dir"?: string;
   "opencode-db"?: string;
   source?: string;
-}): void {
+  project?: string;
+  "follow-up"?: boolean;
+}): number {
+  args = flowArgs(args);
   const paths = resolvePaths(args);
   const { claudeDir, codexDir, kiroDir, opencodeDir } = paths;
   const mode = parseSourceMode(args.source);
   const sources = resolveSources(mode, paths);
   // Merge every active backend's projects. With a single active source (the
   // common claude-only machine) this is exactly the old single-store list.
-  const projects: ProjectInfo[] = sources.flatMap((s) => s.discover());
+  const projects: ProjectInfo[] = sources
+    .flatMap((s) => s.discover())
+    .filter(
+      (project) =>
+        !args.project || project.shortName.toLowerCase().includes(args.project.toLowerCase()),
+    );
 
   if (projects.length === 0) {
     if (mode === "kiro") {
@@ -61,7 +70,7 @@ export function runScan(args: {
     console.log(
       dim("Optional: human-hindsight retention — review local history retention settings."),
     );
-    return;
+    return 0;
   }
 
   // Sort by latest activity, most recent first. Empty projects (no mtime) sink.
@@ -91,8 +100,13 @@ export function runScan(args: {
       );
     }
   }
-  console.log(hint("human-hindsight export"));
+  console.log(hint(nextCommandText("export", args)));
   console.log(dim("Optional: human-hindsight retention — keep more history for future exports."));
+  return sessionTotal;
+}
+
+export async function runScanAndNext(args: Parameters<typeof runScan>[0]): Promise<void> {
+  if (runScan(args) > 0) await offerNext("export", args, { hintPrinted: true });
 }
 
 export default defineCommand({
@@ -101,7 +115,7 @@ export default defineCommand({
     description: "Inventory Claude Code, Codex, Kiro, and OpenCode projects and sessions",
   },
   args: { ...sharedArgs },
-  run({ args }) {
-    runScan(args);
+  async run({ args }) {
+    await runScanAndNext(args);
   },
 });

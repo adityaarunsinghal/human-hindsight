@@ -45,21 +45,22 @@ jobs:
       - name: Verify package identities and release versions
         run: node scripts/check-release.mjs "$GITHUB_REF_NAME"
 
-      # prepublishOnly runs lint + typecheck + tests + build + the pack-contents
-      # assertion before this succeeds, so a broken or stale build cannot ship.
+      # Published manifests contain no scripts or dependencies. Validate the
+      # workspace and actual staged tarballs explicitly before publication.
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run stage:release
+      - run: node scripts/pack-release.mjs
+      - run: node scripts/smoke-install.mjs
+
       - name: Publish Human Hindsight
-        run: node scripts/publish-package.mjs
+        run: node scripts/publish-package.mjs .release/human-hindsight
 
       # Publish the wrapper only after its exact dependency is available. A
       # rerun skips versions already published from this commit.
-      - name: Check compatibility package contents
-        run: |
-          npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
-          node scripts/check-pack.mjs pack-compat.json --compat
-          rm pack-compat.json
-
       - name: Publish deprecated cc-hindsight wrapper
-        run: node scripts/publish-package.mjs compat/cc-hindsight
+        run: node scripts/publish-package.mjs .release/cc-hindsight
 
       - name: Create GitHub release from the changelog
         env:

@@ -4,6 +4,9 @@ coverage
 *.tgz
 pack.json
 pack-compat.json
+.build/
+.release/
+src/gui/client.generated.ts
 .DS_Store
 
 # Local-only working notes and session memory (never publish)

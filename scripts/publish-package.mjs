@@ -16,6 +16,15 @@ assert.ok(commit, "Missing publishing commit.");
 const dir = path.resolve(process.argv[2] ?? ".");
 const pkg = JSON.parse(fs.readFileSync(path.join(dir, "package.json"), "utf8"));
 assert.ok(["human-hindsight", "cc-hindsight"].includes(pkg.name), "Unexpected package name.");
+assert.equal(
+  path.basename(path.dirname(dir)),
+  ".release",
+  "Publish only the staged release package.",
+);
+assert.ok(!pkg.scripts && !pkg.devDependencies, "Development metadata must not be published.");
+assert.equal(pkg.gitHead, commit, "The staged package must come from the publishing commit.");
+if (pkg.name === "human-hindsight")
+  assert.deepEqual(pkg.dependencies ?? {}, {}, "The CLI must be self-contained.");
 const url = new URL(`https://registry.npmjs.org/${encodeURIComponent(pkg.name)}/${pkg.version}`);
 url.searchParams.set("release", commit);
 const response = await fetch(url, {

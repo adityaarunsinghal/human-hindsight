@@ -8,6 +8,7 @@ import { parseSourceMode, resolveSources, type SourceMode } from "../sources/reg
 import { bold, dim, green, hint, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import type { ManifestEntry } from "./distill.js";
+import { type NextCommand, nextCommandText, offerNext } from "./next.js";
 
 /** Render the "unreadable library entries" warning block; empty when clean. */
 function renderLibraryIssues(issues: LibraryIssue[]): string[] {
@@ -48,6 +49,8 @@ export function renderStatus(opts: {
   opencodeDir?: string;
   opencodeDb?: string;
   source?: SourceMode;
+  next?: (command: NextCommand) => void;
+  flow?: object;
 }): string {
   const lines: string[] = [];
 
@@ -130,7 +133,9 @@ export function renderStatus(opts: {
     lines.push(...renderStaleDigests(staleDigestKeys));
     lines.push(...renderLibraryIssues(libraryIssues));
     lines.push("");
-    lines.push(hint(exported === 0 ? "human-hindsight export" : "human-hindsight distill"));
+    const next = exported === 0 ? "export" : "distill";
+    opts.next?.(next);
+    lines.push(hint(nextCommandText(next, opts.flow ?? { home: opts.home })));
     return lines.join("\n");
   }
 
@@ -191,7 +196,16 @@ export function renderStatus(opts: {
   lines.push(...renderStaleDigests(staleDigestKeys));
   lines.push(...renderLibraryIssues(libraryIssues));
   lines.push("");
-  lines.push(hint(current.length > 0 ? "human-hindsight list" : "human-hindsight distill"));
+  const pending = tasks.tasks.some(
+    (task) =>
+      !current.some((entry) => entry.slug === task.slug) &&
+      task.members.some((member) =>
+        ["completed", "partial"].includes(digests?.digests[member]?.outcome ?? ""),
+      ),
+  );
+  const next = pending ? "distill" : current.length > 0 ? "gui" : "export";
+  opts.next?.(next);
+  lines.push(hint(nextCommandText(next, opts.flow ?? { home: opts.home })));
   return lines.join("\n");
 }
 
@@ -201,8 +215,19 @@ export default defineCommand({
     description: "Pipeline funnel: discovered → exported → digested → clustered → authored",
   },
   args: { ...sharedArgs },
-  run({ args }) {
+  async run({ args }) {
     const paths = resolvePaths(args);
-    console.log(renderStatus({ ...paths, source: parseSourceMode(args.source) }));
+    let next: NextCommand | undefined;
+    console.log(
+      renderStatus({
+        ...paths,
+        source: parseSourceMode(args.source),
+        flow: args,
+        next: (command) => {
+          next = command;
+        },
+      }),
+    );
+    if (next) await offerNext(next, args, { hintPrinted: true });
   },
 });

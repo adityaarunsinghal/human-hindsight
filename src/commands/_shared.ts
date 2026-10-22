@@ -5,6 +5,13 @@ import { type OpenCodePaths, resolveOpenCodePaths } from "../sources/opencode/pa
 
 /** Global flags shared by every subcommand. */
 export const sharedArgs = {
+  "follow-up": {
+    type: "boolean",
+    description: "Offer next steps in a terminal (disable with --no-follow-up)",
+  },
+  runner: { type: "string", description: "Distillation engine, including optional next steps" },
+  model: { type: "string", description: "Model for distillation, including optional next steps" },
+  project: { type: "string", description: "Project filter to keep through the workflow" },
   home: {
     type: "string",
     description:

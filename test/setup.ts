@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
+import { beforeEach } from "vitest";
+
+beforeEach(() => {
+  for (const key of [
+    "HUMAN_HINDSIGHT_RUNNER",
+    "HUMAN_HINDSIGHT_MODEL",
+    "HUMAN_HINDSIGHT_PROJECT",
+    "HUMAN_HINDSIGHT_FOLLOW_UP",
+  ])
+    delete process.env[key];
+});
 
 // Tests that exercise auto-discovery must never find the developer's real stores.
 // Each test file gets a nonexistent default root; explicit fixtures still win.

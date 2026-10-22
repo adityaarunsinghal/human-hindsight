@@ -5,6 +5,7 @@ import { defineCommand } from "citty";
 import { findEntry, isEdited } from "../core/library.js";
 import { dim, green, hint } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { nextCommandText, offerNext } from "./next.js";
 
 /**
  * commands/edit.ts — open a oneshot in the user's editor.
@@ -68,7 +69,7 @@ export function runEdit(args: EditArgs, deps: EditDeps = {}): number {
   } else {
     write(dim(`${slug} unchanged.`));
   }
-  write(hint(`human-hindsight show ${slug}`));
+  write(hint(nextCommandText("show", args)));
   return 0;
 }
 
@@ -85,8 +86,9 @@ export default defineCommand({
       required: true,
     },
   },
-  run({ args }) {
+  async run({ args }) {
     const code = runEdit(args as unknown as EditArgs);
     if (code !== 0) process.exitCode = code;
+    else await offerNext("show", args, { hintPrinted: true });
   },
 });
