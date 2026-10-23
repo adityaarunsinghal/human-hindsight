@@ -4,7 +4,7 @@ import fs from "node:fs";
 
 const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const compat = JSON.parse(fs.readFileSync("compat/cc-hindsight/package.json", "utf8"));
-const lock = JSON.parse(fs.readFileSync("npm-shrinkwrap.json", "utf8"));
+const lock = JSON.parse(fs.readFileSync("package-lock.json", "utf8"));
 
 assert.equal(pkg.name, "human-hindsight", "The main package must use the new name.");
 assert.equal(compat.name, "cc-hindsight", "The compatibility package must keep the old name.");
@@ -21,7 +21,7 @@ assert.equal(lock.packages[""].version, pkg.version);
 assert.deepEqual(
   lock.packages[""].engines,
   pkg.engines,
-  "The shrinkwrap must match the runtime requirement.",
+  "The development lockfile must match the runtime requirement.",
 );
 assert.deepEqual(
   compat.engines,

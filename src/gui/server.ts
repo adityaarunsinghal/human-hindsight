@@ -61,6 +61,7 @@ export async function startGuiServer(opts: { home: string; port?: number }): Pro
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Content-Type-Options", "nosniff");
       res.setHeader("Referrer-Policy", "no-referrer");
+      res.setHeader("X-DNS-Prefetch-Control", "off");
       res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
       res.setHeader(
         "Content-Security-Policy",

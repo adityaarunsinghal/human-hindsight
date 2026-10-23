@@ -34,17 +34,15 @@ jobs:
       - run: npx tsc --noEmit
       - run: npx vitest run
       - run: npm run build
-      # Package hygiene: the tarball must contain dist + the standard metadata
-      # files and NOTHING else (no src/, test/, fixtures, or config).
-      # --ignore-scripts skips a redundant `prepare` rebuild where npm honors it
-      # (npm 11+; npm 10 runs prepare during pack regardless), so the check
-      # inspects the dist/ the build step above just produced. JSON-capture
-      # safety does NOT depend on it: `prepare` routes its stdout to stderr
-      # precisely so a mid-pack build can never corrupt this file.
-      - run: npm pack --dry-run --json --ignore-scripts > pack.json
-      - run: node scripts/check-pack.mjs pack.json
-      - run: npm pack ./compat/cc-hindsight --dry-run --json --ignore-scripts > pack-compat.json
-      - run: node scripts/check-pack.mjs pack-compat.json --compat
+      - run: npm run stage:release
+      - run: node scripts/pack-release.mjs
+      - name: Verify registry-style npx installs without build tools
+        run: node scripts/smoke-install.mjs
+      - name: Verify interactive workflow handoffs
+        run: python3 scripts/smoke-flow.py
+      - name: Verify Markdown and monochrome GUI in Chrome
+        if: runner.os == 'Linux'
+        run: node scripts/smoke-gui.mjs
 
   minimum-runtime:
     runs-on: ubuntu-latest
@@ -58,9 +56,8 @@ jobs:
       - run: npm ci
       - name: Pack and install both release candidates
         run: |
-          mkdir -p "$RUNNER_TEMP/packages"
-          npm pack --ignore-scripts --pack-destination "$RUNNER_TEMP/packages"
-          npm pack ./compat/cc-hindsight --ignore-scripts --pack-destination "$RUNNER_TEMP/packages"
+          npm run stage:release
+          node scripts/pack-release.mjs "$RUNNER_TEMP/packages"
           npm install --prefix "$RUNNER_TEMP/installed" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packages/"*.tgz
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:

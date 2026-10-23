@@ -1,6 +1,6 @@
 {
   "name": "human-hindsight",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Mine coding-agent history (Claude Code, Codex, Kiro, OpenCode) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",
@@ -33,25 +33,27 @@
     "human-hindsight": "./dist/cli.js"
   },
   "files": [
-    "dist",
-    "npm-shrinkwrap.json"
+    "dist"
   ],
   "engines": {
     "node": "^22.13.0 || >=23.4.0"
   },
   "scripts": {
-    "build": "tsdown",
+    "build": "node scripts/build.mjs",
     "prepare": "npm run build --silent 1>&2",
     "test": "vitest run",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
-    "prepublishOnly": "npm run lint && npm run typecheck && npm test && npm run build && npm pack --dry-run --json --ignore-scripts > pack.json && node scripts/check-pack.mjs pack.json && rm pack.json"
+    "prepublishOnly": "node scripts/require-staged-publish.mjs",
+    "stage:release": "node scripts/stage-release.mjs"
   },
   "dependencies": {
     "@clack/prompts": "1.7.0",
     "citty": "0.2.2",
+    "dompurify": "3.4.17",
     "jsonc-parser": "3.3.1",
+    "marked": "18.1.1",
     "smol-toml": "1.9.1",
     "zod": "4.4.3"
   },

@@ -1,6 +1,6 @@
 {
   "name": "cc-hindsight",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "description": "Compatibility command for Human Hindsight. Install human-hindsight for the renamed application.",
   "deprecated": "Renamed to human-hindsight. Use npx human-hindsight or npm install -g human-hindsight. This package forwards the legacy cc-hindsight command.",
   "type": "module",
@@ -27,6 +27,6 @@
     "node": "^22.13.0 || >=23.4.0"
   },
   "dependencies": {
-    "human-hindsight": "1.7.0"
+    "human-hindsight": "1.8.0"
   }
 }

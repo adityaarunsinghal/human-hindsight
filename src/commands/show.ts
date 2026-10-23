@@ -2,8 +2,9 @@ import fs from "node:fs";
 import { defineCommand } from "citty";
 import { findEntry, parseOneshot } from "../core/library.js";
 import { renderMarkdownAnsi } from "../ui/markdown.js";
-import { bold, dim, hint } from "../ui/style.js";
+import { bold, dim } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { offerNext } from "./next.js";
 
 export default defineCommand({
   meta: {
@@ -22,7 +23,7 @@ export default defineCommand({
       description: "Print the oneshot as raw markdown (no styling or wrapping)",
     },
   },
-  run({ args }) {
+  async run({ args }) {
     const { home } = resolvePaths(args);
     const slug = String(args.slug);
     const entry = findEntry(home, slug);
@@ -64,6 +65,6 @@ export default defineCommand({
       console.log(renderMarkdownAnsi(body));
     }
     console.log();
-    console.log(hint(`human-hindsight copy ${slug}`));
+    await offerNext("copy", { ...args, slug });
   },
 });

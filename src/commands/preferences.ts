@@ -20,6 +20,7 @@ import { copyToClipboard } from "../ui/clipboard.js";
 import { withSpinner } from "../ui/progress.js";
 import { cyan, dim, green, hint, ok } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { flowArgs, offerNext } from "./next.js";
 
 /** Injectable dependencies (testing). */
 export interface PreferencesDeps {
@@ -69,6 +70,7 @@ export async function runPreferences(
   },
   deps: PreferencesDeps = {},
 ): Promise<number> {
+  args = flowArgs(args);
   const out = deps.output ?? process.stdout;
   const write = (s = "") => out.write(`${s}\n`);
   const target = resolveTarget(args.target, parseSourceMode(args.source));
@@ -382,5 +384,8 @@ export default defineCommand({
   async run({ args }) {
     const code = await runPreferences(args);
     if (code !== 0) process.exitCode = code;
+    if (code === 1 && readLibrary(resolvePaths(args).home).length === 0) {
+      await offerNext("distill", args, { hintPrinted: true });
+    }
   },
 });

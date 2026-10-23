@@ -2,8 +2,9 @@ import fs from "node:fs";
 import { defineCommand } from "citty";
 import { findEntry, parseOneshot } from "../core/library.js";
 import { copyToClipboard } from "../ui/clipboard.js";
-import { dim, green, hint } from "../ui/style.js";
+import { dim, green } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { offerNext } from "./next.js";
 
 export default defineCommand({
   meta: {
@@ -45,7 +46,7 @@ export default defineCommand({
     if (result.ok) {
       console.log(green(`copied "${slug}" to the clipboard (${words} words, via ${result.tool})`));
       console.log(dim("paste it into a fresh session with your coding agent."));
-      console.log(hint("human-hindsight preferences"));
+      await offerNext("preferences", args);
     } else {
       console.error(`could not copy (${result.error}). Here is the prompt:`);
       console.log();
