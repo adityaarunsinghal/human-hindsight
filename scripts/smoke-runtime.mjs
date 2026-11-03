@@ -83,7 +83,10 @@ try {
       `# Packaged prompt\n\n${prompt}\n`,
     );
     assert(run(["show", "packaged-prompt", "--raw"]).includes(prompt));
-    assert(run(["preferences", "--target", "opencode"]).includes("AGENTS.md"));
+    assert(run(["preferences", "--target", "opencode"]).includes("No accepted preferences"));
+    assert(
+      run(["preferences", "--target", "opencode", "--include-unreviewed"]).includes("AGENTS.md"),
+    );
     const before = fs.readFileSync(file);
     assert(run(["retention", ...source, "--apply", "--yes"]).includes("No changes needed"));
     assert.deepEqual(fs.readFileSync(file), before);
@@ -120,11 +123,33 @@ try {
       });
       const data = await (await fetch(`${url}/api/library`)).json();
       assert.equal(data.entries[0].body, prompt);
+      assert.equal(data.preferences[0].review.status, "pending");
+      assert.equal(data.acceptedMarkdown, "");
+      const reviewed = await fetch(`${url}/api/preferences/review`, {
+        method: "POST",
+        headers: {
+          Origin: url,
+          "Content-Type": "application/json",
+          "X-Hindsight-Token": data.reviewToken,
+        },
+        body: JSON.stringify({
+          id: data.preferences[0].id,
+          revision: data.preferences[0].review.revision,
+          status: "accepted",
+        }),
+      });
+      assert.equal(reviewed.status, 200);
+      const accepted = await reviewed.json();
+      assert.equal(accepted.preferences[0].review.status, "accepted");
+      assert(accepted.acceptedMarkdown.includes("Keep changes focused."));
+      assert(run(["preferences", "--target", "opencode"]).includes("AGENTS.md"));
       const stopped = new Promise((resolve) => processHandle.once("exit", resolve));
       processHandle.kill("SIGTERM");
       await stopped;
       gui = undefined;
-      console.log(`GUI library API and shutdown passed on ${process.version}.`);
+      console.log(
+        `GUI review, accepted instruction export, and shutdown passed on ${process.version}.`,
+      );
     }
   }
 } finally {
