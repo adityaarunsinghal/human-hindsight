@@ -5,10 +5,15 @@ import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../src/claude/prompts/digest.js";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
-import type { Digest } from "../src/claude/schemas.js";
+import {
+  type Digest,
+  DigestResponseSchema,
+  type PreferenceCandidate,
+} from "../src/claude/schemas.js";
 import type { ManifestEntry } from "../src/commands/distill.js";
 import {
   clearCheckpoints,
+  countReusableDigests,
   loadDigests,
   newGeneration,
   type RunnerFn,
@@ -211,7 +216,13 @@ describe("runDigestStage", () => {
     const home = tmpHome();
     writeExport(home, "a.md");
     writeExport(home, "b.md");
-    saveDigests(home, { generation: "g1", prompt_version: 1, digests: { "a.md": DIGEST } });
+    await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      generation: "g1",
+      runner: (async () => DIGEST) as RunnerFn,
+      output: sink(),
+    });
 
     const calls: string[] = [];
     const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
@@ -230,6 +241,297 @@ describe("runDigestStage", () => {
     expect(result.completed).toBe(1);
     expect(result.generation).toBe("g1"); // resume keeps the generation
     expect(calls).toEqual(["b.md"]);
+  });
+
+  it("regenerates only the session whose content changed under the same filename", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md", "Build a CSV export.");
+    writeExport(home, "b.md", "Leave this task unchanged.");
+    const calls: string[] = [];
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      calls.push(opts.prompt);
+      return {
+        ...DIGEST,
+        deliverable: opts.prompt.includes("JSON export") ? "JSON file" : "CSV file",
+      };
+    }) as RunnerFn;
+    const opts = { home, entries: [entry("a.md"), entry("b.md")], runner, output: sink() };
+    await runDigestStage(opts);
+    const previous = loadDigests(home)?.lineage?.["a.md"]?.fingerprint;
+
+    writeExport(home, "a.md", "Change this task to a JSON export.");
+    const result = await runDigestStage(opts);
+    expect(result.completed).toBe(1);
+    expect(result.skipped).toBe(1);
+    expect(calls).toHaveLength(3);
+    expect(loadDigests(home)?.digests["a.md"]?.deliverable).toBe("JSON file");
+    expect(loadDigests(home)?.lineage?.["a.md"]?.fingerprint).not.toBe(previous);
+  });
+
+  it("uses the same input checks in the read-only consent plan", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md", "Keep this session.");
+    writeExport(home, "b.md", "This session will change.");
+    const opts = {
+      home,
+      entries: [entry("a.md"), entry("b.md")],
+      runner: (async () => DIGEST) as RunnerFn,
+      output: sink(),
+    };
+    await runDigestStage(opts);
+    const checkpointPath = path.join(home, "distill", "digests.json");
+    const before = fs.readFileSync(checkpointPath, "utf8");
+    expect(countReusableDigests(opts)).toBe(2);
+    writeExport(home, "b.md", "A new task.");
+    expect(countReusableDigests(opts)).toBe(1);
+    expect(countReusableDigests({ ...opts, model: "new-model" })).toBe(0);
+    expect(fs.readFileSync(checkpointPath, "utf8")).toBe(before);
+  });
+
+  it("refreshes a digest when outcome evidence changes without new human text", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const runner: RunnerFn = (async () => {
+      calls++;
+      return DIGEST;
+    }) as RunnerFn;
+    const opts = { home, entries: [entry("a.md")], runner, output: sink() };
+    await runDigestStage(opts);
+    fs.writeFileSync(
+      path.join(home, "exports", "outcomes.json"),
+      JSON.stringify({
+        "a.md": { final_human_turns: [], final_assistant_tail: "The final verification failed." },
+      }),
+    );
+    expect((await runDigestStage(opts)).completed).toBe(1);
+    expect(calls).toBe(2);
+  });
+
+  it.each([
+    { model: "different-model" },
+    { runnerName: "codex" as const },
+  ])("regenerates when the selected generation configuration changes: %j", async (change) => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const runner: RunnerFn = (async () => {
+      calls++;
+      return DIGEST;
+    }) as RunnerFn;
+    const opts = { home, entries: [entry("a.md")], runner, output: sink() };
+    await runDigestStage(opts);
+    await runDigestStage({ ...opts, ...change });
+    expect(calls).toBe(2);
+  });
+
+  it("upgrades legacy checkpoints after consent and records source identity", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    saveDigests(home, { generation: "g1", prompt_version: 1, digests: { "a.md": DIGEST } });
+    const result = await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      runner: (async () => DIGEST) as RunnerFn,
+      output: sink(),
+    });
+    expect(result.completed).toBe(1);
+    expect(result.generation).toBe("g1");
+    expect(loadDigests(home)?.lineage?.["a.md"]).toMatchObject({
+      version: 1,
+      prompt_version: DIGEST_PROMPT_VERSION,
+      project: "x",
+      session_id: "a.md",
+      origin: "claude",
+      observed_at: "2026-01-01T01:00:00Z",
+    });
+  });
+
+  it("does not expose an obsolete digest when its refresh fails", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      runner: (async () => DIGEST) as RunnerFn,
+      output: sink(),
+    });
+    writeExport(home, "a.md", "A new requirement.");
+    const result = await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      runner: (async () => {
+        throw new Error("provider unavailable");
+      }) as RunnerFn,
+      output: sink(),
+    });
+    expect(result.failed).toHaveLength(1);
+    expect(loadDigests(home)?.digests["a.md"]).toBeUndefined();
+    expect(loadDigests(home)?.lineage?.["a.md"]).toBeUndefined();
+    expect(loadDigests(home)?.invalidated).toEqual(["a.md"]);
+  });
+
+  it("invalidates a cached digest when its export disappears", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    const opts = {
+      home,
+      entries: [entry("a.md")],
+      runner: (async () => DIGEST) as RunnerFn,
+      output: sink(),
+    };
+    await runDigestStage(opts);
+    fs.rmSync(path.join(home, "exports", "a.md"));
+    const result = await runDigestStage(opts);
+    expect(result.failed).toHaveLength(1);
+    expect(loadDigests(home)?.digests["a.md"]).toBeUndefined();
+  });
+
+  it("requires current prompt and schema metadata before reusing a fingerprint", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const opts = {
+      home,
+      entries: [entry("a.md")],
+      runner: (async () => {
+        calls++;
+        return DIGEST;
+      }) as RunnerFn,
+      output: sink(),
+    };
+    await runDigestStage(opts);
+    const checkpoint = loadDigests(home);
+    const lineage = checkpoint?.lineage?.["a.md"];
+    if (!checkpoint || !lineage) throw new Error("Expected the generated checkpoint.");
+    lineage.prompt_version--;
+    saveDigests(home, checkpoint);
+    await runDigestStage(opts);
+    expect(calls).toBe(2);
+  });
+
+  it("keeps evidence-backed preferences from abandoned sessions in the digest checkpoint", async () => {
+    const home = tmpHome();
+    const quote = "Always diagnose before making edits.";
+    writeExport(home, "a.md", quote);
+    const preference: PreferenceCandidate = {
+      text: quote,
+      evidence: "An explicit standing instruction.",
+      scope: "global",
+      basis: "explicit",
+      citations: [{ message_id: "a.md#m0", quote }],
+    };
+    const result = await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      runner: (async (opts: RunClaudeOptions<unknown>) => {
+        expect(opts.schema).toBe(DigestResponseSchema);
+        return opts.schema.parse({ ...DIGEST, outcome: "abandoned", preferences: [preference] });
+      }) as RunnerFn,
+      output: sink(),
+    });
+    expect(result.completed).toBe(1);
+    expect(loadDigests(home)?.digests["a.md"]?.preferences).toEqual([preference]);
+  });
+
+  it("retries fabricated evidence once and checkpoints only the corrected citations", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md", "Always diagnose before making edits.");
+    let calls = 0;
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      calls++;
+      if (calls === 2) expect(opts.prompt).toContain("quote is not verbatim");
+      return {
+        ...DIGEST,
+        preferences: [
+          {
+            text: "Diagnose first.",
+            evidence: "The human asked for diagnosis before edits.",
+            scope: "global",
+            basis: "explicit",
+            citations: [
+              {
+                message_id: "a.md#m0",
+                quote: calls === 1 ? "invented quotation" : "Always diagnose before making edits.",
+              },
+            ],
+          },
+        ],
+      };
+    }) as RunnerFn;
+    const result = await runDigestStage({ home, entries: [entry("a.md")], runner, output: sink() });
+    expect(result.completed).toBe(1);
+    expect(calls).toBe(2);
+    expect(loadDigests(home)?.digests["a.md"]?.preferences?.[0]?.citations[0]?.quote).toBe(
+      "Always diagnose before making edits.",
+    );
+  });
+
+  it("rejects uncorrected evidence without saving an invented preference", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md", "The real human text.");
+    let calls = 0;
+    const result = await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      output: sink(),
+      runner: (async () => {
+        calls++;
+        return {
+          ...DIGEST,
+          preferences: [
+            {
+              text: "Invented preference.",
+              evidence: "Unsupported.",
+              scope: "global",
+              basis: "explicit",
+              citations: [{ message_id: "a.md#m0", quote: "Invented evidence." }],
+            },
+          ],
+        };
+      }) as RunnerFn,
+    });
+    expect(calls).toBe(2);
+    expect(result.failed[0]?.error).toContain("evidence failed validation");
+    expect(loadDigests(home)?.digests["a.md"]).toBeUndefined();
+  });
+
+  it("maps truncated-message citations back to their original source IDs", async () => {
+    const home = tmpHome();
+    const quote = "Always diagnose before making edits.";
+    const content = [
+      `### 2026-01-01T00:00:00Z\n\n${"z".repeat(3000)}`,
+      `### 2026-01-01T00:01:00Z\n\n${"k".repeat(500)}`,
+      `### 2026-01-01T00:02:00Z\n\n${"l".repeat(500)}`,
+      `### 2026-01-01T00:03:00Z\n\n${quote}`,
+    ].join("\n\n");
+    writeExport(home, "a.md", content);
+    const result = await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      output: sink(),
+      budget: 300,
+      truncate: "extreme",
+      runner: (async (opts: RunClaudeOptions<unknown>) => {
+        expect(opts.prompt).toContain('"message_id":"a.md#m1","timestamp":"2026-01-01T00:03:00Z"');
+        return {
+          ...DIGEST,
+          preferences: [
+            {
+              text: quote,
+              evidence: "An explicit standing instruction.",
+              scope: "global",
+              basis: "explicit",
+              citations: [{ message_id: "a.md#m1", quote }],
+            },
+          ],
+        };
+      }) as RunnerFn,
+    });
+    expect(result.completed).toBe(1);
+    expect(loadDigests(home)?.digests["a.md"]?.preferences?.[0]?.citations).toEqual([
+      { message_id: "a.md#m3", quote },
+    ]);
   });
 
   it("one failure doesn't abort the rest; progress is kept", async () => {

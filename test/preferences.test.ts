@@ -14,9 +14,12 @@ import {
   readConsolidatedPreferences,
 } from "../src/core/consolidated-preferences.js";
 import type { LibraryEntry } from "../src/core/library.js";
+import { savePreferenceReview } from "../src/core/preference-review.js";
 import {
   aggregatePreferences,
   normalizeKey,
+  preferenceId,
+  readObservedPreferences,
   renderClaudeMdBlock,
   renderPreferencesBlock,
 } from "../src/core/preferences.js";
@@ -231,6 +234,103 @@ describe("runPreferences", () => {
     expect(cap.text()).toContain("human-hindsight distill");
   });
 
+  it("does not export or consolidate pending suggestions by default", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("one-task", [{ text: "Be terse.", evidence: "Keep it short." }]));
+    let calls = 0;
+    const cap = capture();
+    const code = await runPreferences(
+      { home, yes: true, consolidate: true },
+      {
+        output: cap.out,
+        runner: (async () => {
+          calls++;
+          throw new Error("pending evidence must not run");
+        }) as RunnerFn,
+      },
+    );
+    expect(code).toBe(0);
+    expect(calls).toBe(0);
+    expect(cap.text()).toContain("No accepted preferences");
+    expect(cap.text()).not.toContain("- Be terse.");
+  });
+
+  it("consolidates only accepted rules and preserves a reviewed edit", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(
+      home,
+      entry("one-task", [
+        { text: "Be terse.", evidence: "Keep it short." },
+        { text: "Use tables.", evidence: "A table would help here." },
+      ]),
+    );
+    const observed = readObservedPreferences(home);
+    const accepted = observed.find((p) => p.text === "Be terse.");
+    const dismissed = observed.find((p) => p.text === "Use tables.");
+    if (!accepted || !dismissed) throw new Error("Missing fixture candidates");
+    savePreferenceReview(home, accepted, { status: "accepted", text: "Keep replies concise." });
+    savePreferenceReview(home, dismissed, { status: "dismissed" });
+    const cap = capture();
+    let prompt = "";
+    const code = await runPreferences(
+      { home, yes: true, consolidate: true },
+      {
+        output: cap.out,
+        clipboard: fakeClipboard().copy,
+        runner: (async (opts: RunClaudeOptions<unknown>) => {
+          prompt = opts.prompt;
+          return {
+            preferences: [{ text: "Keep replies concise.", source_ids: [preferenceId(accepted)] }],
+          };
+        }) as RunnerFn,
+      },
+    );
+    expect(code).toBe(0);
+    expect(prompt).toContain("Keep replies concise.");
+    expect(prompt).not.toContain("Use tables.");
+    expect(readConsolidatedPreferences(home).artifact).toMatchObject({
+      version: 2,
+      include_unreviewed: false,
+      preferences: [{ text: "Keep replies concise.", source_ids: [preferenceId(accepted)] }],
+    });
+  });
+
+  it("rejects empty output after a correction and keeps the previous successful consolidation", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("one-task", [{ text: "Be terse.", evidence: "Keep it short." }]));
+    const candidate = readObservedPreferences(home)[0];
+    if (!candidate) throw new Error("Missing fixture candidate");
+    savePreferenceReview(home, candidate, { status: "accepted" });
+    await runPreferences(
+      { home, yes: true, consolidate: true },
+      {
+        output: capture().out,
+        clipboard: fakeClipboard().copy,
+        runner: (async () => ({
+          preferences: [{ text: "Be terse.", source_ids: [preferenceId(candidate)] }],
+        })) as RunnerFn,
+      },
+    );
+    const file = path.join(home, "library", CONSOLIDATED_PREFERENCES_FILE);
+    const before = fs.readFileSync(file, "utf8");
+    let calls = 0;
+    const cap = capture();
+    const code = await runPreferences(
+      { home, yes: true, consolidate: true },
+      {
+        output: cap.out,
+        runner: (async () => {
+          calls++;
+          return { preferences: [] };
+        }) as RunnerFn,
+      },
+    );
+    expect(code).toBe(1);
+    expect(calls).toBe(2);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(cap.text()).toContain("consolidation failed");
+  });
+
   it("prints the deterministic block without any claude involvement", async () => {
     const home = tmpHome();
     writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
@@ -239,7 +339,10 @@ describe("runPreferences", () => {
     const runner: RunnerFn = (async () => {
       throw new Error("must not be called");
     }) as RunnerFn;
-    const code = await runPreferences({ home }, { output: cap.out, runner });
+    const code = await runPreferences(
+      { home, "include-unreviewed": true },
+      { output: cap.out, runner },
+    );
     expect(code).toBe(0);
     expect(cap.text()).toContain("1 preference(s) across 2 task(s)");
     expect(cap.text()).toContain("- be terse");
@@ -251,7 +354,10 @@ describe("runPreferences", () => {
     const home = tmpHome();
     writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
     const cap = capture();
-    const code = await runPreferences({ home, target: "kiro" }, { output: cap.out });
+    const code = await runPreferences(
+      { home, "include-unreviewed": true, target: "kiro" },
+      { output: cap.out },
+    );
     expect(code).toBe(0);
     expect(cap.text()).toContain("~/.kiro/steering/hindsight-preferences.md");
     expect(cap.text()).toContain("- be terse");
@@ -261,7 +367,10 @@ describe("runPreferences", () => {
     const home = tmpHome();
     writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
     const cap = capture();
-    const code = await runPreferences({ home, target: "agents" }, { output: cap.out });
+    const code = await runPreferences(
+      { home, "include-unreviewed": true, target: "agents" },
+      { output: cap.out },
+    );
     expect(code).toBe(0);
     expect(cap.text()).toContain("AGENTS.md");
   });
@@ -276,7 +385,7 @@ describe("runPreferences", () => {
       return { preferences: [] };
     }) as RunnerFn;
     const code = await runPreferences(
-      { home, consolidate: true },
+      { home, "include-unreviewed": true, consolidate: true },
       { output: cap.out, input: inputWith("n\n"), runner },
     );
     expect(code).toBe(2);
@@ -294,23 +403,30 @@ describe("runPreferences", () => {
     const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
       prompt = opts.prompt;
       model = opts.model;
-      return { preferences: [{ text: "be terse", merged_from: 2 }] };
+      return {
+        preferences: [
+          { text: "be terse", source_ids: readObservedPreferences(home).map(preferenceId) },
+        ],
+      };
     }) as RunnerFn;
     const code = await runPreferences(
-      { home, consolidate: true, yes: true, model: "sonnet" },
+      { home, "include-unreviewed": true, consolidate: true, yes: true, model: "sonnet" },
       { output: cap.out, runner, clipboard: fakeClipboard().copy },
     );
     expect(code).toBe(0);
     expect(model).toBe("sonnet"); // --model must reach the claude call
     expect(prompt).toContain("Merge semantic duplicates");
-    expect(prompt).toContain("- be terse (stated in 1 task(s))");
+    expect(prompt).toContain('"text":"be terse"');
+    expect(prompt).toContain('"count":1');
     expect(cap.text()).toContain("consolidated 2 → 1 preference(s).");
     expect(cap.text()).toContain("- be terse");
-    // consolidated items carry no per-task evidence counts:
-    expect(cap.text()).not.toContain("stated in 2 of 2");
+    // Counts are derived from the retained source occurrences.
+    expect(cap.text()).toContain("stated in 2 of 2");
     const saved = readConsolidatedPreferences(home);
     expect(saved.invalid).toBe(false);
-    expect(saved.artifact?.preferences).toEqual([{ text: "be terse", merged_from: 2 }]);
+    expect(saved.artifact?.preferences).toEqual([
+      { text: "be terse", source_ids: readObservedPreferences(home).map(preferenceId) },
+    ]);
     expect(saved.artifact?.source_preferences).toHaveLength(2);
     expect(saved.artifact?.markdown).toContain("- be terse");
     expect(
@@ -326,10 +442,15 @@ describe("runPreferences", () => {
     let seen: number | undefined;
     const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
       seen = opts.timeoutMs;
-      return { preferences: [{ text: "be terse", merged_from: 2 }] };
+      return {
+        preferences: readObservedPreferences(home).map((p) => ({
+          text: p.text,
+          source_ids: [preferenceId(p)],
+        })),
+      };
     }) as RunnerFn;
     const code = await runPreferences(
-      { home, consolidate: true, yes: true },
+      { home, "include-unreviewed": true, consolidate: true, yes: true },
       { output: cap.out, runner, clipboard: fakeClipboard().copy },
     );
     expect(code).toBe(0);
@@ -344,10 +465,14 @@ describe("runPreferences", () => {
     let seen: number | undefined;
     const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
       seen = opts.timeoutMs;
-      return { preferences: [{ text: "be terse", merged_from: 1 }] };
+      return {
+        preferences: [
+          { text: "be terse", source_ids: readObservedPreferences(home).map(preferenceId) },
+        ],
+      };
     }) as RunnerFn;
     const code = await runPreferences(
-      { home, consolidate: true, yes: true, timeout: "900" },
+      { home, "include-unreviewed": true, consolidate: true, yes: true, timeout: "900" },
       { output: cap.out, runner, clipboard: fakeClipboard().copy },
     );
     expect(code).toBe(0);
@@ -362,7 +487,7 @@ describe("runPreferences", () => {
       throw new Error("claude reported an error: API Error: 400 data retention mode");
     }) as RunnerFn;
     const code = await runPreferences(
-      { home, consolidate: true, yes: true },
+      { home, "include-unreviewed": true, consolidate: true, yes: true },
       { output: cap.out, runner },
     );
     expect(code).toBe(1);
@@ -379,12 +504,17 @@ describe("runPreferences", () => {
     writeLibraryEntry(home, entry("one-task", [{ text: "be terse", evidence: "e" }]));
     const clipboard = fakeClipboard().copy;
     await runPreferences(
-      { home, consolidate: true, yes: true },
+      { home, "include-unreviewed": true, consolidate: true, yes: true },
       {
         output: capture().out,
         clipboard,
         runner: (async () => ({
-          preferences: [{ text: "Keep replies concise.", merged_from: 1 }],
+          preferences: [
+            {
+              text: "Keep replies concise.",
+              source_ids: readObservedPreferences(home).map(preferenceId),
+            },
+          ],
         })) as RunnerFn,
       },
     );
@@ -395,14 +525,14 @@ describe("runPreferences", () => {
     }) as RunnerFn;
     expect(
       await runPreferences(
-        { home, consolidate: true, yes: true },
+        { home, "include-unreviewed": true, consolidate: true, yes: true },
         { runner, clipboard, output: capture().out },
       ),
     ).toBe(1);
     expect(fs.readFileSync(file, "utf8")).toBe(before);
     expect(
       await runPreferences(
-        { home, consolidate: true },
+        { home, "include-unreviewed": true, consolidate: true },
         { runner, clipboard, output: capture().out, input: inputWith("n\n") },
       ),
     ).toBe(2);
@@ -416,12 +546,17 @@ describe("runPreferences", () => {
     const cap = capture();
     const clipboard = fakeClipboard();
     const code = await runPreferences(
-      { home, consolidate: true, yes: true },
+      { home, "include-unreviewed": true, consolidate: true, yes: true },
       {
         output: cap.out,
         clipboard: clipboard.copy,
         runner: (async () => ({
-          preferences: [{ text: "Keep replies concise.", merged_from: 1 }],
+          preferences: [
+            {
+              text: "Keep replies concise.",
+              source_ids: readObservedPreferences(home).map(preferenceId),
+            },
+          ],
         })) as RunnerFn,
       },
     );
@@ -440,7 +575,7 @@ describe("runPreferences", () => {
     const cap = capture();
     const clip = fakeClipboard();
     const code = await runPreferences(
-      { home },
+      { home, "include-unreviewed": true },
       { output: cap.out, input: inputWith("\n"), clipboard: clip.copy },
     );
     expect(code).toBe(0);
@@ -464,7 +599,7 @@ describe("runPreferences", () => {
     const cap = capture();
     const clip = fakeClipboard();
     const code = await runPreferences(
-      { home },
+      { home, "include-unreviewed": true },
       { output: cap.out, input: inputWith("n\n"), clipboard: clip.copy },
     );
     expect(code).toBe(0);
@@ -477,7 +612,10 @@ describe("runPreferences", () => {
     writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
     const cap = capture();
     const clip = fakeClipboard();
-    const code = await runPreferences({ home }, { output: cap.out, clipboard: clip.copy });
+    const code = await runPreferences(
+      { home, "include-unreviewed": true },
+      { output: cap.out, clipboard: clip.copy },
+    );
     expect(code).toBe(0);
     expect(clip.calls).toHaveLength(0);
     expect(cap.text()).not.toContain("copied (");
@@ -491,17 +629,19 @@ describe("runPreferences", () => {
     const cap = capture();
     const clip = fakeClipboard();
     const runner: RunnerFn = (async () => ({
-      preferences: [{ text: "be terse", merged_from: 2 }],
+      preferences: [
+        { text: "be terse", source_ids: readObservedPreferences(home).map(preferenceId) },
+      ],
     })) as RunnerFn;
     const code = await runPreferences(
-      { home, consolidate: true, yes: true },
+      { home, "include-unreviewed": true, consolidate: true, yes: true },
       { output: cap.out, runner, clipboard: clip.copy },
     );
     expect(code).toBe(0);
     expect(clip.calls).toHaveLength(1);
-    // the consolidated block is a flat list with no per-task evidence counts.
+    // The consolidated block retains source evidence counts.
     expect(clip.calls[0]).toContain("- be terse");
-    expect(clip.calls[0]).not.toContain("stated in");
+    expect(clip.calls[0]).toContain("stated in 2 of 2");
     expect(cap.text()).toContain("copied (1 preference(s)");
   });
 });

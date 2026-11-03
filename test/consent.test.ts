@@ -11,11 +11,27 @@ import {
   type DistillPlan,
   renderPlan,
 } from "../src/claude/consent.js";
+import type { RunClaudeOptions } from "../src/claude/runner.js";
+import { AuthorSchema, ClusterSchema, ConsolidateSchema } from "../src/claude/schemas.js";
 import { parseClampedInt } from "../src/commands/_shared.js";
-import { computePlan, type ManifestEntry, runDistill } from "../src/commands/distill.js";
-import type { RunnerFn } from "../src/distill/pipeline.js";
+import {
+  computePlan,
+  type DistillArgs,
+  type DistillDeps,
+  runDistill as distill,
+  type ManifestEntry,
+} from "../src/commands/distill.js";
+import { type RunnerFn, runDigestStage } from "../src/distill/pipeline.js";
 
 // --- helpers ---------------------------------------------------------------
+
+/** Consent tests never discover a developer's real agent binaries. */
+const forbiddenRunner: RunnerFn = async () => {
+  throw new Error("A model call was not expected in this consent test.");
+};
+function runDistill(args: DistillArgs, deps: DistillDeps = {}): Promise<number> {
+  return distill(args, { runner: forbiddenRunner, ...deps });
+}
 
 /** Captured text is ANSI-stripped: this file pins the disclosure copy, not the color. */
 function captureOutput(): { out: Writable; text: () => string } {
@@ -465,9 +481,9 @@ describe("runDistill", () => {
       confidence: "high",
       preferences: [],
     };
-    const runner = (async (opts: { prompt: string }) => {
-      if (opts.prompt.includes("grouping Claude Code sessions")) return cluster;
-      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      if (opts.schema === ClusterSchema) return cluster;
+      if (opts.schema === AuthorSchema) return authored;
       return digest;
     }) as RunnerFn;
     const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
@@ -486,18 +502,18 @@ describe("runDistill", () => {
     expect(oneshot).toContain("Do the whole thing well.");
   });
 
-  it("--yes cascades into consolidate + clipboard copy after the library", async () => {
+  it("--yes runs only the requested pipeline, with no consolidation or clipboard write", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5)]);
     fs.writeFileSync(path.join(home, "exports", "a"), "### 2026-01-01\n\nbuild the thing\n");
     const confirmSpy = async (): Promise<ConsentResult> => "proceed";
-    const runner = (async (opts: { prompt: string }) => {
-      if (opts.prompt.includes("grouping Claude Code sessions"))
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      if (opts.schema === ClusterSchema)
         return {
           tasks: [{ slug: "the-task", title: "t", rationale: "r", members: ["a"] }],
           misc: [],
         };
-      if (opts.prompt.includes("realistic ideal first prompt"))
+      if (opts.schema === AuthorSchema)
         return {
           slug: "the-task",
           title: "T",
@@ -505,8 +521,7 @@ describe("runDistill", () => {
           confidence: "high",
           preferences: [{ text: "be terse", evidence: "e" }],
         };
-      if (opts.prompt.includes("Merge semantic duplicates"))
-        return { preferences: [{ text: "be terse", merged_from: 1 }] };
+      if (opts.schema === ConsolidateSchema) throw new Error("Consolidation was not requested.");
       return { goal: "g", deliverable: "d", domain: "dom", keywords: ["k"], outcome: "completed" };
     }) as RunnerFn;
     let copiedText = "";
@@ -519,14 +534,11 @@ describe("runDistill", () => {
       { confirm: confirmSpy, output: cap.out, input: forbiddenInput(), runner, clipboard },
     );
     expect(code).toBe(0);
-    // The cascade consolidated the observed preference and copied the block.
-    expect(cap.text()).toContain("consolidated 1 → 1 preference(s).");
-    expect(cap.text()).toContain("copied (1 preference(s), via pbcopy)");
-    expect(copiedText).toContain("- be terse");
-    expect(
-      fs.readFileSync(path.join(home, "library", "preferences.consolidated.json"), "utf8"),
-    ).toContain("be terse");
-    expect(cap.text()).toContain("CLAUDE.md");
+    expect(cap.text()).not.toContain("consolidated");
+    expect(cap.text()).not.toContain("copied");
+    expect(copiedText).toBe("");
+    expect(fs.existsSync(path.join(home, "library", "preferences.consolidated.json"))).toBe(false);
+    expect(cap.text()).toContain("human-hindsight gui");
   });
 
   it("skips the cascade entirely in a pipe without --yes (no prompt surface)", async () => {
@@ -534,13 +546,13 @@ describe("runDistill", () => {
     const home = tmpHome([entry("a", "x", 5)]);
     fs.writeFileSync(path.join(home, "exports", "a"), "### 2026-01-01\n\nbuild the thing\n");
     const confirmSpy = async (): Promise<ConsentResult> => "proceed";
-    const runner = (async (opts: { prompt: string }) => {
-      if (opts.prompt.includes("grouping Claude Code sessions"))
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      if (opts.schema === ClusterSchema)
         return {
           tasks: [{ slug: "the-task", title: "t", rationale: "r", members: ["a"] }],
           misc: [],
         };
-      if (opts.prompt.includes("realistic ideal first prompt"))
+      if (opts.schema === AuthorSchema)
         return {
           slug: "the-task",
           title: "T",
@@ -548,16 +560,15 @@ describe("runDistill", () => {
           confidence: "high",
           preferences: [{ text: "be terse", evidence: "e" }],
         };
-      if (opts.prompt.includes("Merge semantic duplicates"))
+      if (opts.schema === ConsolidateSchema)
         throw new Error("cascade must not consolidate without a prompt surface");
       return { goal: "g", deliverable: "d", domain: "dom", keywords: ["k"], outcome: "completed" };
     }) as RunnerFn;
-    // No injected input and not a TTY: the library offer and the cascade both
-    // skip; output ends with the hint exactly as before the cascade existed.
+    // Optional follow-up commands have their own CLI handoff and consent gate.
     const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
     expect(code).toBe(0);
     expect(cap.text()).not.toContain("Consolidate your preferences");
-    expect(cap.text()).toContain("human-hindsight list");
+    expect(cap.text()).toContain("human-hindsight gui");
   });
 
   it("proceeds past a failed digest, authors the rest, and exits 1", async () => {
@@ -584,10 +595,10 @@ describe("runDistill", () => {
       confidence: "high",
       preferences: [],
     };
-    const runner = (async (opts: { prompt: string }) => {
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
       if (opts.prompt.includes("build b")) throw new Error("boom-b");
-      if (opts.prompt.includes("grouping Claude Code sessions")) return cluster;
-      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+      if (opts.schema === ClusterSchema) return cluster;
+      if (opts.schema === AuthorSchema) return authored;
       return digest;
     }) as RunnerFn;
     const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
@@ -619,12 +630,12 @@ describe("runDistill", () => {
       preferences: [],
     };
     let clusterCalls = 0;
-    const runner = (async (opts: { prompt: string }) => {
-      if (opts.prompt.includes("grouping Claude Code sessions")) {
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      if (opts.schema === ClusterSchema) {
         clusterCalls++;
         throw new Error("cluster must not be called under --no-group");
       }
-      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+      if (opts.schema === AuthorSchema) return authored;
       return digest;
     }) as RunnerFn;
     const code = await runDistill(
@@ -703,9 +714,9 @@ describe("runDistill", () => {
       confidence: "medium",
       preferences: [],
     };
-    const runner = (async (opts: { prompt: string }) => {
-      if (opts.prompt.includes("grouping Claude Code sessions")) return cluster;
-      if (opts.prompt.includes("realistic ideal first prompt")) return authored;
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      if (opts.schema === ClusterSchema) return cluster;
+      if (opts.schema === AuthorSchema) return authored;
       return digest;
     }) as RunnerFn;
     const code = await runDistill(
@@ -741,25 +752,71 @@ describe("runDistill", () => {
     expect(JSON.parse(fs.readFileSync(cpPath, "utf8")).generation).toBe("keep-me");
   });
 
-  it("surfaces a resume note when a digests checkpoint exists", async () => {
+  it("counts only verified reusable digests in the consent plan", async () => {
     const home = tmpHome([
       entry("a", "x", 5),
       entry("b", "x", 4),
       entry("c", "x", 3),
       entry("d", "x", 2),
     ]);
-    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
-    fs.writeFileSync(
-      path.join(home, "distill", "digests.json"),
-      JSON.stringify({ generation: 1, digests: { a: {}, b: {} } }),
-    );
+    for (const name of ["a", "b", "c", "d"]) {
+      fs.writeFileSync(path.join(home, "exports", name), `Content for ${name}.`);
+    }
+    await runDigestStage({
+      home,
+      entries: [entry("a", "x", 5), entry("b", "x", 4)],
+      output: captureOutput().out,
+      runner: (async () => ({
+        goal: "g",
+        deliverable: "d",
+        domain: "dom",
+        keywords: ["k"],
+        outcome: "completed",
+      })) as RunnerFn,
+    });
     let captured: DistillPlan | undefined;
     const confirmSpy = async (plan: DistillPlan): Promise<ConsentResult> => {
       captured = plan;
       return "dry-run";
     };
     await runDistill({ home }, { confirm: confirmSpy, output: captureOutput().out });
-    expect(captured?.resumeNote).toContain("2 of 4 digests already done");
+    expect(captured?.digests).toBe(2);
+    expect(captured?.resumeNote).toContain("2 of 4 digests have unchanged inputs");
+  });
+
+  it("does not promise reuse for changed exports or legacy unverified checkpoints", async () => {
+    const home = tmpHome([entry("a", "x", 5)]);
+    fs.writeFileSync(path.join(home, "exports", "a"), "The new source content.");
+    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
+    fs.writeFileSync(
+      path.join(home, "distill", "digests.json"),
+      JSON.stringify({
+        generation: "g1",
+        prompt_version: 1,
+        digests: {
+          a: {
+            goal: "old",
+            deliverable: "d",
+            domain: "dom",
+            keywords: ["k"],
+            outcome: "completed",
+          },
+        },
+      }),
+    );
+    let captured: DistillPlan | undefined;
+    await runDistill(
+      { home },
+      {
+        output: captureOutput().out,
+        confirm: async (plan) => {
+          captured = plan;
+          return "dry-run";
+        },
+      },
+    );
+    expect(captured?.digests).toBe(1);
+    expect(captured?.resumeNote).toBeUndefined();
   });
 
   it("resume note excludes checkpoint digests outside the eligible set", async () => {
@@ -790,8 +847,8 @@ describe("runDistill", () => {
   const EXPORT_FIXTURE = path.join(import.meta.dirname, "fixtures", "export-home");
 
   const stubRunner = (): RunnerFn =>
-    (async (opts: { prompt: string }) => {
-      if (opts.prompt.includes("grouping Claude Code sessions")) {
+    (async (opts: RunClaudeOptions<unknown>) => {
+      if (opts.schema === ClusterSchema) {
         // Echo the real export ids from the prompt so the clustering passes
         // validation (every id must land in a task; empty members are rejected).
         const members = [...opts.prompt.matchAll(/^- id: (.+)$/gm)].map((m) => m[1] as string);
@@ -800,7 +857,7 @@ describe("runDistill", () => {
           misc: [],
         };
       }
-      if (opts.prompt.includes("realistic ideal first prompt")) {
+      if (opts.schema === AuthorSchema) {
         return {
           slug: "one-shot-task",
           title: "One Shot",
@@ -869,22 +926,22 @@ describe("runDistill", () => {
     expect(cap.text()).toContain("export");
   });
 
-  it("offers to show the library after authoring (interactive), printing the table", async () => {
+  it("leaves browser follow-up to the CLI after authoring", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5)]);
     fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nbuild the thing\n");
-    // Two input lines: consent gate "y", then the show-library offer "y".
+    // The core consumes only the requested pipeline's consent answer.
     const code = await runDistill(
       { home },
-      { output: cap.out, input: inputWith("y\ny\n"), runner: stubRunner() },
+      { output: cap.out, input: inputWith("y\n"), runner: stubRunner() },
     );
     expect(code).toBe(0);
-    // The library table header proves the post-distill display fired.
-    expect(cap.text()).toContain("Confidence");
+    expect(cap.text()).not.toContain("Show your library now?");
+    expect(cap.text()).toContain("human-hindsight gui");
     expect(cap.text()).toContain("one-shot-task");
   });
 
-  it("--yes shows the library after authoring without prompting", async () => {
+  it("--yes finishes with a browser hint without opening another action", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5)]);
     fs.writeFileSync(path.join(home, "exports", "a"), "### t\n\nbuild the thing\n");
@@ -894,6 +951,7 @@ describe("runDistill", () => {
     );
     expect(code).toBe(0);
     expect(cap.text()).toContain("one-shot-task");
-    expect(cap.text()).toContain("Confidence");
+    expect(cap.text()).toContain("human-hindsight gui");
+    expect(cap.text()).not.toContain("Show your library now?");
   });
 });

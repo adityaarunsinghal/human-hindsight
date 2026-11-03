@@ -5,12 +5,19 @@ import { askYesNo } from "../claude/consent.js";
 import { DEFAULT_TIMEOUT_MS } from "../claude/runner.js";
 import { type Consolidated, ConsolidateSchema } from "../claude/schemas.js";
 import { resolveTimeoutMs } from "../core/budget.js";
-import { saveConsolidatedPreferences } from "../core/consolidated-preferences.js";
+import {
+  materializeConsolidation,
+  saveConsolidatedPreferences,
+  validateConsolidation,
+} from "../core/consolidated-preferences.js";
 import { readLibrary } from "../core/library.js";
+import { HISTORICAL_DATA_INSTRUCTION } from "../core/preference-evidence.js";
+import { reviewedPreferences } from "../core/preference-review.js";
 import {
   type AggregatedPreference,
-  aggregatePreferences,
   type PreferencesTarget,
+  preferenceId,
+  readObservedPreferences,
   renderPreferencesBlock,
 } from "../core/preferences.js";
 import type { RunnerFn } from "../distill/pipeline.js";
@@ -35,19 +42,37 @@ export interface PreferencesDeps {
   clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
 
-/** Build the one-call consolidation prompt (merge duplicates, tighten wording). */
+export const CONSOLIDATE_PROMPT_VERSION = 2;
+
+/** Build the consolidation prompt with a verifiable source mapping. */
 export function buildConsolidatePrompt(prefs: AggregatedPreference[]): string {
   return [
-    "Below are working preferences extracted from a developer's prompt history,",
-    "with how many tasks stated each. Merge semantic duplicates and tighten the",
-    "wording. Keep every distinct preference; never invent new ones. Keep each",
-    "item a single imperative line in the author's plain register.",
+    HISTORICAL_DATA_INSTRUCTION,
+    "Below are supplied working preferences and their source IDs.",
+    "Merge semantic duplicates only when meaning, scope, project, conditions, and",
+    "exceptions are equivalent. Keep every distinct preference; never invent new ones.",
+    'Do not strengthen "prefer" into "always", remove exceptions, or combine',
+    "contradictory instructions. Keep conflicting rules separate for human review.",
+    'Retain explicit condition clauses ("unless", "only when", "except", "if")',
+    "verbatim. Rules with different conditions must remain separate. Preserve",
+    '"prefer" and do not introduce stronger always/must/never requirements.',
+    "Keep each item a single imperative line in the author's plain register.",
     "",
-    'Respond with JSON: {"preferences": [{"text", "merged_from"}]} where',
-    '"merged_from" is how many input lines the item covers.',
+    'Respond with JSON: {"preferences": [{"text", "source_ids"}]} where',
+    '"source_ids" lists the exact IDs of the input rules represented by that item.',
+    "Every input ID must occur exactly once across the output; use no unknown IDs.",
+    "A nonempty input requires a nonempty result. Counts will be computed in code.",
     "",
     "=== PREFERENCES ===",
-    ...prefs.map((p) => `- ${p.text} (stated in ${p.count} task(s))`),
+    ...prefs.map((p) =>
+      JSON.stringify({
+        id: preferenceId(p),
+        text: p.text,
+        scope: p.scope ?? "global",
+        project: p.scope && p.scope !== "global" ? (p.project ?? "") : "",
+        count: p.count,
+      }),
+    ),
     "=== END PREFERENCES ===",
   ].join("\n");
 }
@@ -68,6 +93,8 @@ export async function runPreferences(
     timeout?: string;
     yes?: boolean;
     model?: string;
+    project?: string;
+    "include-unreviewed"?: boolean;
   },
   deps: PreferencesDeps = {},
 ): Promise<number> {
@@ -77,19 +104,34 @@ export async function runPreferences(
   const target = resolveTarget(args.target, parseSourceMode(args.source));
 
   const { home } = resolvePaths(args);
-  const entries = await withSpinner(out, "Reading library preferences", async () =>
-    readLibrary(home),
+  const observed = await withSpinner(out, "Reading preference evidence", async () =>
+    readObservedPreferences(home),
   );
-  if (entries.length === 0) {
+  const entries = readLibrary(home);
+  if (entries.length === 0 && observed.length === 0) {
     write("library is empty — nothing distilled yet.");
     write(hint("human-hindsight distill"));
     return 1;
   }
 
-  const prefs = aggregatePreferences(entries);
+  const prefs = args["include-unreviewed"]
+    ? observed.filter(
+        (p) =>
+          (p.scope ?? "global") === "global" ||
+          (args.project && p.scope === "project" && p.project === args.project),
+      )
+    : reviewedPreferences(home, observed, args.project);
   if (prefs.length === 0) {
-    write("no preferences were observed across the library.");
+    write(
+      observed.length
+        ? "No accepted preferences for this scope. Review suggestions in the GUI first."
+        : "no preferences were observed across the library.",
+    );
+    if (observed.length) write(hint("human-hindsight gui"));
     return 0;
+  }
+  if (args["include-unreviewed"]) {
+    write("Including unreviewed suggestions by explicit request; check their scope and evidence.");
   }
 
   const recurring = prefs.filter((p) => p.count > 1).length;
@@ -132,6 +174,7 @@ export async function runPreferences(
         preferSource: sourceMode === "auto" ? undefined : sourceMode,
         scratchBase: path.join(home, "runner-scratch"),
       });
+      await resolved.preflight?.();
     } catch (err) {
       write((err as Error).message);
       return 1;
@@ -139,7 +182,9 @@ export async function runPreferences(
   }
   const cli = resolved?.name === "kiro" ? "kiro-cli" : (resolved?.name ?? "claude");
   const cost = resolved?.name === "kiro" ? "your Kiro credits" : "your subscription/credits";
-  write(`consolidate will invoke your local \`${cli}\` CLI once (${cost}).`);
+  write(
+    `consolidate will invoke your local \`${cli}\` CLI (${cost}; one call plus bounded validation retries).`,
+  );
   const confirmed =
     Boolean(args.yes) || (await askYesNo("Proceed?", { input: deps.input, output: deps.output }));
   if (!confirmed) {
@@ -157,6 +202,8 @@ export async function runPreferences(
     model: args.model,
     timeoutMs: resolveTimeoutMs(args.timeout),
     output: out,
+    project: args.project,
+    includeUnreviewed: args["include-unreviewed"],
   });
   // Offer to copy the merged block (only on success; the failure path already
   // fell back to the deterministic block and returns 1 unchanged).
@@ -211,6 +258,8 @@ export async function runConsolidation(opts: {
   /** Per-call timeout (ms); default scales with the preference count. */
   timeoutMs?: number;
   output: Writable;
+  project?: string;
+  includeUnreviewed?: boolean;
 }): Promise<ConsolidationOutcome> {
   const { prefs, taskCount, target, runner, model, output } = opts;
   const write = (s = "") => output.write(`${s}\n`);
@@ -225,14 +274,29 @@ export async function runConsolidation(opts: {
 
   let consolidated: Consolidated;
   try {
-    consolidated = await withSpinner(output, `consolidating ${prefs.length} preference(s)`, () =>
-      runner({
-        prompt: buildConsolidatePrompt(prefs),
-        schema: ConsolidateSchema,
-        model,
-        timeoutMs,
-      }),
-    );
+    const basePrompt = buildConsolidatePrompt(prefs);
+    let prompt = basePrompt;
+    let result: Consolidated | undefined;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await withSpinner(
+        output,
+        `consolidating ${prefs.length} preference(s)`,
+        () => runner({ prompt, schema: ConsolidateSchema, model, timeoutMs }),
+      );
+      const parsed = ConsolidateSchema.safeParse(response);
+      const problems = parsed.success
+        ? validateConsolidation(prefs, parsed.data)
+        : [parsed.error.message];
+      if (!problems.length && parsed.success) {
+        result = parsed.data;
+        break;
+      }
+      if (attempt === 1)
+        throw new Error(`Consolidation failed source coverage validation: ${problems.join("; ")}`);
+      prompt = `${basePrompt}\n\nThe previous result failed validation:\n${problems.map((p) => `- ${p}`).join("\n")}\nReturn a corrected complete mapping.`;
+    }
+    if (!result) throw new Error("Consolidation returned no validated result");
+    consolidated = result;
   } catch (err) {
     // Real-world case: the account's default model can be rejected by policy
     // (e.g. Bedrock data-retention 400s) — fail with the reason, not a stack,
@@ -244,12 +308,7 @@ export async function runConsolidation(opts: {
     return { merged: null, block: null, saved: false };
   }
 
-  const merged: AggregatedPreference[] = consolidated.preferences.map((p) => ({
-    text: p.text,
-    count: p.merged_from,
-    occurrences: [],
-    lastAuthoredAt: "",
-  }));
+  const merged = materializeConsolidation(prefs, consolidated);
   const now = new Date();
   const block = renderPreferencesBlock(merged, taskCount, target, now);
   write();
@@ -264,6 +323,8 @@ export async function runConsolidation(opts: {
       target,
       markdown: block,
       now,
+      project: opts.project,
+      includeUnreviewed: opts.includeUnreviewed,
     });
     write(dim(`saved to ${file} — available in the GUI after Refresh.`));
     return { merged, block, saved: true };
@@ -378,6 +439,16 @@ export default defineCommand({
   },
   args: {
     ...sharedArgs,
+    project: {
+      type: "string",
+      description:
+        "Include accepted instructions for this exact project, alongside global instructions",
+    },
+    "include-unreviewed": {
+      type: "boolean",
+      description:
+        "Explicitly include unreviewed suggestions instead of only accepted instructions",
+    },
     target: {
       type: "string",
       description:

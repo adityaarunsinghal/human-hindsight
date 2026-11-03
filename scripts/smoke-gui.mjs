@@ -385,8 +385,9 @@ try {
   assert.equal(await evaluate('document.getElementById("sort").value'), "frequency");
   assert.equal(
     await evaluate('document.getElementById("copy").textContent'),
-    "Copy all preferences",
+    "Review candidates first",
   );
+  assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
   await evaluate('document.querySelector(".entry").click()');
   const preferenceBookmark = await evaluate("location.hash");
   assert.match(preferenceBookmark, /^#preferences\/[a-f0-9]{64}$/);
@@ -394,6 +395,12 @@ try {
   assert.equal(await evaluate('document.querySelectorAll("#body code").length'), 1);
   assert.equal(await evaluate('document.querySelectorAll("#related-list > li > a").length'), 2);
   assert.equal(await evaluate('document.querySelectorAll(".evidence strong").length'), 1);
+  assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
+  await evaluate('document.getElementById("accept-preference").click()');
+  await until(
+    () => evaluate('document.getElementById("accept-preference").textContent === "Accepted"'),
+    "explicit preference acceptance",
+  );
   await evaluate('window.__copied=undefined; document.getElementById("copy").click()');
   await until(() => evaluate("window.__copied !== undefined"), "preference copy");
   assert.equal(await evaluate("window.__copied"), `- ${sharedPreference}`);
@@ -428,6 +435,18 @@ try {
     'document.getElementById("search").value="direct instructions"; document.getElementById("search").dispatchEvent(new Event("input"));',
   );
   assert.equal(await evaluate('document.querySelectorAll(".entry").length'), 1);
+  await evaluate('document.getElementById("edit-preference").click()');
+  await evaluate(`(() => {
+    document.getElementById("preference-text").value="Write concise release documentation.";
+    document.getElementById("preference-scope").value="project";
+    document.getElementById("preference-scope").dispatchEvent(new Event("change"));
+    document.getElementById("preference-project").value=${JSON.stringify(longDomain)};
+    document.getElementById("save-preference").click();
+  })()`);
+  await until(
+    () => evaluate('document.getElementById("review-summary").textContent.includes("accepted")'),
+    "edited project preference",
+  );
   await evaluate(
     'document.getElementById("prompts-tab").click(); document.getElementById("preferences-tab").click()',
   );
@@ -438,11 +457,15 @@ try {
   assert.equal(await evaluate('document.getElementById("list-empty").hidden'), false);
   assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
   await evaluate(
-    'document.getElementById("all-preferences").click(); window.__copied=undefined; document.getElementById("copy").click()',
+    'document.getElementById("accepted-preferences").click(); window.__copied=undefined; document.getElementById("copy").click()',
   );
-  await until(() => evaluate("window.__copied !== undefined"), "all preferences copy");
-  const snapshot = await (await fetch(`${url}/api/library`)).json();
-  assert.equal(await evaluate("window.__copied"), snapshot.preferencesMarkdown);
+  await until(() => evaluate("window.__copied !== undefined"), "accepted instructions copy");
+  let snapshot = await (await fetch(`${url}/api/library`)).json();
+  assert.equal(await evaluate("window.__copied"), snapshot.acceptedMarkdown);
+  assert.ok(!snapshot.acceptedMarkdown.includes("Write concise release documentation."));
+  assert.ok(
+    snapshot.projectInstructions[0].markdown.includes("Write concise release documentation."),
+  );
   assert.equal(
     await evaluate('document.getElementById("body").textContent.includes("generated")'),
     false,
@@ -462,6 +485,22 @@ try {
     ),
     true,
   );
+  await evaluate('document.getElementById("dismiss-preference").click()');
+  await until(
+    () => evaluate('document.getElementById("review-summary").textContent.includes("dismissed")'),
+    "dismiss preference",
+  );
+  assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
+  await evaluate('document.getElementById("reset-preference").click()');
+  await until(
+    () => evaluate('document.getElementById("review-summary").textContent.includes("pending")'),
+    "return preference to review",
+  );
+  await evaluate('document.getElementById("accept-preference").click()');
+  await until(
+    () => evaluate('document.getElementById("accept-preference").textContent === "Accepted"'),
+    "accept literal markup as inert content",
+  );
   await evaluate(
     'navigator.clipboard.writeText=async()=>{throw new Error("denied");}; document.getElementById("copy").click()',
   );
@@ -472,7 +511,7 @@ try {
   );
   assert.equal(await evaluate('document.getElementById("source").value'), `- ${unsafePreference}`);
   await evaluate(
-    'document.getElementById("all-preferences").click(); document.getElementById("copy").click()',
+    'document.getElementById("accepted-preferences").click(); document.getElementById("copy").click()',
   );
   await until(
     () =>
@@ -481,9 +520,10 @@ try {
       ),
     "all preferences fallback",
   );
+  snapshot = await (await fetch(`${url}/api/library`)).json();
   assert.equal(
     await evaluate('document.getElementById("source").value'),
-    snapshot.preferencesMarkdown,
+    snapshot.acceptedMarkdown,
   );
   await evaluate(`location.hash=${JSON.stringify(preferenceBookmark)}`);
   await until(
@@ -509,26 +549,43 @@ try {
   );
   await screenshot("desktop-five-level-domains");
   await evaluate('document.getElementById("all-preferences").click()');
-  const sourcePreferences = snapshot.preferences.map(({ text, count }) => ({ text, count }));
+  const sourcePreferences = snapshot.preferences
+    .filter(
+      (preference) =>
+        preference.review.status === "accepted" && preference.review.scope === "global",
+    )
+    .map((preference) => ({
+      id: preference.id,
+      text: preference.review.text,
+      count: preference.count,
+      scope: "global",
+      project: "",
+    }));
   const sourceHash = createHash("sha256")
     .update(
       JSON.stringify(
-        [...sourcePreferences].sort((a, b) => a.text.localeCompare(b.text) || a.count - b.count),
+        [...sourcePreferences].sort(
+          (a, b) => a.id.localeCompare(b.id) || a.count - b.count || a.text.localeCompare(b.text),
+        ),
       ),
     )
     .digest("hex");
   const savedMarkdown =
-    "## Working preferences\n\n- Preserve existing behavior with focused tests.";
+    "## Working preferences\n\n" +
+    sourcePreferences.map((preference) => `- ${preference.text}`).join("\n");
   fs.writeFileSync(
     path.join(home, "library", "preferences.consolidated.json"),
     JSON.stringify({
-      version: 1,
+      version: 2,
       generated_at: "2026-11-01T12:00:00.000Z",
       source_hash: sourceHash,
       source_preferences: sourcePreferences,
       task_count: 4,
       target: "agents",
-      preferences: [{ text: "Preserve existing behavior with focused tests.", merged_from: 5 }],
+      preferences: sourcePreferences.map((preference) => ({
+        text: preference.text,
+        source_ids: [preference.id],
+      })),
       markdown: savedMarkdown,
     }),
   );
@@ -542,13 +599,13 @@ try {
   );
   await until(() => evaluate("window.__copied !== undefined"), "saved consolidation copy");
   assert.equal(await evaluate("window.__copied"), savedMarkdown);
-  assert.equal(await evaluate('document.querySelectorAll("#related-list a").length'), 5);
-  const metadataFile = path.join(home, "library", "users-pagination", "sources.json");
+  assert.equal(
+    await evaluate('document.querySelectorAll("#related-list a").length'),
+    sourcePreferences.length,
+  );
+  const metadataFile = path.join(home, "library", "settings-page", "sources.json");
   const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf8"));
-  metadata.preferences.push({
-    text: "Keep defaults sensible.",
-    evidence: "Use a reasonable page size.",
-  });
+  metadata.preferences[0].evidence += " Updated source evidence.";
   fs.writeFileSync(metadataFile, JSON.stringify(metadata));
   await evaluate('document.getElementById("refresh").click()');
   await until(
@@ -575,11 +632,28 @@ try {
       for (const [branch, parts] of [
         ["long-label", ["Software engineering", "Infrastructure", longDomain]],
         ["five-levels", ["Software engineering", "Backend", "APIs", "Pagination", "Cursor"]],
+        ...(tab === "preferences" ? [["accepted-instructions", []]] : []),
       ]) {
         await selectDomain(parts);
         await evaluate(
           `document.getElementById("sort").value="${tab === "preferences" ? "frequency" : "newest"}"; document.getElementById("sort").dispatchEvent(new Event("change")); window.scrollTo(0,0);`,
         );
+        if (tab === "preferences" && branch === "long-label") {
+          await evaluate(
+            'document.getElementById("edit-preference").click(); document.getElementById("preference-scope").value="task"; document.getElementById("preference-scope").dispatchEvent(new Event("change"));',
+          );
+        }
+        if (branch === "accepted-instructions") {
+          await evaluate(
+            `document.getElementById("accepted-preferences").click(); document.getElementById("instruction-project").value=${JSON.stringify(longDomain)}; document.getElementById("instruction-project").dispatchEvent(new Event("change"));`,
+          );
+          assert.equal(
+            await evaluate(
+              'document.getElementById("source").value.includes("Write concise release documentation.")',
+            ),
+            true,
+          );
+        }
         await settle();
         const measured = await evaluate(
           '[...document.querySelectorAll("select")].filter(el => !el.closest("[hidden]")).map(el => { const s=getComputedStyle(el); const r=el.getBoundingClientRect(); return {id:el.id,value:el.value,appearance:s.appearance,paddingRight:s.paddingRight,backgroundSize:s.backgroundSize,backgroundPosition:s.backgroundPosition,backgroundImage:s.backgroundImage,textOverflow:s.textOverflow,x:r.x,y:r.y,width:r.width,height:r.height}; })',
@@ -614,7 +688,12 @@ try {
         await screenshot(`narrow-${tab}-${theme}-${branch}`);
         for (const item of measured) {
           await call("Page.bringToFront");
-          const point = { x: item.x + item.width - 18, y: item.y + item.height / 2 };
+          const point = await evaluate(`(() => {
+            const element = document.getElementById(${JSON.stringify(item.id)});
+            element.scrollIntoView({block:"center"});
+            const rect = element.getBoundingClientRect();
+            return {x:rect.x + rect.width - 18, y:rect.y + rect.height / 2};
+          })()`);
           await call("Input.dispatchMouseEvent", {
             type: "mousePressed",
             button: "left",

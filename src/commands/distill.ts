@@ -13,9 +13,9 @@ import {
 import type { Digest } from "../claude/schemas.js";
 import { resolveInputBudget, resolveTimeoutMs, resolveTruncatePolicy } from "../core/budget.js";
 import { readLibrary } from "../core/library.js";
-import { aggregatePreferences } from "../core/preferences.js";
 import {
   clearCheckpoints,
+  countReusableDigests,
   loadDigests,
   type RunnerFn,
   runAuthorStage,
@@ -24,16 +24,14 @@ import {
 } from "../distill/pipeline.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
 import type { AgentRunner } from "../runners/types.js";
-import { parseSourceMode, type SourceMode } from "../sources/registry.js";
+import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
-import { renderLibraryTable } from "../ui/library-table.js";
 import { terminalPrivacyReminder } from "../ui/privacy.js";
 import { withSpinner } from "../ui/progress.js";
 import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
 import { flowArgs, nextCommandText, offerNext } from "./next.js";
-import { offerCopyBlock, resolveTarget, runConsolidation } from "./preferences.js";
 
 // One entry of `exports/manifest.json` — defined next to the code that writes
 // it; re-exported here because the distill plan is computed from it.
@@ -122,30 +120,13 @@ export function computePlan(
 }
 
 /**
- * Resume note for the consent block: when a digests checkpoint already holds
- * some (but not all) sessions, state how much is left. Best-effort — a missing
- * or malformed checkpoint simply yields no note.
+ * A digest only counts as reusable after its complete input fingerprint has
+ * been checked. Names alone cannot establish that completed work is current.
  */
-function computeResumeNote(home: string, plan: ComputedPlan, fresh: boolean): string | undefined {
-  if (fresh) return undefined;
-  try {
-    const raw = fs.readFileSync(path.join(home, "distill", "digests.json"), "utf8");
-    const data = JSON.parse(raw) as { digests?: Record<string, unknown> };
-    // Count only checkpoint entries that are ALSO in the currently eligible set.
-    // Without this intersection, digesting project A then running `--project B`
-    // would report "2 of 4 done" while all 4 of B actually run — a lie in a
-    // block that is otherwise a byte-pinned contract.
-    const doneKeys = data.digests ? Object.keys(data.digests) : [];
-    const eligible = new Set(plan.eligible.map((e) => e.export));
-    const done = doneKeys.filter((k) => eligible.has(k)).length;
-    if (done > 0 && done < plan.digests) {
-      const remaining = plan.digests - done;
-      return `${done} of ${plan.digests} digests already done; will run ${remaining} + ${plan.cluster} + ~${plan.authorEstimate}`;
-    }
-  } catch {
-    // no checkpoint yet, or unreadable — no resume note
-  }
-  return undefined;
+function computeResumeNote(plan: ComputedPlan, reusable: number): string | undefined {
+  return reusable > 0
+    ? `${reusable} of ${plan.digests} digests have unchanged inputs and can be reused; ${plan.digests - reusable} need processing. Later stages reuse matching checkpoints.`
+    : undefined;
 }
 
 /**
@@ -173,14 +154,12 @@ function computeOversized(
 
 /** Injectable dependencies (testing). */
 export interface DistillDeps {
-  /** CLI handoffs replace the legacy post-run display/consolidation offers. */
-  managedFollowUp?: boolean;
   confirm?: (plan: DistillPlan, opts: ConsentOptions) => Promise<ConsentResult>;
   /** Stage runner passed to the pipeline (default: real runClaude). */
   runner?: RunnerFn;
   input?: Readable;
   output?: Writable;
-  /** Clipboard sink for the preferences cascade (injectable for tests). */
+  /** Legacy test seam; distill no longer performs clipboard writes. */
   clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
 
@@ -317,6 +296,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           scratchBase: path.join(home, "runner-scratch"),
         }),
       );
+      await resolvedRunner.preflight?.();
     } catch (err) {
       write((err as Error).message);
       return 1;
@@ -376,12 +356,22 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     }
   }
 
+  const reusableDigests = args.fresh
+    ? 0
+    : countReusableDigests({
+        home,
+        entries: plan.eligible,
+        model: args.model,
+        runnerName,
+        budget,
+        truncate,
+      });
   const distillPlan: DistillPlan = {
-    digests: plan.digests,
+    digests: plan.digests - reusableDigests,
     cluster: plan.cluster,
     authorEstimate: plan.authorEstimate,
     runnerName,
-    resumeNote: computeResumeNote(home, plan, Boolean(args.fresh)),
+    resumeNote: computeResumeNote(plan, reusableDigests),
     budget,
     truncate,
     oversized,
@@ -441,6 +431,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     entries: plan.eligible,
     model: args.model,
     runner,
+    runnerName,
     output: deps.output,
     budget,
     truncate,
@@ -518,6 +509,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       noGroup,
       model: args.model,
       runner,
+      runnerName,
       output: deps.output,
       budget,
       timeoutMs,
@@ -538,6 +530,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       toolVersion: pkg.version,
       model: args.model,
       runner,
+      runnerName,
       output: deps.output,
       budget,
       truncate,
@@ -574,123 +567,16 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     if (costLine) {
       write(dim(costLine));
     }
-
-    // Offer to show the freshly-built library — the payoff of the one-shot flow
-    // is watching it appear. Pure local display (no cost), so the default is
-    // yes; --yes shows it without prompting; a pipe/CI without --yes just skips.
-    if (authoredTotal > 0 && !deps.managedFollowUp) {
-      const show =
-        Boolean(args.yes) ||
-        (canPrompt &&
-          (await askYesNo("Show your library now?", {
-            input: deps.input,
-            output: deps.output,
-            defaultYes: true,
-          })));
-      if (show) {
-        const libraryEntries = readLibrary(home);
-        if (libraryEntries.length > 0) {
-          write();
-          write(renderLibraryTable(libraryEntries));
-          write();
-          write(
-            green(
-              `${libraryEntries.length} librar${libraryEntries.length === 1 ? "y entry" : "y entries"}`,
-            ),
-          );
-          write(hint("human-hindsight show <slug>"));
-          write(hint("human-hindsight copy <slug>"));
-          await offerPreferencesCascade({
-            home,
-            runner,
-            runnerName,
-            yes: Boolean(args.yes),
-            canPrompt,
-            sourceMode,
-            model: args.model,
-            timeoutMs,
-            deps,
-            output: out,
-          });
-          return finishRun(hadFailure ? 1 : 0);
-        }
-      }
-    }
   } catch (err) {
     write(`  ${fail((err as Error).message)}`);
     write("  digest progress is checkpointed; re-run to retry clustering.");
     return finishRun(1);
   }
 
-  write(hint(nextCommandText(deps.managedFollowUp ? "gui" : "list", args)));
+  write(hint(nextCommandText("gui", args)));
   // Exit non-zero if anything failed (digest or author), but only AFTER the
   // reachable work completed and checkpointed.
   return finishRun(hadFailure ? 1 : 0);
-}
-
-/**
- * The press-enter cascade at the end of a successful distill: offer to
- * consolidate the freshly-authored preferences (one runner call, cost named in
- * the prompt) and copy the result to the clipboard. Enter accepts each step.
- * Same offer policy as the library display: --yes accepts everything without
- * reading stdin; a pipe/CI without --yes skips silently. The runner is the one
- * distill already resolved, so no second binary lookup or consent surface; the
- * distill exit code is never affected by this cascade (best-effort tail).
- */
-async function offerPreferencesCascade(opts: {
-  home: string;
-  runner: RunnerFn;
-  runnerName: SourceName | undefined;
-  yes: boolean;
-  canPrompt: boolean;
-  sourceMode: SourceMode;
-  model?: string;
-  /** Explicit --timeout (ms); absent means the consolidation call scales its own. */
-  timeoutMs?: number;
-  deps: DistillDeps;
-  output: Writable;
-}): Promise<void> {
-  const { home, runner, runnerName, yes, canPrompt, sourceMode, model, timeoutMs, deps, output } =
-    opts;
-  const write = (s = "") => output.write(`${s}\n`);
-
-  const entries = readLibrary(home);
-  const prefs = aggregatePreferences(entries);
-  if (prefs.length === 0) return; // nothing observed; keep the ending unchanged
-
-  const cli = runnerName === "kiro" ? "kiro-cli" : (runnerName ?? "claude");
-  write();
-  const proceed =
-    yes ||
-    (canPrompt &&
-      (await askYesNo(`Consolidate your preferences now (1 ${cli} call)?`, {
-        input: deps.input,
-        output: deps.output,
-        defaultYes: true,
-      })));
-  if (!proceed) return;
-
-  const target = resolveTarget(undefined, sourceMode);
-  const { merged, block } = await runConsolidation({
-    home,
-    prefs,
-    taskCount: entries.length,
-    target,
-    runner,
-    model,
-    timeoutMs,
-    output,
-  });
-  if (merged === null || block === null) return; // failure already rendered the fallback
-
-  await offerCopyBlock({
-    block,
-    count: merged.length,
-    target,
-    yes,
-    deps: { input: deps.input, output: deps.output, clipboard: deps.clipboard },
-    output,
-  });
 }
 
 export default defineCommand({
@@ -749,11 +635,12 @@ export default defineCommand({
     },
   },
   async run({ args }) {
-    const managedFollowUp = !args.yes || args["follow-up"] === false;
-    const code = await runDistill(args as unknown as DistillArgs, { managedFollowUp });
+    // --yes answers the requested pipeline's consent gate. Optional
+    // consolidation and clipboard work remain separately requested actions.
+    const code = await runDistill(args as unknown as DistillArgs);
     if (code !== 0) process.exitCode = code;
     if (code === 0 && readLibrary(resolvePaths(args).home).length > 0) {
-      await offerNext("gui", args, { hintPrinted: managedFollowUp });
+      await offerNext("gui", args, { hintPrinted: true });
     }
   },
 });

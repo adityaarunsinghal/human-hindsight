@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { PreferenceCitationSchema, PreferenceScopeSchema } from "../claude/schemas.js";
 
 /**
  * core/artifacts.ts — read-side validation for the tool's OWN on-disk
@@ -14,7 +15,14 @@ import { z } from "zod";
  * reports the entry — only when the value isn't a sources-shaped object at all.
  */
 
-const PreferenceSchema = z.object({ text: z.string(), evidence: z.string() });
+const PreferenceSchema = z.object({
+  text: z.string(),
+  evidence: z.string(),
+  scope: PreferenceScopeSchema.optional(),
+  basis: z.enum(["explicit", "inferred"]).optional(),
+  citations: z.array(PreferenceCitationSchema).optional(),
+  project: z.string().optional(),
+});
 
 /** One truncation event recorded in provenance when `--truncate=extreme` cuts input. */
 export const TruncationSchema = z.object({

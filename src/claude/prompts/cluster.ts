@@ -1,3 +1,4 @@
+import { HISTORICAL_DATA_INSTRUCTION } from "../../core/preference-evidence.js";
 import type { SourceName } from "../../sources/types.js";
 import type { Digest } from "../schemas.js";
 import { sourceLabel } from "./digest.js";
@@ -20,16 +21,16 @@ import { sourceLabel } from "./digest.js";
  * `CLUSTER_PROMPT_VERSION` is recorded in provenance downstream; bump it on
  * any meaningful change to the prompt text.
  */
-export const CLUSTER_PROMPT_VERSION = 5;
+export const CLUSTER_PROMPT_VERSION = 6;
 
 /** Render one digest as a compact labeled block. */
 function renderDigest(exportName: string, digest: Digest): string {
   return [
     `- id: ${exportName}`,
-    `  goal: ${digest.goal}`,
-    `  deliverable: ${digest.deliverable}`,
-    `  domain: ${digest.domain}`,
-    `  keywords: ${digest.keywords.join(", ")}`,
+    `  goal: ${JSON.stringify(digest.goal)}`,
+    `  deliverable: ${JSON.stringify(digest.deliverable)}`,
+    `  domain: ${JSON.stringify(digest.domain)}`,
+    `  keywords: ${JSON.stringify(digest.keywords)}`,
     `  outcome: ${digest.outcome}`,
   ].join("\n");
 }
@@ -58,9 +59,12 @@ export function buildClusterPrompt(
     `You are grouping ${sourceNoun} sessions into semantic tasks for a personal`,
     "prompt library. Below are structured digests of every session, each with a",
     "unique id (its export file name).",
+    HISTORICAL_DATA_INSTRUCTION,
     "",
     "Group the sessions into tasks:",
     "- Sessions pursuing the SAME underlying goal belong in ONE task (many-to-one).",
+    "  Their concrete objectives and constraints must be compatible. Shared technology,",
+    "  vocabulary, or domain alone is insufficient; preserve materially different goals.",
     "  Never force one task per session; merging related work is the point.",
     "- A session may appear in two tasks ONLY when it genuinely served two goals;",
     "  explain any dual membership in the rationale.",
@@ -98,8 +102,8 @@ export function buildMergePrompt(
   const blocks = tasks.map((t) =>
     [
       `- slug: ${t.slug}`,
-      `  title: ${t.title}`,
-      `  rationale: ${t.rationale}`,
+      `  title: ${JSON.stringify(t.title)}`,
+      `  rationale: ${JSON.stringify(t.rationale)}`,
       `  sessions: ${t.members.length}`,
     ].join("\n"),
   );
@@ -107,6 +111,7 @@ export function buildMergePrompt(
     "You are unifying tasks that were produced by clustering a large corpus of",
     "coding-agent sessions in independent windows. Tasks from different windows",
     "may describe the SAME underlying goal. Below is every task's identity.",
+    HISTORICAL_DATA_INSTRUCTION,
     "",
     "Identify groups of two or more tasks that pursue the same underlying goal:",
     '- For each group output one entry in "merges" with:',

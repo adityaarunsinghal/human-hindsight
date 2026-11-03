@@ -4,6 +4,55 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.2] - 2026-11-03
+
+### Fixed
+
+- Short replies to proposed plans preserve rejection, conditional acceptance,
+  and uncertainty instead of being described automatically as approval.
+- Digest, grouping, and author checkpoints now fingerprint source content,
+  outcome/context evidence, prompt/schema versions, runner/model selection, and
+  grouping mode. Changed inputs refresh affected stages; missing prompt files
+  are repaired. Manual edits, ratings, and annotations remain protected.
+- Failed refreshes invalidate old preference evidence rather than allowing it
+  to reappear through an older library entry.
+- Consolidation requires complete, unique source-ID coverage. Empty output,
+  unknown or omitted sources, incompatible scopes, explicit polarity conflicts,
+  and dropped conditions are rejected with a bounded correction attempt.
+  Invalid results preserve the last saved consolidation.
+- `distill --yes` no longer adds optional consolidation or clipboard work.
+  Consent planning counts digest reuse only when full lineage matches.
+
+### Added
+
+- Preference candidates are extracted during digesting, including failed,
+  unfinished, and ungrouped sessions. Candidates carry global/project/task
+  scope, explicit/inferred basis, and source-validated human quotations.
+- Browser review with Accept, Edit wording or scope, Dismiss, and Review again.
+  Accepted instructions can be copied globally or for a selected project.
+  Reviews persist locally and changed evidence requires review again.
+- `preferences` now exports accepted global rules by default. `--project`
+  includes an exact project's accepted rules; `--include-unreviewed` explicitly
+  requests draft observations. Legacy libraries remain readable as candidates.
+- Version-2 consolidation artifacts retain per-rule source mappings and
+  evidence. Older saved results remain readable and are marked for review.
+- Claude preflight requires safe-mode isolation controls. Calls use private
+  directories, an explicit system instruction, enforced tool/MCP denial,
+  disabled hooks and skills, and no session persistence. Unsupported CLIs fail
+  before a model call; organization-managed policy remains authoritative.
+- Eleven synthetic behavioral evaluation cases with positive examples and
+  deliberate regressions, an opt-in live evaluator, and offline scoring.
+
+### Changed
+
+- Digest, grouping, and author prompts are version 6. Historical content is
+  explicitly treated as data. Authoring no longer assumes success, invents
+  global preferences from one-time decisions, or pads simple tasks to a fixed
+  word target.
+- The GUI adds one narrow preference-review write endpoint protected by
+  origin, session token, candidate identity/revision, and request size checks.
+  It cannot execute agents or write arbitrary files.
+
 ## [1.8.1] - 2026-11-03
 
 ### Added

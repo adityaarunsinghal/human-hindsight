@@ -121,7 +121,8 @@ describe("author prompt contract", () => {
 
   it("pins the effort budget and structure cap", () => {
     expect(PROMPT).toContain("THE EFFORT BUDGET");
-    expect(PROMPT).toContain("100-300");
+    expect(PROMPT).toContain("shortest prompt");
+    expect(PROMPT).toContain("short task may need only a few sentences");
     expect(PROMPT).toContain("prose-first, minimal structure");
     expect(PROMPT).toContain("not a spec with nested");
   });
@@ -141,7 +142,7 @@ describe("author prompt contract", () => {
     expect(PROMPT).toContain("CONFIDENCE");
     expect(PROMPT).toContain("rather than overclaim");
     expect(PROMPT).toContain("PREFERENCES");
-    expect(PROMPT).toContain("one-line");
+    expect(PROMPT).toContain("independently of task success");
     expect(PROMPT).toContain("evidence");
   });
 
@@ -149,9 +150,43 @@ describe("author prompt contract", () => {
     expect(PROMPT).toContain("slug: auth-feature-work");
     expect(PROMPT).toContain("a.md: completed");
     expect(PROMPT).toContain("build auth");
-    expect(PROMPT).toContain("this approved a proposed plan");
+    expect(PROMPT).toContain("the plan pending when the human replied was");
     expect(PROMPT).toContain("Use JWT");
     expect(PROMPT).toContain("MACHINE-AUTHORED");
+  });
+
+  it("preserves an explicit rejection without asserting approval", () => {
+    const prompt = buildAuthorPrompt({
+      task: task("release-work", ["a.md"]),
+      members: [
+        {
+          exportName: "a.md",
+          content: "No. Do not deploy this.",
+          anaphora: [
+            {
+              index: 1,
+              timestamp: "2026-11-01",
+              human_text: "No. Do not deploy this.",
+              antecedent: "Can I deploy now?",
+              decision_kind: "plan",
+              decision_text: "Deploy to production.",
+            },
+          ],
+        },
+      ],
+    });
+    expect(prompt).toContain('the human said: "No. Do not deploy this."');
+    expect(prompt).toContain("the plan pending when the human replied was");
+    expect(prompt).not.toContain("this approved");
+    expect(prompt).toContain("accepts, rejects, changes, or defers");
+  });
+
+  it("does not turn discoveries into pre-existing standing rules", () => {
+    expect(PROMPT).not.toContain("preferences all along");
+    expect(PROMPT).toContain("pre-existing preference");
+    expect(PROMPT).toContain("If a decision depended on a discovery");
+    expect(PROMPT).toContain("task-specific conditions and exceptions");
+    expect(PROMPT).not.toContain("human already\ncompleted");
   });
 
   it("has a version constant and inlines member content verbatim (budget is the pipeline's job)", () => {
@@ -238,7 +273,9 @@ describe("runAuthorStage", () => {
       tool_version: "0.1.0",
       generation: "g1",
     });
-    expect(sources.preferences).toEqual(AUTHORED.preferences);
+    // Author text is not a new source of standing rules; candidates come from
+    // the digest's verified human-message citations.
+    expect(sources.preferences).toEqual([]);
     expect(Date.parse(sources.authored_at)).not.toBeNaN();
   });
 
@@ -340,15 +377,10 @@ describe("runAuthorStage", () => {
     expect(fs.existsSync(path.join(home, "library", "doomed-task-here"))).toBe(false);
   });
 
-  it("resumes: same-generation sources.json is not re-authored; stale generation is", async () => {
+  it("resumes only when inputs and output are current; stale generation re-authors", async () => {
     const home = tmpHome();
     writeExport(home, "a.md");
     const dir = path.join(home, "library", "auth-feature-work");
-    fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(
-      path.join(dir, "sources.json"),
-      JSON.stringify({ slug: "auth-feature-work", generation: "g1", members: ["a.md"] }),
-    );
 
     let calls = 0;
     const runner: RunnerFn = (async () => {
@@ -356,14 +388,16 @@ describe("runAuthorStage", () => {
       return AUTHORED;
     }) as RunnerFn;
 
-    // Same generation → resumed, no call.
-    const r1 = await runAuthorStage({
+    const opts = {
       ...baseOpts(home),
       tasks: [task("auth-feature-work", ["a.md"])],
       digests: { "a.md": digest("completed") },
       runner,
-    });
-    expect(calls).toBe(0);
+    };
+    await runAuthorStage(opts);
+    // Same generation and identical evidence → resumed, no additional call.
+    const r1 = await runAuthorStage(opts);
+    expect(calls).toBe(1);
     expect(r1.resumed).toEqual(["auth-feature-work"]);
 
     // Stale generation → re-authored.
@@ -374,10 +408,239 @@ describe("runAuthorStage", () => {
       generation: "g2",
       runner,
     });
-    expect(calls).toBe(1);
+    expect(calls).toBe(2);
     expect(r2.authored).toEqual(["auth-feature-work"]);
     const sources = JSON.parse(fs.readFileSync(path.join(dir, "sources.json"), "utf8"));
     expect(sources.generation).toBe("g2");
+  });
+
+  it("repairs a missing prompt file instead of resuming its metadata alone", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const opts = {
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+    };
+    await runAuthorStage(opts);
+    const file = path.join(home, "library", "auth-feature-work", "auth-feature-work.oneshot.md");
+    fs.rmSync(file);
+    const result = await runAuthorStage(opts);
+    expect(calls).toBe(2);
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    expect(result.resumed).toEqual([]);
+    expect(fs.readFileSync(file, "utf8")).toContain(AUTHORED.oneshot_markdown);
+  });
+
+  it("re-authors when source content changes and preserves ratings and other annotations", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const opts = {
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+    };
+    await runAuthorStage(opts);
+    const metadata = path.join(home, "library", "auth-feature-work", "sources.json");
+    const previous = JSON.parse(fs.readFileSync(metadata, "utf8"));
+    fs.writeFileSync(
+      metadata,
+      JSON.stringify({
+        ...previous,
+        rating: "up",
+        rated_at: "2026-01-01T00:00:00Z",
+        user_note: "Keep this annotation.",
+      }),
+    );
+    fs.appendFileSync(path.join(home, "exports", "a.md"), "\nAlso preserve keyboard navigation.");
+    const result = await runAuthorStage(opts);
+    expect(calls).toBe(2);
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    const current = JSON.parse(fs.readFileSync(metadata, "utf8"));
+    expect(current.lineage.fingerprint).not.toBe(previous.lineage.fingerprint);
+    expect(current).toMatchObject({
+      rating: "up",
+      rated_at: "2026-01-01T00:00:00Z",
+      user_note: "Keep this annotation.",
+    });
+  });
+
+  it("re-authors when reference evidence changes with the same members", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const opts = {
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+    };
+    await runAuthorStage(opts);
+    fs.writeFileSync(
+      path.join(home, "exports", "anaphora.json"),
+      JSON.stringify({
+        "a.md": [
+          {
+            index: 1,
+            timestamp: "2026-01-01T00:00:00Z",
+            human_text: "No.",
+            antecedent: "May I deploy?",
+            decision_kind: "plan",
+            decision_text: "Deploy to production.",
+          },
+        ],
+      }),
+    );
+    expect((await runAuthorStage(opts)).authored).toEqual(["auth-feature-work"]);
+    expect(calls).toBe(2);
+  });
+
+  it("regenerates a stale author-prompt version even if membership is unchanged", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let calls = 0;
+    const opts = {
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+    };
+    await runAuthorStage(opts);
+    const metadata = path.join(home, "library", "auth-feature-work", "sources.json");
+    const previous = JSON.parse(fs.readFileSync(metadata, "utf8"));
+    previous.lineage.prompt_version--;
+    previous.prompt_version--;
+    fs.writeFileSync(metadata, JSON.stringify(previous));
+    expect((await runAuthorStage(opts)).authored).toEqual(["auth-feature-work"]);
+    expect(calls).toBe(2);
+  });
+
+  it("keeps legacy prompt files with no edit-detection hash unless forced", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    const dir = path.join(home, "library", "auth-feature-work");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "sources.json"),
+      JSON.stringify({
+        slug: "auth-feature-work",
+        generation: "old",
+        members: ["a.md"],
+      }),
+    );
+    const file = path.join(dir, "auth-feature-work.oneshot.md");
+    fs.writeFileSync(file, "My hand-edited legacy prompt.");
+    let calls = 0;
+    const opts = {
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+    };
+    const kept = await runAuthorStage(opts);
+    expect(calls).toBe(0);
+    expect(kept.skipped[0]?.reason).toContain("no verified generation hash");
+    expect(fs.readFileSync(file, "utf8")).toBe("My hand-edited legacy prompt.");
+    expect((await runAuthorStage({ ...opts, force: true })).authored).toEqual([
+      "auth-feature-work",
+    ]);
+    expect(calls).toBe(1);
+  });
+
+  it("copies only cited digest preferences into new library provenance", async () => {
+    const home = tmpHome();
+    const quote = "Prefer the existing project build tools.";
+    fs.writeFileSync(path.join(home, "exports", "a.md"), quote);
+    const candidate = {
+      text: quote,
+      evidence: "An explicit project instruction.",
+      scope: "project" as const,
+      basis: "explicit" as const,
+      citations: [{ message_id: "a.md#m0", quote }],
+    };
+    await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": { ...digest("completed"), preferences: [candidate] } },
+      runner: (async () => AUTHORED) as RunnerFn,
+    });
+    const sources = JSON.parse(
+      fs.readFileSync(path.join(home, "library", "auth-feature-work", "sources.json"), "utf8"),
+    );
+    expect(sources.preferences).toEqual([{ ...candidate, project: "x" }]);
+    expect(sources.preferences).not.toEqual(AUTHORED.preferences);
+  });
+
+  it("refuses stale preference evidence before paying for authoring", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    let called = false;
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: {
+        "a.md": {
+          ...digest("completed"),
+          preferences: [
+            {
+              text: "Always deploy.",
+              evidence: "An unsupported old claim.",
+              scope: "global",
+              basis: "explicit",
+              citations: [{ message_id: "a.md#m0", quote: "Always deploy." }],
+            },
+          ],
+        },
+      },
+      runner: (async () => {
+        called = true;
+        return AUTHORED;
+      }) as RunnerFn,
+    });
+    expect(called).toBe(false);
+    expect(result.failed[0]?.error).toContain("preference evidence is stale");
+  });
+
+  it("does not regenerate for membership order alone", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md");
+    writeExport(home, "b.md");
+    let calls = 0;
+    const opts = {
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md", "b.md"])],
+      digests: { "a.md": digest("completed"), "b.md": digest("partial") },
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+    };
+    await runAuthorStage(opts);
+    const result = await runAuthorStage({
+      ...opts,
+      tasks: [task("auth-feature-work", ["b.md", "a.md"])],
+    });
+    expect(calls).toBe(1);
+    expect(result.resumed).toEqual(["auth-feature-work"]);
   });
 
   it("one task's failure doesn't abort the rest", async () => {
@@ -515,7 +778,17 @@ describe("runAuthorStage", () => {
     });
 
     expect(result.authored).toEqual(["auth-feature-work"]);
-    expect(promptLen).toBeLessThan(5_000);
+    const fullPrompt = buildAuthorPrompt({
+      task: task("auth-feature-work", ["a.md"]),
+      members: [
+        {
+          exportName: "a.md",
+          content: "z".repeat(5_000),
+          digest: digest("completed"),
+        },
+      ],
+    });
+    expect(promptLen).toBeLessThan(fullPrompt.length);
   });
 
   it("records input_coverage and truncations in sources.json under --truncate=extreme", async () => {

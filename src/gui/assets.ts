@@ -46,6 +46,7 @@ export const GUI_HTML = `<!doctype html>
         <div id="domain-children" class="domain-children"></div>
         <div id="count" class="muted" role="status">Loading library…</div>
         <button id="all-preferences" class="all-preferences" type="button" aria-current="false" hidden disabled>View all preferences</button>
+        <button id="accepted-preferences" class="all-preferences" type="button" aria-current="false" hidden>Accepted instructions</button>
         <button id="saved-preferences" class="all-preferences" type="button" aria-current="false" hidden>Saved consolidation</button>
       </div>
       <nav id="list" aria-label="Prompts"></nav>
@@ -66,6 +67,39 @@ export const GUI_HTML = `<!doctype html>
         <div id="metadata" class="metadata"></div>
         <p id="consolidation-notice" class="notice" hidden></p>
         <p id="notice" class="notice" role="status" hidden></p>
+        <section id="instruction-settings" class="review-settings" aria-label="Instruction scope" hidden>
+          <label for="instruction-project">Instructions for</label>
+          <select id="instruction-project"><option value="">Global preferences only</option></select>
+          <p class="muted">Project instructions include your accepted global preferences. Task-only choices stay with that task.</p>
+        </section>
+        <section id="preference-review" class="preference-review" aria-label="Review preference" hidden>
+          <p id="review-summary" class="muted"></p>
+          <div class="review-actions">
+            <button id="accept-preference" type="button">Accept</button>
+            <button id="edit-preference" type="button">Edit wording or scope</button>
+            <button id="dismiss-preference" type="button">Dismiss</button>
+            <button id="reset-preference" type="button" hidden>Review again</button>
+          </div>
+          <div id="preference-editor" hidden>
+            <label for="preference-text">Instruction wording</label>
+            <textarea id="preference-text" maxlength="8000" spellcheck="true"></textarea>
+            <label for="preference-scope">Where it applies</label>
+            <select id="preference-scope">
+              <option value="global">Every project</option>
+              <option value="project">One project</option>
+              <option value="task">This task only</option>
+            </select>
+            <div id="preference-project-field" hidden>
+              <label for="preference-project">Project</label>
+              <input id="preference-project" type="text" maxlength="2000" autocomplete="off">
+            </div>
+            <div class="review-actions">
+              <button id="save-preference" type="button">Save and accept</button>
+              <button id="cancel-preference" type="button">Cancel</button>
+            </div>
+          </div>
+          <p id="review-status" role="status" aria-live="polite"></p>
+        </section>
         <div id="empty" class="empty" hidden>
           <h2 id="empty-title">No prompts yet</h2>
           <p id="empty-text">Build your library in the terminal, then refresh this page.</p>
@@ -171,6 +205,15 @@ h1 { font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.7px;
 .tag { max-width: 100%; overflow-wrap: anywhere; background: var(--soft); border: 1px solid var(--line); border-radius: 1px; padding: 2px 6px; color: var(--muted); }
 #body { font: inherit; font-size: 14px; line-height: 1.8; overflow-wrap: anywhere; margin: 0; tab-size: 2; }
 #source { display: block; width: 100%; min-height: 260px; resize: vertical; border: 1px solid var(--line); border-radius: 0; padding: 16px; color: var(--ink); background: var(--soft); font: 13px/1.8 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; tab-size: 2; }
+.preference-review, .review-settings { margin: 0 0 24px; padding: 16px; border: 1px solid var(--line); background: var(--soft); }
+.review-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.review-actions button { font-size: 12px; }
+.review-settings select, #preference-scope { width: 100%; }
+#preference-editor { margin-top: 20px; }
+#preference-editor label { margin-top: 14px; }
+#preference-text { width: 100%; min-height: 120px; resize: vertical; color: var(--ink); background: var(--paper); border: 1px solid var(--line); padding: 10px; font: inherit; }
+#review-status:empty { display: none; }
+.source-quote { white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0 0; }
 .markdown > :first-child { margin-top: 0; }
 .markdown p, .markdown ul, .markdown ol, .markdown blockquote, .markdown pre, .markdown table { margin: 0 0 1.3em; }
 .markdown h1, .markdown h2, .markdown h3, .markdown h4, .markdown h5, .markdown h6 { font: 600 1.05em/1.5 var(--mono); letter-spacing: -.3px; margin: 1.8em 0 .75em; scroll-margin-top: 24px; }

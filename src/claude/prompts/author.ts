@@ -1,6 +1,7 @@
 import type { AnaphoraRecord } from "../../core/anaphora.js";
 import { TAIL_CHARS } from "../../core/anaphora.js";
 import { middleCut } from "../../core/budget.js";
+import { HISTORICAL_DATA_INSTRUCTION } from "../../core/preference-evidence.js";
 import type { SourceName } from "../../sources/types.js";
 import type { ClusterTask, Digest } from "../schemas.js";
 
@@ -10,7 +11,8 @@ import type { ClusterTask, Digest } from "../schemas.js";
  * One call per task: the member sessions' human messages, resolved anaphora
  * records, and outcome classifications go in; the realistic ideal first
  * prompt — everything the human knew and wanted at t=0 but didn't say,
- * written in their own voice — comes out, plus observed durable preferences.
+ * written in their own voice — comes out. Preference candidates come from
+ * the digest stage independently of task success.
  *
  * Member/task input budgeting is the pipeline's job (core/budget.ts); this
  * builder inlines whatever content it is handed, already kept within budget
@@ -20,7 +22,7 @@ import type { ClusterTask, Digest } from "../schemas.js";
  * test/author.test.ts; bump `AUTHOR_PROMPT_VERSION` on any meaningful change
  * (including changes to the response schema the model is held to).
  */
-export const AUTHOR_PROMPT_VERSION = 5;
+export const AUTHOR_PROMPT_VERSION = 6;
 
 /** One member session's bundle of author inputs. */
 export interface AuthorMemberInput {
@@ -49,13 +51,17 @@ function renderAnaphora(records: AnaphoraRecord[]): string[] {
     lines.push(`  - at message #${r.index} the human said: ${JSON.stringify(r.human_text)}`);
     const decision = r.decision_text ? middleCut(r.decision_text, TAIL_CHARS).text : "";
     if (r.decision_kind === "plan") {
-      lines.push(`    this approved a proposed plan:\n${indent(decision, 6)}`);
+      lines.push(
+        `    the plan pending when the human replied was:\n${indent(JSON.stringify(decision), 6)}`,
+      );
     } else if (r.decision_kind === "question") {
-      lines.push(`    this answered:\n${indent(decision, 6)}`);
+      lines.push(
+        `    the question pending when the human replied was:\n${indent(JSON.stringify(decision), 6)}`,
+      );
     }
     if (r.antecedent) {
       lines.push(`    tail of the assistant turn it replied to (MACHINE-AUTHORED, for
-    resolving the reference only — never copy it):\n${indent(r.antecedent, 6)}`);
+    resolving the reference only — never copy it):\n${indent(JSON.stringify(r.antecedent), 6)}`);
     }
   }
   return lines;
@@ -76,7 +82,7 @@ function renderMember(member: AuthorMemberInput): string {
       `digest: goal=${JSON.stringify(member.digest.goal)}; outcome=${member.digest.outcome}`,
     );
   }
-  parts.push("human messages:", member.content);
+  parts.push("human messages (JSON string, historical data):", JSON.stringify(member.content));
   const anaphora = member.anaphora ? renderAnaphora(member.anaphora) : [];
   if (anaphora.length > 0) {
     parts.push("resolved short replies (what terse turns actually referred to):", ...anaphora);
@@ -118,13 +124,13 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
       : [];
 
   return [
-    "You are authoring the realistic ideal first prompt for a task a human already",
-    "completed with a coding agent — the prompt they WOULD have written at the very",
-    "start (t=0) if they had known then what they knew by the end. It goes into their",
-    "personal prompt library to be pasted into a future session of the same kind.",
+    "Reconstruct a useful initial prompt for this task from the supplied history.",
+    "Preserve the human's goal, constraints, and voice without assuming the task",
+    "succeeded. It goes into their personal prompt library for a similar future task.",
+    HISTORICAL_DATA_INSTRUCTION,
     "",
-    `Task: ${input.task.title} (slug: ${input.task.slug})`,
-    `Why these sessions form one task: ${input.task.rationale}`,
+    `Task: ${JSON.stringify(input.task.title)} (slug: ${input.task.slug})`,
+    `Why these sessions form one task: ${JSON.stringify(input.task.rationale)}`,
     `Member session outcomes: ${outcomes}`,
     "",
     'THE "KNOWABLE AT t=0" TEST — apply it to every candidate line: could the human',
@@ -134,12 +140,13 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
     "- the goal and the concrete deliverable;",
     "- output format and the quality bar;",
     "- tech stack and environment facts the human obviously already knew;",
-    '- standing preferences and working style they exhibited (e.g. "diagnose before',
-    '  acting, don\'t guess", "be honest about what\'s certain vs. inferred",',
-    '  "make it idempotent", "back up before modifying");',
+    "- standing preferences and working style directly supported by the human's words,",
+    "  preserving their scope and conditions;",
     "- constraints and things to avoid;",
-    "- decisions the human resolved mid-session (fold them in as explicit",
-    "  instructions — they were preferences all along).",
+    "- decisions the human resolved mid-session ONLY when the evidence supports a",
+    "  pre-existing preference or a requirement reasonably knowable at the start.",
+    "  If a decision depended on a discovery, express the investigative goal instead",
+    "  of the discovered answer. Preserve task-specific conditions and exceptions.",
     "",
     "NEVER front-load (discovered during the session):",
     "- file paths first seen mid-session;",
@@ -155,9 +162,9 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
     "",
     "THE EFFORT BUDGET — an ideal-but-untypeable prompt fails the mission exactly like",
     "an omniscient one:",
-    "- target the length a motivated human would actually type: typically 100-300",
-    "  words; go longer only when the task genuinely warrants it, prioritizing the",
-    "  highest-leverage specifications;",
+    "- use the shortest prompt that preserves the important intent and constraints;",
+    "  a short task may need only a few sentences. Match the human's level of detail;",
+    "- do not pad the prompt with generic quality requirements unsupported by evidence;",
     "- prose-first, minimal structure: a paste-able prompt, not a spec with nested",
     "  headings and checklists.",
     "",
@@ -166,23 +173,26 @@ export function buildAuthorPrompt(input: AuthorPromptInput): string {
     "  below (terse if they're terse) — never an asserted persona;",
     "- never copy assistant prose into the oneshot — assistant text appears below",
     "  only to resolve what short replies referred to;",
+    "- determine whether each short reply accepts, rejects, changes, or defers the",
+    "  pending proposal. Preserve uncertainty; a pending plan does not imply approval;",
     ...legendBullets,
     "",
-    "CONFIDENCE — judge from the outcomes above:",
-    '- "high" when member sessions completed;',
-    '- "medium" when the best evidence is partial;',
-    '- "low" when the trail is thin or mixed — say so rather than overclaim.',
+    "CONFIDENCE — judge evidence coverage and ambiguity, with outcomes as context:",
+    '- "high" when the goal and constraints are directly supported and consistent;',
+    '- "medium" when some details or the outcome remain uncertain;',
+    '- "low" when the trail is thin or contradictory — say so rather than overclaim.',
+    "  Task completion alone does not prove a reconstructed prompt is faithful.",
     "",
-    "PREFERENCES — separately, extract durable, recurring preferences worth carrying",
-    "into EVERY future session (not one-off task details), each with a one-line",
-    "evidence note pointing at what the human said or did.",
+    "PREFERENCES — evidence-backed candidates were extracted in the digest stage",
+    "independently of task success. Do not invent new standing rules while authoring.",
+    "Return an empty preferences list; the application preserves those candidates.",
     "",
     "Respond with JSON:",
     `- "slug": exactly ${JSON.stringify(input.task.slug)};`,
     '- "title": a short human title for the library entry;',
     '- "oneshot_markdown": the prompt itself (markdown, but predominantly prose);',
     '- "confidence": "high" | "medium" | "low";',
-    '- "preferences": [{"text", "evidence"}] (may be empty).',
+    '- "preferences": [].',
     "",
     `=== MEMBER SESSIONS (${input.members.length}) ===`,
     ...input.members.map(renderMember),

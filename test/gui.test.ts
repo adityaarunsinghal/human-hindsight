@@ -11,7 +11,12 @@ import {
   saveConsolidatedPreferences,
 } from "../src/core/consolidated-preferences.js";
 import { oneshotHash, readLibrary } from "../src/core/library.js";
-import { aggregatePreferences } from "../src/core/preferences.js";
+import { preferenceReview, savePreferenceReview } from "../src/core/preference-review.js";
+import {
+  aggregatePreferences,
+  preferenceId,
+  readObservedPreferences,
+} from "../src/core/preferences.js";
 import { type GuiServer, type GuiSnapshot, startGuiServer } from "../src/gui/server.js";
 
 let home: string;
@@ -56,7 +61,7 @@ async function start(): Promise<GuiServer> {
 function request(
   server: GuiServer,
   route: string,
-  opts: { method?: string; headers?: Record<string, string> } = {},
+  opts: { method?: string; headers?: Record<string, string>; body?: unknown } = {},
 ): Promise<{ status: number; text: string; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const url = new URL(server.url);
@@ -79,7 +84,13 @@ function request(
       },
     );
     req.on("error", reject);
-    req.end();
+    req.end(
+      opts.body === undefined
+        ? undefined
+        : typeof opts.body === "string"
+          ? opts.body
+          : JSON.stringify(opts.body),
+    );
   });
 }
 
@@ -200,6 +211,14 @@ describe("local GUI server", () => {
     expect(recurring).toEqual({
       id: expect.stringMatching(/^[a-f0-9]{64}$/),
       text: "use focused tests",
+      scope: "global",
+      verified: false,
+      review: expect.objectContaining({
+        status: "pending",
+        scope: "global",
+        stale: false,
+        revision: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
       count: 2,
       domains: ["documentation", "testing"],
       lastAuthoredAt: "2026-10-21T10:00:00Z",
@@ -332,11 +351,14 @@ describe("local GUI server", () => {
     const markdown = "## Working preferences\n\n- Keep answers concise.";
     const savedPath = saveConsolidatedPreferences(home, {
       source,
-      consolidated: { preferences: [{ text: "Keep answers concise.", merged_from: 1 }] },
+      consolidated: {
+        preferences: [{ text: "Keep answers concise.", source_ids: source.map(preferenceId) }],
+      },
       markdown,
       taskCount: 1,
       target: "agents",
       now: new Date("2026-11-01T12:00:00Z"),
+      includeUnreviewed: true,
     });
     const saved = fs.readFileSync(savedPath, "utf8");
     const server = await start();
@@ -346,7 +368,9 @@ describe("local GUI server", () => {
       texts: ["Keep answers concise."],
       generatedAt: "2026-11-01T12:00:00.000Z",
       sourcePreferenceIds: before.preferences.map((preference) => preference.id),
+      items: [{ text: "Keep answers concise.", sourceIds: source.map(preferenceId) }],
       stale: false,
+      reviewed: false,
     });
     const metadataPath = path.join(path.dirname(file), "sources.json");
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
@@ -367,13 +391,17 @@ describe("local GUI server", () => {
     const file = prompt("source-task", "Original prompt.", {
       preferences: [{ text: "Keep answers short.", evidence: "Original evidence." }],
     });
+    const source = aggregatePreferences(readLibrary(home));
     const savedPath = saveConsolidatedPreferences(home, {
-      source: aggregatePreferences(readLibrary(home)),
-      consolidated: { preferences: [{ text: "Keep answers concise.", merged_from: 1 }] },
+      source,
+      consolidated: {
+        preferences: [{ text: "Keep answers concise.", source_ids: source.map(preferenceId) }],
+      },
       markdown: "## Working preferences\n\n- Keep answers concise.",
       taskCount: 1,
       target: "agents",
       now: new Date("2026-11-01T12:00:00Z"),
+      includeUnreviewed: true,
     });
     const saved = fs.readFileSync(savedPath, "utf8");
     const metadataPath = path.join(path.dirname(file), "sources.json");
@@ -402,13 +430,17 @@ describe("local GUI server", () => {
     prompt("source-task", "Original prompt.", {
       preferences: [{ text: "Keep answers short.", evidence: "Be concise." }],
     });
+    const source = aggregatePreferences(readLibrary(home));
     const savedPath = saveConsolidatedPreferences(home, {
-      source: aggregatePreferences(readLibrary(home)),
-      consolidated: { preferences: [{ text: "Keep answers concise.", merged_from: 1 }] },
+      source,
+      consolidated: {
+        preferences: [{ text: "Keep answers concise.", source_ids: source.map(preferenceId) }],
+      },
       markdown: "Saved Markdown is still available.",
       taskCount: 1,
       target: "agents",
       now: new Date("2026-11-01T12:00:00Z"),
+      includeUnreviewed: true,
     });
     fs.rmSync(path.join(home, "library", "source-task"), { recursive: true });
     const server = await start();
@@ -444,6 +476,227 @@ describe("local GUI server", () => {
     expect(fs.existsSync(path.join(customHome, "library", CONSOLIDATED_PREFERENCES_FILE))).toBe(
       false,
     );
+  });
+
+  it("keeps candidates pending until an explicit browser review and persists scope edits", async () => {
+    const file = prompt("review-task", "Prompt.", {
+      preferences: [{ text: "Use focused tests.", evidence: "Test just the changed behavior." }],
+    });
+    const original = fs.readFileSync(file, "utf8");
+    const server = await start();
+    const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    const candidate = before.preferences[0];
+    expect(candidate?.review.status).toBe("pending");
+    expect(before.acceptedMarkdown).toBe("");
+    const response = await request(server, "/api/preferences/review", {
+      method: "POST",
+      headers: {
+        Origin: server.url,
+        "Content-Type": "application/json",
+        "X-Hindsight-Token": before.reviewToken,
+      },
+      body: {
+        id: candidate?.id,
+        revision: candidate?.review.revision,
+        status: "accepted",
+        text: "Use focused tests for changed behavior.",
+        scope: "project",
+        project: "sample-app",
+      },
+    });
+    expect(response.status).toBe(200);
+    const after = JSON.parse(response.text) as GuiSnapshot;
+    expect(after.acceptedMarkdown).toBe("");
+    expect(after.projectInstructions).toEqual([
+      expect.objectContaining({
+        project: "sample-app",
+        markdown: expect.stringContaining("- Use focused tests for changed behavior."),
+      }),
+    ]);
+    expect(after.preferences[0]?.review).toMatchObject({
+      status: "accepted",
+      scope: "project",
+      project: "sample-app",
+    });
+    expect(fs.readFileSync(file, "utf8")).toBe(original);
+    const restarted = await start();
+    const persisted = JSON.parse((await request(restarted, "/api/library")).text) as GuiSnapshot;
+    expect(persisted.preferences[0]?.review.status).toBe("accepted");
+    expect(persisted.reviewToken).not.toBe(before.reviewToken);
+  });
+
+  it("requires same-origin JSON and the server token for preference mutations", async () => {
+    prompt("review-task", "Prompt.", {
+      preferences: [{ text: "Be concise.", evidence: "Keep answers short." }],
+    });
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    const preference = snapshot.preferences[0];
+    const body = {
+      id: preference?.id,
+      revision: preference?.review.revision,
+      status: "accepted",
+    };
+    const forbiddenHeaders: Record<string, string>[] = [
+      {},
+      { Origin: server.url, "Content-Type": "application/json" },
+      {
+        Origin: "https://unrelated.example",
+        "Content-Type": "application/json",
+        "X-Hindsight-Token": snapshot.reviewToken,
+      },
+      { Origin: server.url, "X-Hindsight-Token": snapshot.reviewToken },
+    ];
+    for (const headers of forbiddenHeaders) {
+      expect(
+        (await request(server, "/api/preferences/review", { method: "POST", headers, body }))
+          .status,
+      ).toBe(403);
+    }
+    const unchanged = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(unchanged.acceptedMarkdown).toBe("");
+    expect(unchanged.preferences[0]?.review.status).toBe("pending");
+  });
+
+  it("rejects stale reviews, unknown candidates, and oversized payloads without changing rules", async () => {
+    const file = prompt("review-task", "Prompt.", {
+      preferences: [{ text: "Be concise.", evidence: "Keep answers short." }],
+    });
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    const candidate = snapshot.preferences[0];
+    const headers = {
+      Origin: server.url,
+      "Content-Type": "application/json",
+      "X-Hindsight-Token": snapshot.reviewToken,
+    };
+    const body = {
+      id: candidate?.id,
+      revision: candidate?.review.revision,
+      status: "accepted",
+    };
+    const metadataFile = path.join(path.dirname(file), "sources.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf8"));
+    metadata.preferences[0].evidence = "A different observation.";
+    fs.writeFileSync(metadataFile, JSON.stringify(metadata));
+    expect(
+      (await request(server, "/api/preferences/review", { method: "POST", headers, body })).status,
+    ).toBe(409);
+    expect(
+      (
+        await request(server, "/api/preferences/review", {
+          method: "POST",
+          headers,
+          body: { ...body, id: "0".repeat(64) },
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await request(server, "/api/preferences/review", {
+          method: "POST",
+          headers,
+          body: "x".repeat(20_000),
+        })
+      ).status,
+    ).toBe(413);
+    expect(
+      readObservedPreferences(home).map((pref) => preferenceReview(home, pref).status),
+    ).toEqual(["pending"]);
+  });
+
+  it("shows an accepted consolidation as stale when its supporting review is withdrawn", async () => {
+    prompt("review-task", "Prompt.", {
+      preferences: [{ text: "Be concise.", evidence: "Keep answers short." }],
+    });
+    const source = readObservedPreferences(home);
+    const pref = source[0];
+    if (!pref) throw new Error("Expected the fixture preference.");
+    savePreferenceReview(home, pref, { status: "accepted" });
+    saveConsolidatedPreferences(home, {
+      source,
+      consolidated: {
+        preferences: [{ text: "Be concise.", source_ids: source.map(preferenceId) }],
+      },
+      markdown: "## Working preferences\n\n- Be concise.",
+      taskCount: 1,
+      target: "agents",
+      now: new Date("2026-11-03T00:00:00Z"),
+    });
+    const server = await start();
+    const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(before.consolidation).toMatchObject({ reviewed: true, stale: false });
+    savePreferenceReview(home, pref, { status: "dismissed" });
+    const after = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(after.consolidation?.stale).toBe(true);
+    expect(after.acceptedMarkdown).toBe("");
+  });
+
+  it.each([
+    undefined,
+    "Atlas",
+  ])("checks unreviewed consolidation freshness against only its requested scope (%s)", async (project) => {
+    const file = prompt("scoped-source", "A synthetic prompt.", {
+      preferences: [
+        { text: "Use focused tests.", evidence: "Test changed behavior.", scope: "global" },
+        {
+          text: "Use pnpm in Atlas.",
+          evidence: "This repository uses pnpm.",
+          scope: "project",
+          project: "Atlas",
+        },
+        {
+          text: "Skip screenshots for this task.",
+          evidence: "Only this task needs text output.",
+          scope: "task",
+          project: "Atlas",
+        },
+        {
+          text: "Use npm in Borealis.",
+          evidence: "This other repository uses npm.",
+          scope: "project",
+          project: "Borealis",
+        },
+      ],
+    });
+    const observed = readObservedPreferences(home);
+    const source = observed.filter(
+      (preference) =>
+        preference.scope === "global" ||
+        (project && preference.scope === "project" && preference.project === project),
+    );
+    expect(source).toHaveLength(project ? 2 : 1);
+    saveConsolidatedPreferences(home, {
+      source,
+      consolidated: {
+        preferences: source.map((preference) => ({
+          text: preference.text,
+          source_ids: [preferenceId(preference)],
+        })),
+      },
+      markdown: "## Working preferences\n\n- Selected rules only.",
+      taskCount: 1,
+      target: "agents",
+      now: new Date("2026-11-03T00:00:00Z"),
+      includeUnreviewed: true,
+      project,
+    });
+    const server = await start();
+    const initial = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(initial.preferences).toHaveLength(4);
+    expect(initial.consolidation).toMatchObject({ stale: false, reviewed: false });
+
+    const metadataPath = path.join(path.dirname(file), "sources.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    metadata.preferences[2].text = "Include one screenshot for this task.";
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+    const taskChanged = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(taskChanged.consolidation?.stale).toBe(false);
+
+    metadata.preferences[0].text = "Use focused tests and check boundary cases.";
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+    const globalChanged = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(globalChanged.consolidation?.stale).toBe(true);
   });
 
   it("copies special home paths as one literal shell argument", async () => {
