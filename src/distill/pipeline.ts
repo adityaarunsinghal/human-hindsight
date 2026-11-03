@@ -23,15 +23,26 @@ import {
   ClusterSchema,
   type ClusterTask,
   type Digest,
+  DigestResponseSchema,
   DigestSchema,
+  type PreferenceCandidate,
+  toJsonSchema,
 } from "../claude/schemas.js";
 import type { ManifestEntry } from "../commands/distill.js";
 import type { AnaphoraRecord } from "../core/anaphora.js";
 import { parseAnaphoraMap, parseSourcesJson } from "../core/artifacts.js";
 import { DEFAULT_INPUT_BUDGET, middleCut, type TruncatePolicy } from "../core/budget.js";
+import {
+  contentFingerprint,
+  digestSourceFingerprint,
+  type StageLineage,
+  sameLineage,
+  stageLineage,
+} from "../core/fingerprint.js";
 import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
 import { oneshotHash } from "../core/library.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
+import { exportMessages, validatePreferenceCandidates } from "../core/preference-evidence.js";
 import type { SourceName } from "../sources/types.js";
 import { withSpinner } from "../ui/progress.js";
 import { dim, fail, green, skip as skipGlyph } from "../ui/style.js";
@@ -54,6 +65,20 @@ export interface DigestsCheckpoint {
   generation: string;
   prompt_version: number;
   digests: Record<string, Digest>;
+  /** Missing on legacy checkpoints, whose freshness cannot be established. */
+  lineage?: Record<string, DigestLineage>;
+  /** Failed/interrupted refreshes must not resurrect old library preferences. */
+  invalidated?: string[];
+}
+
+/** The source identity accompanies the digest even when no prompt is authored. */
+export interface DigestLineage extends StageLineage {
+  project: string;
+  session_id: string;
+  origin: SourceName;
+  observed_at: string;
+  content_hash: string;
+  source_hash: string;
 }
 
 /** Mint a new generation id: compact UTC stamp + short random suffix. */
@@ -80,16 +105,40 @@ export function loadDigests(home: string): DigestsCheckpoint | null {
     // Validate each digest independently and keep the valid ones: a single
     // corrupt entry must not discard the whole (paid) checkpoint. A dropped
     // key simply gets re-digested on the next run.
+    const invalidated = Array.isArray(obj.invalidated)
+      ? obj.invalidated.filter((value): value is string => typeof value === "string")
+      : [];
     const digests: Record<string, Digest> = {};
     if (obj.digests && typeof obj.digests === "object") {
       for (const [key, value] of Object.entries(obj.digests as Record<string, unknown>)) {
+        if (invalidated.includes(key)) continue;
         const d = DigestSchema.safeParse(value);
         if (d.success) digests[key] = d.data;
       }
     }
     const prompt_version =
       typeof obj.prompt_version === "number" ? obj.prompt_version : DIGEST_PROMPT_VERSION;
-    return { generation: obj.generation, prompt_version, digests };
+    const lineage: Record<string, DigestLineage> = {};
+    if (obj.lineage && typeof obj.lineage === "object") {
+      for (const [key, value] of Object.entries(obj.lineage)) {
+        if (
+          key in digests &&
+          value !== null &&
+          typeof value === "object" &&
+          (value as Partial<DigestLineage>).version === 1 &&
+          typeof (value as Partial<DigestLineage>).fingerprint === "string"
+        ) {
+          lineage[key] = value as DigestLineage;
+        }
+      }
+    }
+    return {
+      generation: obj.generation,
+      prompt_version,
+      digests,
+      ...(Object.keys(lineage).length ? { lineage } : {}),
+      ...(invalidated.length ? { invalidated } : {}),
+    };
   } catch {
     return null;
   }
@@ -182,6 +231,8 @@ export interface DigestStageOptions {
   /** Eligible manifest entries (post `--project` / `--min-substance`). */
   entries: ManifestEntry[];
   model?: string;
+  /** Runner identity is part of the checkpoint, independently of the source. */
+  runnerName?: SourceName;
   /** Injectable stage runner (default: real {@link runClaude}). */
   runner?: RunnerFn;
   /** Progress stream (default: process.stdout). */
@@ -209,6 +260,133 @@ function truncate(s: string, max: number): string {
 }
 
 /**
+ * Quotes must occur in the exact input shown to the model. When an explicitly
+ * truncated export renumbers visible messages, map them back to the original
+ * source IDs only when the timestamp and quoted text identify one message.
+ */
+function validateDigestEvidence(
+  digest: Digest,
+  exportName: string,
+  content: string,
+  originalContent: string,
+): { digest: Digest; problems: string[] } {
+  const candidates = digest.preferences ?? [];
+  const visibleMessages = exportMessages(exportName, content);
+  const problems = validatePreferenceCandidates(candidates, visibleMessages);
+  if (problems.length || content === originalContent) return { digest, problems };
+
+  const originals = exportMessages(exportName, originalContent);
+  const visibleById = new Map(visibleMessages.map((message) => [message.id, message]));
+  const preferences: PreferenceCandidate[] = candidates.map((candidate) => ({
+    ...candidate,
+    citations: candidate.citations.map((citation) => {
+      const visible = visibleById.get(citation.message_id);
+      const matches = originals.filter(
+        (message) =>
+          message.timestamp === visible?.timestamp && message.text.includes(citation.quote),
+      );
+      if (matches.length !== 1) {
+        problems.push(
+          `quote in "${citation.message_id}" does not identify one original human message; omit this suggestion`,
+        );
+        return citation;
+      }
+      return { ...citation, message_id: matches[0]?.id ?? citation.message_id };
+    }),
+  }));
+  if (!problems.length) {
+    problems.push(...validatePreferenceCandidates(preferences, originals));
+  }
+  return { digest: { ...digest, preferences }, problems };
+}
+
+/** One implementation serves both the read-only plan and the paid stage. */
+function prepareDigest(
+  entry: ManifestEntry,
+  originalContent: string,
+  content: string,
+  outcome: OutcomeEvidence | undefined,
+  opts: Pick<DigestStageOptions, "model" | "runnerName">,
+): { prompt: string; lineage: DigestLineage } {
+  const prompt = buildDigestPrompt({
+    exportName: entry.export,
+    content,
+    outcome,
+    origin: entry.origin,
+  });
+  const lineage: DigestLineage = {
+    ...stageLineage({
+      stage: "digest",
+      promptVersion: DIGEST_PROMPT_VERSION,
+      schema: toJsonSchema(DigestResponseSchema),
+      inputs: {
+        prompt,
+        originalContent,
+        outcome,
+        project: entry.project,
+        sessionId: entry.sessionId,
+        origin: entry.origin ?? "claude",
+      },
+      model: opts.model,
+      runnerName: opts.runnerName,
+    }),
+    project: entry.project,
+    session_id: entry.sessionId,
+    origin: entry.origin ?? "claude",
+    observed_at: entry.last_ts,
+    content_hash: contentFingerprint(originalContent),
+    source_hash: digestSourceFingerprint({
+      content: originalContent,
+      outcome,
+      project: entry.project,
+      sessionId: entry.sessionId,
+      origin: entry.origin,
+    }),
+  };
+  return { prompt, lineage };
+}
+
+/**
+ * Report genuinely reusable digests before consent. This does not rewrite
+ * legacy checkpoints or mark stale records; the paid stage owns mutations.
+ */
+export function countReusableDigests(
+  opts: Pick<
+    DigestStageOptions,
+    "home" | "entries" | "model" | "runnerName" | "budget" | "truncate"
+  >,
+): number {
+  const checkpoint = loadDigests(opts.home);
+  if (!checkpoint) return 0;
+  const outcomes = readOutcomes(opts.home);
+  const budget = opts.budget ?? DEFAULT_INPUT_BUDGET;
+  let reusable = 0;
+  for (const entry of opts.entries) {
+    if (!checkpoint.digests[entry.export]) continue;
+    try {
+      const originalContent = fs.readFileSync(
+        path.join(opts.home, "exports", entry.export),
+        "utf8",
+      );
+      if (originalContent.length > budget && opts.truncate !== "extreme") continue;
+      const content =
+        originalContent.length > budget ? middleCut(originalContent, budget).text : originalContent;
+      const { lineage } = prepareDigest(
+        entry,
+        originalContent,
+        content,
+        outcomes[entry.export],
+        opts,
+      );
+      if (sameLineage(checkpoint.lineage?.[entry.export], lineage)) reusable++;
+    } catch {
+      // Missing exports and malformed evidence cannot establish freshness.
+    }
+  }
+  return reusable;
+}
+
+/**
  * Stage 1 — digest every eligible session (one `claude` call each).
  *
  * Resumable: sessions already in the checkpoint are skipped; the checkpoint is
@@ -226,14 +404,13 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
     prompt_version: DIGEST_PROMPT_VERSION,
     digests: {},
   };
-  // Provenance that's recorded but never checked gives stale-by-construction
-  // artifacts. If the checkpoint was written by a different digest prompt,
-  // reused digests are stale — surface it (re-running with --fresh regenerates).
+  checkpoint.lineage ??= {};
   if (loaded && loaded.prompt_version !== DIGEST_PROMPT_VERSION) {
     write(
-      `  ⚠ existing digests were produced by prompt v${loaded.prompt_version}; current is v${DIGEST_PROMPT_VERSION}. Reusing them — run --fresh to regenerate.`,
+      `  ⚠ existing digests were produced by prompt v${loaded.prompt_version}; current is v${DIGEST_PROMPT_VERSION}. Changed inputs will be regenerated.`,
     );
   }
+  checkpoint.prompt_version = DIGEST_PROMPT_VERSION;
 
   const outcomes = readOutcomes(opts.home);
   const failed: StageFailure[] = [];
@@ -259,16 +436,23 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
   /** Digest one session end-to-end (skip / read / budget / call / checkpoint). */
   const digestOne = async (entry: ManifestEntry, i: number): Promise<void> => {
     const label = `[${i + 1}/${total}] ${entry.export}`;
-    if (checkpoint.digests[entry.export]) {
-      skipped++;
-      write(`  ${label} — already digested (skipped)`);
-      return;
-    }
+    const previous = checkpoint.digests[entry.export];
+    const invalidate = () => {
+      if (!checkpoint.digests[entry.export] && checkpoint.invalidated?.includes(entry.export))
+        return;
+      delete checkpoint.digests[entry.export];
+      delete checkpoint.lineage?.[entry.export];
+      checkpoint.invalidated = [
+        ...new Set([...(checkpoint.invalidated ?? []), entry.export]),
+      ].sort();
+      saveDigests(opts.home, checkpoint);
+    };
 
     let content: string;
     try {
       content = fs.readFileSync(path.join(opts.home, "exports", entry.export), "utf8");
     } catch (err) {
+      invalidate();
       failed.push({
         export: entry.export,
         error: `could not read export: ${(err as Error).message}`,
@@ -276,10 +460,12 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       write(`  ${label} — ${fail("unreadable export")}`);
       return;
     }
+    const originalContent = content;
 
     // Input budget / overflow policy. Nothing is cut silently.
     if (content.length > budget) {
       if (truncatePolicy === "never") {
+        invalidate();
         blocked.push({ export: entry.export, chars: content.length });
         write(
           `  ${label} — ${skipGlyph(`blocked: ${content.length} chars exceed the input budget (${budget}).`)} ` +
@@ -292,20 +478,54 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       write(`  ${label} — ✂ cut ${cut.dropped} chars to fit the input budget (--truncate=extreme)`);
     }
 
-    write(`  ${label} — digesting…`);
     try {
-      const call = () =>
-        runner({
-          prompt: buildDigestPrompt({
-            exportName: entry.export,
+      const { prompt, lineage } = prepareDigest(
+        entry,
+        originalContent,
+        content,
+        outcomes[entry.export],
+        opts,
+      );
+      if (previous && sameLineage(checkpoint.lineage?.[entry.export], lineage)) {
+        skipped++;
+        write(`  ${label} — already digested (inputs unchanged; skipped)`);
+        return;
+      }
+      if (previous) {
+        write(`  ${label} — input, model, or prompt changed; regenerating stale digest`);
+      }
+      // A failed refresh must not let downstream stages consume the old digest.
+      invalidate();
+      write(`  ${label} — digesting…`);
+      const call = async (): Promise<Digest> => {
+        let currentPrompt = prompt;
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const response = await runner({
+            prompt: currentPrompt,
+            schema: DigestResponseSchema,
+            model: opts.model,
+            timeoutMs: opts.timeoutMs,
+          });
+          const { digest, problems } = validateDigestEvidence(
+            response,
+            entry.export,
             content,
-            outcome: outcomes[entry.export],
-            origin: entry.origin,
-          }),
-          schema: DigestSchema,
-          model: opts.model,
-          timeoutMs: opts.timeoutMs,
-        });
+            originalContent,
+          );
+          if (!problems.length) return digest;
+          if (attempt === 1) {
+            throw new Error(
+              `digest evidence failed validation after one retry: ${problems.join("; ")}`,
+            );
+          }
+          write(`  ${label} — preference evidence failed validation; retrying once…`);
+          currentPrompt =
+            `${prompt}\n\nYour previous preference evidence had these problems:\n` +
+            `${problems.map((problem) => `- ${problem}`).join("\n")}\n` +
+            "Correct every citation using the supplied human messages. Omit any unsupported suggestion.";
+        }
+        throw new Error("digest evidence could not be validated");
+      };
       // A spinner is a single-line UI; with parallel calls in flight the lines
       // would fight over the cursor — plain progress lines instead.
       const digest =
@@ -313,6 +533,10 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       // Mutation + save are synchronous (single JS tick), so concurrent
       // workers can never interleave a checkpoint write — saves stay serialized.
       checkpoint.digests[entry.export] = digest;
+      checkpoint.lineage ??= {};
+      checkpoint.lineage[entry.export] = lineage;
+      checkpoint.invalidated = checkpoint.invalidated?.filter((id) => id !== entry.export);
+      if (!checkpoint.invalidated?.length) delete checkpoint.invalidated;
       saveDigests(opts.home, checkpoint); // after each — Ctrl-C safe
       completed++;
       // A success proves the environment works: the streak is not systemic.
@@ -320,6 +544,7 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       streakCount = 0;
       write(`  ${label} → ${green(digest.outcome)}: ${truncate(digest.goal, 70)}`);
     } catch (err) {
+      invalidate();
       const message = err instanceof Error ? err.message : String(err);
       failed.push({ export: entry.export, error: message });
       write(`  ${label} ${fail(`failed: ${truncate(message, 120)}`)}`);
@@ -402,6 +627,7 @@ export interface TasksCheckpoint {
   prompt_version: number;
   tasks: ClusterTask[];
   misc: string[];
+  lineage?: StageLineage;
 }
 
 function tasksPath(home: string): string {
@@ -698,6 +924,7 @@ export interface ClusterStageOptions {
   generation: string;
   noGroup?: boolean;
   model?: string;
+  runnerName?: SourceName;
   runner?: RunnerFn;
   output?: Writable;
   /** Input budget (chars) — used only to warn when the digest set is very large. */
@@ -721,19 +948,36 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
   const out = opts.output ?? process.stdout;
   const write = (s: string) => out.write(`${s}\n`);
   const inputIds = Object.keys(opts.digests).sort();
+  const sortedDigests = Object.fromEntries(inputIds.map((id) => [id, opts.digests[id] as Digest]));
+  const upstream = loadDigests(opts.home)?.lineage;
+  const lineage = stageLineage({
+    stage: "cluster",
+    promptVersion: CLUSTER_PROMPT_VERSION,
+    schema: {
+      cluster: toJsonSchema(ClusterSchema),
+      merge: toJsonSchema(ClusterMergeSchema),
+    },
+    inputs: {
+      digests: sortedDigests,
+      origins: Object.fromEntries(inputIds.map((id) => [id, opts.origins?.[id] ?? "claude"])),
+      upstream: Object.fromEntries(inputIds.map((id) => [id, upstream?.[id]?.fingerprint ?? null])),
+      mode: opts.noGroup ? "one-session-per-task" : "grouped",
+      windows: opts.noGroup ? [] : planClusterWindows(opts.digests, opts.origins, opts.budget),
+      prompt: buildClusterPrompt(sortedDigests, opts.origins),
+      mergePrompt: buildMergePrompt([]),
+    },
+    model: opts.model,
+    runnerName: opts.runnerName,
+  });
 
-  // Resume: same generation + same covered input set → reuse, no call.
+  // Matching names alone cannot prove freshness: content, grouping mode,
+  // instructions, or the selected runner can all have changed.
   const existing = loadTasks(opts.home);
   if (existing && existing.generation === opts.generation) {
-    const covered = new Set<string>(existing.misc);
-    for (const task of existing.tasks) for (const m of task.members) covered.add(m);
-    const same = covered.size === inputIds.length && inputIds.every((id) => covered.has(id));
-    if (same) {
-      if (existing.prompt_version !== CLUSTER_PROMPT_VERSION) {
-        write(
-          `  ⚠ existing clustering was produced by prompt v${existing.prompt_version}; current is v${CLUSTER_PROMPT_VERSION}. Reusing it — run --fresh to regenerate.`,
-        );
-      }
+    if (
+      sameLineage(existing.lineage, lineage) &&
+      validateCluster(existing, inputIds).length === 0
+    ) {
       write("  clustering already done (checkpoint reused)");
       return {
         generation: existing.generation,
@@ -742,6 +986,7 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
         resumed: true,
       };
     }
+    write("  clustering inputs or settings changed; regenerating stale grouping");
   }
 
   let cluster: Cluster;
@@ -790,6 +1035,7 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     prompt_version: CLUSTER_PROMPT_VERSION,
     tasks: cluster.tasks,
     misc: cluster.misc,
+    lineage,
   };
   saveTasks(opts.home, checkpoint);
 
@@ -951,6 +1197,7 @@ export interface AuthorStageOptions {
   generation: string;
   toolVersion: string;
   model?: string;
+  runnerName?: SourceName;
   runner?: RunnerFn;
   output?: Writable;
   /** Max chars of aggregate member content per author call (default {@link DEFAULT_INPUT_BUDGET}). */
@@ -974,14 +1221,6 @@ function readAnaphora(home: string): Record<string, AnaphoraRecord[]> {
   } catch {
     return {};
   }
-}
-
-/** Order-insensitive membership equality for the author resume check. */
-function sameMembers(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const sortedA = [...a].sort();
-  const sortedB = [...b].sort();
-  return sortedA.every((value, i) => value === sortedB[i]);
 }
 
 /** Summarize member outcomes, e.g. "2 completed, 1 partial". */
@@ -1027,6 +1266,8 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
   const anaphora = readAnaphora(opts.home);
   const sessionIdByExport = new Map(opts.entries.map((e) => [e.export, e.sessionId]));
   const originByExport = new Map(opts.entries.map((e) => [e.export, e.origin ?? "claude"]));
+  const projectByExport = new Map(opts.entries.map((e) => [e.export, e.project]));
+  const upstream = loadDigests(opts.home)?.lineage;
 
   const result: AuthorStageResult = {
     generation: opts.generation,
@@ -1060,46 +1301,20 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       return;
     }
 
-    // Resume: an existing sources.json counts as "done" only when it was
-    // authored in THIS generation AND its recorded members still match the task
-    // exactly. Incremental re-clustering re-runs under the same generation id
-    // (the digests checkpoint mints it once), so a generation-only check would
-    // "resume" a task whose membership changed — presenting stale content as
-    // current. Comparing members re-authors only the genuinely-changed tasks.
     let existing: SourcesJson | null = null;
     try {
       existing = parseSourcesJson(JSON.parse(fs.readFileSync(sourcesPath, "utf8")));
     } catch {
       // no prior entry (or unreadable) — author it
     }
-    if (
-      existing &&
-      existing.generation === opts.generation &&
-      sameMembers(existing.members, task.members)
-    ) {
-      result.resumed.push(task.slug);
-      write(`  ${label} — already authored (skipped)`);
-      return;
-    }
-
-    // Overwrite protection: if the user edited the oneshot since it
-    // was authored (recorded hash ≠ current file hash), re-authoring would
-    // silently destroy their work. Skip unless --force — checked pre-spend.
-    if (existing?.oneshot_hash && !opts.force) {
-      let currentHash: string | null = null;
-      try {
-        currentHash = oneshotHash(
-          fs.readFileSync(path.join(dir, `${task.slug}.oneshot.md`), "utf8"),
-        );
-      } catch {
-        // oneshot file gone — nothing to protect
-      }
-      if (currentHash !== null && currentHash !== existing.oneshot_hash) {
-        result.skipped.push({
-          slug: task.slug,
-          reason: "oneshot was edited by hand — re-run with --force to overwrite",
-        });
-        write(`  ${label} — ✋ edited by hand; kept (re-run with --force to overwrite)`);
+    const oneshotPath = path.join(dir, `${task.slug}.oneshot.md`);
+    let currentContent: string | null = null;
+    try {
+      currentContent = fs.readFileSync(oneshotPath, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        result.failed.push({ export: task.slug, error: "existing prompt cannot be read safely" });
+        write(`  ${label} — ${fail("existing prompt cannot be read safely; kept")}`);
         return;
       }
     }
@@ -1131,6 +1346,19 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       });
       write(`  ${label} — ${fail(`member export unreadable: ${unreadableMember}`)}`);
       return;
+    }
+    const originalMembers = members.map((member) => ({ ...member }));
+    for (const member of originalMembers) {
+      const problems = validatePreferenceCandidates(
+        member.digest?.preferences ?? [],
+        exportMessages(member.exportName, member.content),
+      );
+      if (problems.length) {
+        const error = `member preference evidence is stale (${member.exportName}); re-run distill to refresh the digest`;
+        result.failed.push({ export: task.slug, error });
+        write(`  ${label} — ${fail(error)}`);
+        return;
+      }
     }
 
     // Input budget / overflow policy for the aggregate of all member content.
@@ -1173,11 +1401,61 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       );
     }
 
+    // Canonical session order avoids spending another call when a cluster
+    // simply returns the same membership in a different order.
+    const sortedMembers = [...members].sort((a, b) => a.exportName.localeCompare(b.exportName));
+    const prompt = buildAuthorPrompt({ task, members: sortedMembers });
+    const lineage = stageLineage({
+      stage: "author",
+      promptVersion: AUTHOR_PROMPT_VERSION,
+      schema: toJsonSchema(AuthorSchema),
+      inputs: {
+        prompt,
+        task: { ...task, members: [...task.members].sort() },
+        originalMembers: originalMembers.sort((a, b) => a.exportName.localeCompare(b.exportName)),
+        upstream: Object.fromEntries(
+          [...task.members].sort().map((id) => [id, upstream?.[id]?.fingerprint ?? null]),
+        ),
+      },
+      model: opts.model,
+      runnerName: opts.runnerName,
+    });
+    if (
+      existing?.generation === opts.generation &&
+      currentContent !== null &&
+      sameLineage(existing.lineage, lineage)
+    ) {
+      result.resumed.push(task.slug);
+      write(`  ${label} — already authored (inputs unchanged; skipped)`);
+      return;
+    }
+
+    // Old files without a recorded generation hash may also contain manual
+    // work. A missing output is repairable, but an unverified existing one is
+    // kept until the user explicitly requests --force.
+    if (
+      !opts.force &&
+      currentContent !== null &&
+      (!existing?.oneshot_hash || oneshotHash(currentContent) !== existing.oneshot_hash)
+    ) {
+      const reason = existing?.oneshot_hash
+        ? "oneshot was edited by hand — re-run with --force to overwrite"
+        : "existing oneshot has no verified generation hash — re-run with --force to overwrite";
+      result.skipped.push({ slug: task.slug, reason });
+      write(`  ${label} — ✋ ${reason}; kept`);
+      return;
+    }
+    if (existing) {
+      write(
+        `  ${label} — ${currentContent === null ? "prompt file missing; repairing" : "inputs or prompt changed; regenerating"}`,
+      );
+    }
+
     write(`  ${label} — authoring…`);
     try {
       const call = () =>
         runner({
-          prompt: buildAuthorPrompt({ task, members }),
+          prompt,
           schema: AuthorSchema,
           model: opts.model,
           timeoutMs: opts.timeoutMs,
@@ -1190,11 +1468,19 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
 
       // Our code writes the files; the TASK slug is authoritative for paths.
       const sources: SourcesJson = {
+        ...existing,
         slug: task.slug,
         title: authored.title,
         members: task.members,
         sessionIds: task.members.map((m) => sessionIdByExport.get(m) ?? "unknown"),
-        preferences: authored.preferences,
+        preferences: originalMembers.flatMap((member) =>
+          (member.digest?.preferences ?? []).map((candidate) => ({
+            ...candidate,
+            ...(candidate.scope === "global"
+              ? {}
+              : { project: projectByExport.get(member.exportName) ?? "" }),
+          })),
+        ),
         outcome_summary: summarizeOutcomes(task.members, opts.digests),
         domains: [
           ...new Set(
@@ -1209,6 +1495,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         prompt_version: AUTHOR_PROMPT_VERSION,
         tool_version: opts.toolVersion,
         generation: opts.generation,
+        lineage,
         // Coverage provenance: 1 when every member byte reached the model;
         // < 1 with the exact cuts listed when --truncate=extreme trimmed input.
         input_coverage: inputCoverage,
@@ -1220,12 +1507,12 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       // Hash of the exact bytes written — the anchor for detecting user edits
       // (overwrite protection). Recorded in sources.json, not the file.
       sources.oneshot_hash = oneshotHash(oneshot);
-      writeFilePrivate(path.join(dir, `${task.slug}.oneshot.md`), oneshot);
+      writeFilePrivate(oneshotPath, oneshot);
       writeFilePrivate(sourcesPath, `${JSON.stringify(sources, null, 2)}\n`);
 
       result.authored.push(task.slug);
       write(
-        `      → ${authored.confidence} confidence, ${authored.preferences.length} preference(s)`,
+        `      → ${authored.confidence} confidence, ${sources.preferences.length} preference(s)`,
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

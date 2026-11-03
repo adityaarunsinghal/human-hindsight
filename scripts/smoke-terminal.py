@@ -71,7 +71,15 @@ try:
     binary_dir.mkdir()
     marker = root / "unexpected-model-call"
     fake = binary_dir / "claude"
-    fake.write_text(f"#!/bin/sh\n: > '{marker}'\nexit 99\n")
+    fake.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  --help|--claude-help)\n"
+        "    printf '%s\\n' '--output-format --json-schema --tools --safe-mode --system-prompt --strict-mcp-config --mcp-config --settings --disable-slash-commands --no-chrome --no-session-persistence'\n"
+        "    exit 0 ;;\n"
+        "esac\n"
+        f": > '{marker}'\nexit 99\n"
+    )
     fake.chmod(0o755)
     environment = dict(os.environ)
     for key in [

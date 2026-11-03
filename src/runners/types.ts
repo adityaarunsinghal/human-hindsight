@@ -36,10 +36,12 @@ export interface RunOptions<T> {
 export interface Capabilities {
   /** Whether `--json-schema` is accepted (server-side structured output). */
   jsonSchema: boolean;
-  /** How to disable tool use: `--tools ""`, deny-list, or instruction-only. */
+  /** How to disable tool use; Claude requires the enforced `tools-empty` form. */
   disableTools: "tools-empty" | "disallowed" | "none";
   /** Whether Claude can avoid saving generated distillation sessions. */
   noSessionPersistence?: boolean;
+  /** All required Claude isolation flags were advertised by the installed CLI. */
+  isolation?: "safe-mode";
 }
 
 /** A pluggable agent runner. */
@@ -47,6 +49,8 @@ export interface AgentRunner {
   readonly name: SourceName;
   /** One-line install hint shown when the binary is missing. */
   readonly installHint: string;
+  /** Local capability checks only; never makes a model call. */
+  preflight?(): Promise<void>;
   /** Invoke one stage: prompt+schema in, validated object out. */
   run<T>(opts: RunOptions<T>): Promise<T>;
   /**

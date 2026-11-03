@@ -44,6 +44,18 @@ No data move or re-distillation is required. Data-directory precedence is:
 a fresh installation. If both directories exist, the new one wins; use
 `--home` to choose explicitly. Directories are never merged automatically.
 
+In 1.8.2, existing preferences remain visible as **candidates**. Open the
+Preferences tab, check the evidence and scope, then **Accept**, **Edit**, or
+**Dismiss** each candidate. **Accepted instructions** builds a block from
+accepted global rules, with an optional project selection. Task-only choices
+stay out of standing instruction files. Reviews are saved in your library and
+survive browser restarts.
+
+Re-running `distill` refreshes results whose source content, prompt version,
+runner/model selection, or grouping mode changed. Older checkpoints are refreshed
+once because they have no input fingerprints. Hand-edited prompts are preserved;
+`--force` explicitly allows replacing them.
+
 Updating the old npm package installs the small compatibility wrapper, so
 `npx cc-hindsight@latest gui` also works. Both global commands can coexist:
 the main package owns `human-hindsight`, and the wrapper owns `cc-hindsight`.
@@ -129,7 +141,8 @@ npx human-hindsight@latest copy <slug>         # → clipboard, paste into a fre
 npx human-hindsight@latest edit <slug>         # open in $EDITOR; your edits are protected
 npx human-hindsight@latest rate <slug> up      # record a verdict (up|down)
 npx human-hindsight@latest prune               # remove orphaned entries (asks first)
-npx human-hindsight@latest preferences         # → CLAUDE.md block
+npx human-hindsight@latest preferences         # accepted global rules → CLAUDE.md
+npx human-hindsight@latest preferences --project my-app # include this project's accepted rules
 npx human-hindsight@latest status              # pipeline funnel + orphan/skip flags
 npx human-hindsight@latest retention           # optional: preview longer local retention
 ```
@@ -160,10 +173,17 @@ making a model call; newly distilled sessions use hierarchical domain paths.
 lists, and code blocks. **Markdown** shows the original source. Copy always
 uses that original Markdown, including when the preview is selected.
 
-Each prompt links to its observed preferences; each preference shows its
-evidence and links back to the source prompts. You can bookmark either view
-and use your browser's Back and Forward buttons. **View all preferences**
-opens a combined Markdown block ready to copy into `CLAUDE.md` or `AGENTS.md`.
+Each prompt links to its preference candidates. Newly distilled candidates
+show exact human quotations, message references, and global/project/task scope;
+older observations are labeled for review. Candidates can come from failed or
+unfinished sessions too. You can bookmark either view and use your browser's
+Back and Forward buttons. **View all candidates** shows observations;
+**Accepted instructions** provides the reviewed block for `CLAUDE.md` or
+`AGENTS.md`. Changed source evidence returns a candidate to review.
+
+The terminal `preferences` command also exports accepted rules by default.
+Use `--include-unreviewed` explicitly to inspect draft observations in scripts.
+This flag does not accept them or change their review status.
 
 The tips bar starts with an open-source and privacy reminder, then rotates
 through quick tips with copyable `npx human-hindsight@latest` commands.
@@ -175,12 +195,17 @@ Interactive terminals get a colorful elapsed-time progress indicator during
 scanning, export, and model work; redirected output stays free of animation.
 
 Consolidation is optional: `npx human-hindsight@latest preferences --consolidate`
-uses one call through your own coding harness and its configured provider,
+uses your accepted rules in a call through your own coding harness and its configured provider,
 with consent and the subscription/credit cost explained first. Successful
 results are saved, with their Markdown and input metadata, in
 `<home>/library/preferences.consolidated.json`. Refresh the GUI to open
-**Saved consolidation**. It flags results whose observed preferences have
-changed. Failed or declined calls leave the last saved result intact.
+**Saved consolidation**. Every output rule links to its input preferences.
+Coverage, scope, explicit conditions, and direct contradictions are checked;
+invalid output gets one semantic correction attempt. Failed, empty, incomplete,
+or declined results leave the last saved result intact. Saved results are
+flagged when the selected inputs or their review status change. Legacy saved
+results remain readable and need regeneration before copying as reviewed
+instructions.
 
 The viewer uses a minimal black-and-white palette and system monospace fonts.
 Light and dark appearance follow your system setting. Local edits, ratings,
@@ -191,8 +216,11 @@ The GUI uses Node's built-in HTTP server and bundled HTML/CSS/JavaScript:
 no frontend framework, database, font download, or external assets.
 Markdown parsing and sanitization ship inside the bundle. Raw HTML stays
 inert and remote images are represented by their alt text, without fetching them.
-It listens only on `127.0.0.1`, serves a read-only library API, and stops with
-Ctrl+C. The GUI doesn't invoke an agent or modify your library.
+It listens only on `127.0.0.1` and stops with Ctrl+C. Browsing stays read-only.
+The single write action saves an explicit preference review to
+`library/preferences.review.json`; it requires the current browser session's
+token, matching origin, and a current candidate revision. The GUI never invokes
+an agent, edits source history, or writes an instruction file for you.
 
 ### Multiple backends (Claude Code + Codex + Kiro + OpenCode)
 
@@ -246,7 +274,13 @@ source defaults to `AGENTS.md`. The Codex runner uses `codex exec` with a JSON
 schema, a read-only sandbox, and ephemeral sessions; generated distill sessions
 do not become new source history. Claude supports current `structured_output`
 results as well as legacy `result` objects/strings and verbose event arrays.
-It disables session persistence when the installed CLI advertises the flag.
+The Claude runner requires current isolation controls, including `--safe-mode`.
+It runs from a private directory, disables tools, hooks, skills, and ambient
+MCP configuration, supplies a dedicated system instruction, and disables session
+persistence. Unsupported CLIs fail before any model call with an upgrade hint
+or the option to choose another runner. Updating Human Hindsight does not update
+Claude Code. Organization-managed policy remains authoritative; these controls
+do not override administrator policy or constitute an operating-system sandbox.
 
 ### OpenCode 1 and 2
 
@@ -352,7 +386,7 @@ product:
   in the repository's `package-lock.json`, which is not published. Bundled
   libraries include citty, Zod, Clack, smol-toml, jsonc-parser, Marked, and
   DOMPurify; their license texts ship in `dist/THIRD_PARTY_NOTICES.txt`.
-- **Consent-gated LLM use.** `distill` states the exact invocation count and
+- **Consent-gated LLM use.** `distill` states its estimated invocation count and
   waits for `[y/N]` before anything runs on your subscription/credits.
   `--dry-run` shows the full plan for free. If you decline, it exits without
   invoking anything (exit code 2).
@@ -431,10 +465,11 @@ chosen local agent CLI to its configured provider, using its authentication.
 
 **What does distill cost?**
 Whatever your chosen agent CLI costs you: it runs on your existing subscription or
-API credits. The consent prompt states the exact invocation count up front
+API credits. The consent prompt estimates the invocation count up front
 (one call per session digested, one to cluster, one per task authored), and
 `--dry-run` prints the same plan without running anything. Checkpoints mean an
-interrupted run isn't wasted money. Sessions too large for the input budget
+interrupted run can reuse completed work. Retries and windowed grouping may add
+calls. Sessions too large for the input budget
 (default 400k chars, `--input-budget`) are **refused before anything is
 spent**. Re-run with `--truncate=extreme` to cut them (recorded in
 provenance) or narrow the scope. Digest and author calls run 3 at a time by

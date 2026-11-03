@@ -245,11 +245,12 @@ describe("runClusterStage", () => {
 
   it("resumes from a matching checkpoint without calling the runner", async () => {
     const home = tmpHome();
-    saveTasks(home, {
+    await runClusterStage({
+      home,
+      digests: DIGESTS,
       generation: "g1",
-      prompt_version: 1,
-      tasks: VALID.tasks,
-      misc: VALID.misc,
+      runner: (async () => VALID) as RunnerFn,
+      output: sink(),
     });
     const runner: RunnerFn = (async () => {
       throw new Error("must not be called");
@@ -263,6 +264,103 @@ describe("runClusterStage", () => {
     });
     expect(result.resumed).toBe(true);
     expect(result.tasks).toEqual(VALID.tasks);
+  });
+
+  it("regenerates legacy grouping with no verified input fingerprint", async () => {
+    const home = tmpHome();
+    saveTasks(home, {
+      generation: "g1",
+      prompt_version: 1,
+      tasks: VALID.tasks,
+      misc: VALID.misc,
+    });
+    let calls = 0;
+    const result = await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      runner: (async () => {
+        calls++;
+        return VALID;
+      }) as RunnerFn,
+      output: sink(),
+    });
+    expect(calls).toBe(1);
+    expect(result.resumed).toBe(false);
+    expect(loadTasks(home)?.lineage?.version).toBe(1);
+  });
+
+  it("honors switching --no-group on and off for an unchanged session set", async () => {
+    const home = tmpHome();
+    let calls = 0;
+    const opts = {
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      runner: (async () => {
+        calls++;
+        return VALID;
+      }) as RunnerFn,
+      output: sink(),
+    };
+    await runClusterStage(opts);
+    const ungrouped = await runClusterStage({ ...opts, noGroup: true });
+    expect(ungrouped.resumed).toBe(false);
+    expect(ungrouped.tasks).toHaveLength(Object.keys(DIGESTS).length);
+    expect(calls).toBe(1);
+    const grouped = await runClusterStage(opts);
+    expect(grouped.resumed).toBe(false);
+    expect(grouped.tasks).toEqual(VALID.tasks);
+    expect(calls).toBe(2);
+  });
+
+  it("regenerates when digest contents change under the same IDs", async () => {
+    const home = tmpHome();
+    let calls = 0;
+    const opts = {
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      runner: (async () => {
+        calls++;
+        return VALID;
+      }) as RunnerFn,
+      output: sink(),
+    };
+    await runClusterStage(opts);
+    const changed = DIGESTS["webapp-a1.md"];
+    if (!changed) throw new Error("Missing test digest.");
+    const result = await runClusterStage({
+      ...opts,
+      digests: {
+        ...DIGESTS,
+        "webapp-a1.md": { ...changed, goal: "The task has changed." },
+      },
+    });
+    expect(result.resumed).toBe(false);
+    expect(calls).toBe(2);
+  });
+
+  it("does not regenerate when only digest object key ordering changes", async () => {
+    const home = tmpHome();
+    let calls = 0;
+    const opts = {
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      runner: (async () => {
+        calls++;
+        return VALID;
+      }) as RunnerFn,
+      output: sink(),
+    };
+    await runClusterStage(opts);
+    const result = await runClusterStage({
+      ...opts,
+      digests: Object.fromEntries(Object.entries(DIGESTS).reverse()),
+    });
+    expect(result.resumed).toBe(true);
+    expect(calls).toBe(1);
   });
 
   it("re-clusters when the generation matches but the input set changed", async () => {

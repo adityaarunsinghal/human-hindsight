@@ -47,8 +47,10 @@ untested.
 - **Keep the GUI small and local.** Use the bundled vanilla assets and Node's
   built-in server. Markdown is parsed with Marked and sanitized with DOMPurify
   before inserting a DOM fragment. Raw HTML is escaped and images never fetch
-  remote content. Always copy the source Markdown. Do not expose filesystem
-  or mutation endpoints. Check dropdowns in
+  remote content. Always copy the source Markdown. Do not expose arbitrary
+  filesystem or execution endpoints. The only mutation route saves an explicit
+  preference review: require same-origin JSON, the server's session token, a
+  known candidate, a current revision, and bounded input. Check dropdowns in
   a real browser at narrow widths in both themes: one centered 12 × 8 px
   chevron, a 12 px right inset, and 36 px reserved right padding.
 - **Follow-ups require a terminal and an explicit y.** Keep source/path/model
@@ -152,6 +154,23 @@ contract (the t=0 test, the effort budget, never-copy-AI-prose) is pinned by
 `test/author.test.ts`. If you change the prompt, update the contract tests
 deliberately in the same PR and bump the stage's `*_PROMPT_VERSION` constant so
 provenance in `sources.json` stays honest.
+
+`test/fixtures/prompt-evals` contains synthetic behavioral cases with acceptable
+outputs and deliberate counterexamples. They check intent preservation, rejected
+and conditional plans, discovered facts, scope, source evidence, and concise
+wording. They supplement the prompt-contract tests; passing a string assertion
+alone does not demonstrate useful model behavior.
+
+```bash
+node scripts/eval-prompts.mjs                     # list cases; no model call
+node scripts/eval-prompts.mjs --live --runner claude --case reject-deployment --out /tmp/hindsight-eval.json
+node scripts/eval-prompts.mjs --score /tmp/hindsight-eval.json  # offline scoring
+```
+
+Live evaluation is explicitly consented and records the model request, prompt
+versions, inputs, outputs, and check results. Compare the same cases before and
+after changing wording. The checks are transparent, limited criteria rather
+than a general claim of semantic equivalence.
 
 ## Release checklist (maintainers)
 

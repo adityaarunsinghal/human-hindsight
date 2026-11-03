@@ -22,6 +22,7 @@ interface BrowseItem {
 }
 
 const ALL = "all";
+const ACCEPTED = "accepted";
 const SAVED = "consolidated";
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const search = byId<HTMLInputElement>("search");
@@ -46,7 +47,9 @@ const list = byId("list");
 const copy = byId<HTMLButtonElement>("copy");
 const refresh = byId<HTMLButtonElement>("refresh");
 const allPreferences = byId<HTMLButtonElement>("all-preferences");
+const acceptedPreferences = byId<HTMLButtonElement>("accepted-preferences");
 const savedPreferences = byId<HTMLButtonElement>("saved-preferences");
+const instructionProject = byId<HTMLSelectElement>("instruction-project");
 const body = byId("body");
 const source = byId<HTMLTextAreaElement>("source");
 const previewButton = byId<HTMLButtonElement>("preview-mode");
@@ -64,6 +67,12 @@ let promptItems: BrowseItem[] = [];
 let preferenceItems: BrowseItem[] = [];
 let preferences: GuiPreference[] = [];
 let preferencesMarkdown = "";
+let acceptedMarkdown = "";
+let projectInstructions: GuiSnapshot["projectInstructions"] = [];
+let acceptedCount = 0;
+let reviewToken = "";
+let reviewsInvalid = false;
+let reviewBusy = false;
 let consolidation: GuiSnapshot["consolidation"] = null;
 let consolidationInvalid = false;
 let commands: GuiSnapshot["commands"] | null = null;
@@ -98,6 +107,26 @@ function items() {
   return tab === "prompts" ? promptItems : preferenceItems;
 }
 function currentItem(): BrowseItem | undefined {
+  if (tab === "preferences" && states[tab].selected === ACCEPTED) {
+    const markdown = instructionProject.value
+      ? (projectInstructions.find((entry) => entry.project === instructionProject.value)
+          ?.markdown ?? "")
+      : acceptedMarkdown;
+    return {
+      id: ACCEPTED,
+      title: "Accepted instructions",
+      body: markdown,
+      preview: markdown
+        ? markdown
+            .replace(/^<!-- human-hindsight preferences[^\n]*-->\n?/gm, "")
+            .replace(/^<!-- (?:stated|observed) in \d+[^\n]*-->\n?/gm, "")
+            .trim()
+        : "Accept preferences from the list to build your instruction block.",
+      domains: [],
+      authoredAt: "",
+      searchText: "",
+    };
+  }
   if (tab === "preferences" && states[tab].selected === SAVED && consolidation) {
     return {
       id: SAVED,
@@ -112,7 +141,7 @@ function currentItem(): BrowseItem | undefined {
   if (tab === "preferences" && states[tab].selected === ALL && preferences.length) {
     return {
       id: ALL,
-      title: "Working preferences",
+      title: "Preference candidates",
       body: preferencesMarkdown,
       // Generated provenance and frequency comments stay in the copyable source.
       preview: preferences.map((preference) => `- ${preference.text}`).join("\n"),
@@ -223,6 +252,9 @@ function syncControls() {
   syncDomainControls();
   allPreferences.hidden = !isPreferences;
   allPreferences.disabled = !preferences.length;
+  allPreferences.textContent = "View all candidates";
+  acceptedPreferences.hidden = !isPreferences;
+  acceptedPreferences.textContent = `Accepted instructions · ${acceptedCount}`;
   savedPreferences.hidden = !isPreferences || !consolidation;
   savedPreferences.textContent = consolidation?.stale
     ? "Saved consolidation · outdated"
@@ -280,11 +312,26 @@ function renderRelated(item: BrowseItem | undefined) {
   const related = byId("related");
   const relatedList = byId("related-list");
   relatedList.replaceChildren();
-  if (item?.prompt || item?.id === SAVED) {
-    byId("related-title").textContent = item.prompt
-      ? "Preferences from this prompt"
-      : "Original observed preferences";
-    for (const id of item.prompt?.preferenceIds ?? consolidation?.sourcePreferenceIds ?? []) {
+  if (item?.id === SAVED && consolidation) {
+    byId("related-title").textContent = "Evidence for each consolidated instruction";
+    for (const instruction of consolidation.items) {
+      const row = document.createElement("li");
+      row.append(textElement("strong", plainText(instruction.text)));
+      for (const id of instruction.sourceIds) {
+        const preference = preferences.find((value) => value.id === id);
+        if (!preference) continue;
+        const line = document.createElement("div");
+        line.append(relatedLink("preferences", id, plainText(preference.review.text)));
+        row.append(line);
+      }
+      if (!instruction.sourceIds.length) {
+        row.append(textElement("span", "Legacy result without per-rule source mapping.", "muted"));
+      }
+      relatedList.append(row);
+    }
+  } else if (item?.prompt) {
+    byId("related-title").textContent = "Preferences from this prompt";
+    for (const id of item.prompt.preferenceIds) {
       const preference = preferences.find((value) => value.id === id);
       if (!preference) continue;
       const row = document.createElement("li");
@@ -295,7 +342,7 @@ function renderRelated(item: BrowseItem | undefined) {
       relatedList.append(row);
     }
   } else if (item?.preference) {
-    byId("related-title").textContent = "Source prompts";
+    byId("related-title").textContent = "Source evidence";
     item.preference.occurrences.forEach((occurrence, index) => {
       const row = document.createElement("li");
       row.append(
@@ -303,9 +350,20 @@ function renderRelated(item: BrowseItem | undefined) {
           ? relatedLink("prompts", occurrence.slug, occurrence.title)
           : textElement("span", occurrence.title),
       );
-      if (!occurrence.available)
+      if (!occurrence.available && !occurrence.exportName)
         row.append(textElement("span", "Prompt file unavailable", "muted"));
-      if (occurrence.evidence.trim()) {
+      if (occurrence.quote) {
+        row.append(
+          textElement(
+            "span",
+            [occurrence.messageId, dateLabel(occurrence.timestamp ?? "")]
+              .filter(Boolean)
+              .join(" · "),
+            "muted",
+          ),
+          textElement("blockquote", occurrence.quote, "evidence source-quote"),
+        );
+      } else if (occurrence.evidence.trim()) {
         const evidence = document.createElement("div");
         evidence.className = "evidence markdown";
         evidence.append(renderMarkdown(occurrence.evidence, `evidence-${index}`));
@@ -321,23 +379,66 @@ function copyLabel() {
     ? "Copy prompt"
     : states.preferences.selected === SAVED
       ? "Copy consolidated"
-      : states.preferences.selected === ALL
-        ? "Copy all preferences"
-        : "Copy preference";
+      : states.preferences.selected === ACCEPTED
+        ? "Copy instructions"
+        : states.preferences.selected === ALL
+          ? "Review candidates first"
+          : "Copy preference";
+}
+function canCopy(item = currentItem()) {
+  if (!item?.body || reviewBusy) return false;
+  if (item.preference) return item.preference.review.status === "accepted";
+  if (item.id === ALL) return false;
+  if (item.id === SAVED) return consolidation?.reviewed === true && !consolidation.stale;
+  return true;
+}
+function renderReview(item: BrowseItem | undefined) {
+  const preference = item?.preference;
+  byId("preference-review").hidden = !preference;
+  byId("instruction-settings").hidden = item?.id !== ACCEPTED;
+  byId("preference-editor").hidden = true;
+  byId("review-status").textContent = "";
+  if (!preference) return;
+  const review = preference.review;
+  const scope =
+    review.scope === "global"
+      ? "Every project"
+      : review.scope === "project"
+        ? `Project: ${review.project || "choose a project"}`
+        : "This task only";
+  byId("review-summary").textContent = [
+    review.stale ? "Evidence changed; review again." : `${review.status}.`,
+    `${scope}.`,
+    preference.verified
+      ? `${preference.basis === "explicit" ? "Explicit instruction" : "Inferred preference"}; original quotation below.`
+      : "Legacy observation; check its evidence before accepting.",
+    reviewsInvalid ? "Saved reviews could not be read." : "",
+  ].join(" ");
+  const accept = byId<HTMLButtonElement>("accept-preference");
+  accept.disabled = reviewBusy || reviewsInvalid || review.status === "accepted";
+  accept.textContent = review.status === "accepted" ? "Accepted" : "Accept";
+  byId<HTMLButtonElement>("dismiss-preference").disabled =
+    reviewBusy || reviewsInvalid || review.status === "dismissed";
+  byId<HTMLButtonElement>("edit-preference").disabled = reviewBusy || reviewsInvalid;
+  const reset = byId<HTMLButtonElement>("reset-preference");
+  reset.hidden = review.status === "pending" && !review.stale;
+  reset.disabled = reviewBusy || reviewsInvalid;
 }
 function renderDetail() {
   selectionVersion++;
   const item = currentItem();
   clearTimeout(copyTimer);
   copy.textContent = copyLabel();
-  copy.disabled = !item?.body;
+  copy.disabled = !canCopy(item);
   previewButton.disabled = sourceButton.disabled = !item;
   byId("copy-status").textContent = "";
   const metadata = byId("metadata");
   metadata.replaceChildren();
   byId("title").textContent = item
     ? item.preference
-      ? "Working preference"
+      ? item.preference.review.status === "accepted"
+        ? "Accepted preference"
+        : "Preference candidate"
       : item.title
     : items().length
       ? `No matching ${tab}`
@@ -361,6 +462,10 @@ function renderDetail() {
     "aria-current",
     String(tab === "preferences" && states.preferences.selected === SAVED),
   );
+  acceptedPreferences.setAttribute(
+    "aria-current",
+    String(tab === "preferences" && states.preferences.selected === ACCEPTED),
+  );
   const consolidationNotice = byId("consolidation-notice");
   consolidationNotice.hidden = true;
   if (tab === "preferences" && consolidationInvalid) {
@@ -369,7 +474,15 @@ function renderDetail() {
     consolidationNotice.hidden = false;
   } else if (item?.id === SAVED && consolidation?.stale) {
     consolidationNotice.textContent =
-      "Your observed preferences have changed since this result was saved. You can still copy it, or optionally run consolidation again using your agent subscription or credits.";
+      "The source preferences or their review status have changed. Review the current candidates and run consolidation again before copying this result as instructions.";
+    consolidationNotice.hidden = false;
+  } else if (item?.id === SAVED && !consolidation?.reviewed) {
+    consolidationNotice.textContent =
+      "This saved result has not been traced to accepted preferences. Review the candidates and run consolidation again to create an instruction block.";
+    consolidationNotice.hidden = false;
+  } else if (item?.id === ALL) {
+    consolidationNotice.textContent =
+      "These are suggestions from your history. Open a candidate to check the evidence, choose its scope, and accept, edit, or dismiss it. Accepted instructions are available as a separate block.";
     consolidationNotice.hidden = false;
   }
   if (item) {
@@ -386,7 +499,15 @@ function renderDetail() {
       if (prompt.rating === "up") details.push("Liked");
       if (prompt.rating === "down") details.push("Disliked");
     } else if (item.preference) {
-      details.push(`Stated in ${taskCount(item.preference.count)}`, dateLabel(item.authoredAt));
+      details.push(
+        `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
+        dateLabel(item.authoredAt),
+      );
+    } else if (item.id === ACCEPTED) {
+      details.push(
+        instructionProject.value ? `Project: ${instructionProject.value}` : "Global preferences",
+        "Only accepted instructions",
+      );
     } else if (item.id === SAVED && consolidation) {
       details.push(
         `${consolidation.texts.length} consolidated preferences`,
@@ -398,11 +519,12 @@ function renderDetail() {
       details.push(
         `${preferences.length} ${preferences.length === 1 ? "preference" : "preferences"}`,
         `${recurring} recurring`,
-        "Ready to paste into CLAUDE.md or AGENTS.md",
+        "Review before adding to CLAUDE.md or AGENTS.md",
       );
     }
     metadata.append(textElement("span", details.filter(Boolean).join(" · ")));
   }
+  renderReview(item);
   renderRelated(item);
   byId("viewer").scrollTop = 0;
 }
@@ -443,13 +565,17 @@ function render(historyMode: "push" | "replace" = "replace") {
     state.selected === SAVED &&
     terms.length === 0 &&
     !state.domain;
-  state.selected = saved
-    ? SAVED
-    : overview
-      ? ALL
-      : visible.some((item) => item.id === state.selected)
-        ? state.selected
-        : visible[0]?.id || "";
+  const accepted =
+    tab === "preferences" && state.selected === ACCEPTED && terms.length === 0 && !state.domain;
+  state.selected = accepted
+    ? ACCEPTED
+    : saved
+      ? SAVED
+      : overview
+        ? ALL
+        : visible.some((item) => item.id === state.selected)
+          ? state.selected
+          : visible[0]?.id || "";
   list.replaceChildren(
     ...visible.map((item) => {
       const button = textElement(
@@ -461,7 +587,13 @@ function render(historyMode: "push" | "replace" = "replace") {
       button.dataset.id = item.id;
       button.setAttribute("aria-current", String(item.id === state.selected));
       const details = [
-        ...(item.preference ? [taskCount(item.preference.count)] : []),
+        ...(item.preference
+          ? [
+              item.preference.review.status,
+              item.preference.review.scope,
+              `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
+            ]
+          : []),
         item.domains.join(", "),
         dateLabel(item.authoredAt),
       ];
@@ -486,13 +618,16 @@ function render(historyMode: "push" | "replace" = "replace") {
   }
   renderedHash = location.hash;
 }
-async function load() {
+async function load(snapshot?: GuiSnapshot): Promise<boolean> {
   refresh.disabled = true;
   byId("notice").hidden = true;
   try {
-    const response = await fetch("/api/library", { cache: "no-store" });
-    if (!response.ok) throw new Error("Library unavailable");
-    const data = (await response.json()) as GuiSnapshot;
+    let data = snapshot;
+    if (!data) {
+      const response = await fetch("/api/library", { cache: "no-store" });
+      if (!response.ok) throw new Error("Library unavailable");
+      data = (await response.json()) as GuiSnapshot;
+    }
     if (!Array.isArray(data.entries) || !Array.isArray(data.preferences))
       throw new Error("Invalid library response");
     promptItems = data.entries.map((entry) => ({
@@ -514,17 +649,42 @@ async function load() {
     }));
     preferences = data.preferences;
     preferencesMarkdown = data.preferencesMarkdown;
+    acceptedMarkdown = data.acceptedMarkdown;
+    projectInstructions = data.projectInstructions;
+    acceptedCount = data.acceptedCount;
+    reviewToken = data.reviewToken;
+    reviewsInvalid = data.reviewsInvalid;
+    const selectedProject = instructionProject.value;
+    instructionProject.replaceChildren(
+      ...[
+        { project: "", label: "Global preferences only" },
+        ...projectInstructions.map(({ project }) => ({ project, label: project })),
+      ].map(({ project, label }) => {
+        const option = textElement("option", label) as HTMLOptionElement;
+        option.value = project;
+        return option;
+      }),
+    );
+    instructionProject.value = projectInstructions.some(
+      (entry) => entry.project === selectedProject,
+    )
+      ? selectedProject
+      : "";
+    instructionProject.title = instructionProject.selectedOptions[0]?.textContent ?? "";
     consolidation = data.consolidation;
     consolidationInvalid = data.consolidationInvalid;
     commands = data.commands;
     preferenceItems = preferences.map((preference) => ({
       id: preference.id,
-      title: plainText(preference.text),
-      body: `- ${preference.text}`,
+      title: plainText(preference.review.text),
+      body: `- ${preference.review.text}`,
       domains: preference.domains,
       authoredAt: preference.lastAuthoredAt,
       searchText: [
         preference.text,
+        preference.review.text,
+        preference.review.scope,
+        preference.review.status,
         ...preference.domains,
         ...preference.domains.flatMap(domainPath),
         ...preference.occurrences.flatMap((occurrence) => [
@@ -543,18 +703,20 @@ async function load() {
     byId("skipped").textContent =
       `${data.skipped} prompt file(s) could not be read. Run human-hindsight status for details.`;
     render();
+    return true;
   } catch {
     byId("notice").textContent =
       "Couldn't load the library. Check that the server is still running, then refresh.";
     byId("notice").hidden = false;
     if (!items().length) byId("count").textContent = "Library unavailable";
+    return false;
   } finally {
     refresh.disabled = false;
   }
 }
 copy.addEventListener("click", async () => {
   const item = currentItem();
-  if (!item?.body) return;
+  if (!item || !canCopy(item)) return;
   const version = selectionVersion;
   copy.disabled = true;
   try {
@@ -573,7 +735,7 @@ copy.addEventListener("click", async () => {
     byId("copy-status").textContent =
       `Markdown selected. Press ${/Mac/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} to copy.`;
   } finally {
-    if (version === selectionVersion) copy.disabled = !currentItem()?.body;
+    if (version === selectionVersion) copy.disabled = !canCopy();
   }
 });
 function switchTab(next: Tab) {
@@ -616,9 +778,115 @@ for (const [level, select] of domainSelects.entries()) {
   });
 }
 sort.addEventListener("change", filterChanged);
-refresh.addEventListener("click", load);
+refresh.addEventListener("click", () => load());
 allPreferences.addEventListener("click", () => openItem("preferences", ALL, true));
+acceptedPreferences.addEventListener("click", () => openItem("preferences", ACCEPTED, true));
 savedPreferences.addEventListener("click", () => openItem("preferences", SAVED, true));
+instructionProject.addEventListener("change", () => {
+  instructionProject.title = instructionProject.selectedOptions[0]?.textContent ?? "";
+  renderDetail();
+});
+const preferenceText = byId<HTMLTextAreaElement>("preference-text");
+const preferenceScope = byId<HTMLSelectElement>("preference-scope");
+const preferenceProject = byId<HTMLInputElement>("preference-project");
+function updateProjectField() {
+  byId("preference-project-field").hidden = preferenceScope.value !== "project";
+  preferenceScope.title = preferenceScope.selectedOptions[0]?.textContent ?? "";
+}
+function editPreference() {
+  const preference = currentItem()?.preference;
+  if (!preference || reviewBusy) return;
+  preferenceText.value = preference.review.text;
+  preferenceScope.value = preference.review.scope;
+  preferenceProject.value = preference.review.project ?? "";
+  updateProjectField();
+  byId("preference-editor").hidden = false;
+  preferenceText.focus();
+}
+async function reviewPreference(status: GuiPreference["review"]["status"], edited = false) {
+  const preference = currentItem()?.preference;
+  if (!preference || reviewBusy || reviewsInvalid) return;
+  const scope = edited ? preferenceScope.value : preference.review.scope;
+  const project = edited ? preferenceProject.value.trim() : preference.review.project;
+  const text = edited ? preferenceText.value.trim() : preference.review.text;
+  if (status === "accepted" && (!text || (scope === "project" && !project))) {
+    if (!edited) editPreference();
+    byId("review-status").textContent = !text
+      ? "Write the instruction before accepting it."
+      : "Choose the project where this instruction applies.";
+    return;
+  }
+  const editorOpen = !byId("preference-editor").hidden;
+  reviewBusy = true;
+  copy.disabled = true;
+  for (const control of byId("preference-review").querySelectorAll<
+    HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+  >("button, input, select, textarea")) {
+    control.disabled = true;
+  }
+  byId("review-status").textContent = "Saving review…";
+  let failure = "";
+  try {
+    const response = await fetch("/api/preferences/review", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Hindsight-Token": reviewToken,
+      },
+      body: JSON.stringify({
+        id: preference.id,
+        revision: preference.review.revision,
+        status,
+        text,
+        scope,
+        ...(project ? { project } : {}),
+      }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    const snapshot = (await response.json()) as GuiSnapshot;
+    reviewBusy = false;
+    if (!(await load(snapshot))) {
+      throw new Error("The review was saved. Refresh the library to display its current state.");
+    }
+    if (currentItem()?.id === preference.id) {
+      byId("review-status").textContent =
+        status === "accepted"
+          ? scope === "task"
+            ? "Accepted for this task. It will stay out of standing instruction blocks."
+            : "Accepted. Open Accepted instructions to copy the reviewed block."
+          : status === "dismissed"
+            ? "Dismissed. This candidate will stay out of instruction blocks."
+            : "Returned to review.";
+    }
+  } catch (error) {
+    failure =
+      error instanceof Error ? error.message : "Could not save the review. Please try again.";
+  } finally {
+    reviewBusy = false;
+    for (const control of byId("preference-review").querySelectorAll<
+      HTMLButtonElement | HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement
+    >("button, input, select, textarea")) {
+      control.disabled = false;
+    }
+    if (currentItem()?.id === preference.id) {
+      const statusText = byId("review-status").textContent;
+      renderReview(currentItem());
+      if (failure) byId("preference-editor").hidden = !editorOpen;
+      byId("review-status").textContent = failure || statusText;
+    }
+    copy.disabled = !canCopy();
+  }
+}
+byId("accept-preference").addEventListener("click", () => reviewPreference("accepted"));
+byId("dismiss-preference").addEventListener("click", () => reviewPreference("dismissed"));
+byId("reset-preference").addEventListener("click", () => reviewPreference("pending"));
+byId("edit-preference").addEventListener("click", editPreference);
+byId("save-preference").addEventListener("click", () => reviewPreference("accepted", true));
+byId("cancel-preference").addEventListener("click", () => {
+  byId("preference-editor").hidden = true;
+  byId("edit-preference").focus();
+});
+preferenceScope.addEventListener("change", updateProjectField);
 byId("clear").addEventListener("click", () => {
   search.value = "";
   states[tab].domain = "";
@@ -685,7 +953,7 @@ function availableTips(): Tip[] {
     },
     {
       title: "Carry your preferences into the next session",
-      text: "Print a Markdown block for CLAUDE.md or AGENTS.md, or copy it from the Preferences tab.",
+      text: "Review candidates in Preferences, then copy Accepted instructions into CLAUDE.md or AGENTS.md.",
       cost: "No model call",
       command: commands?.preferences,
     },
@@ -715,7 +983,7 @@ function availableTips(): Tip[] {
     },
     {
       title: "Follow a preference back to its evidence",
-      text: "Open a preference to see its source prompts. Each prompt also links to the preferences observed in it.",
+      text: "Open a preference to check its original quotation and scope before accepting it. Legacy observations are labeled for review.",
     },
     {
       title: "The Markdown you see is the Markdown you copy",

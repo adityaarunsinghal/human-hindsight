@@ -9,15 +9,40 @@ import { z } from "zod";
  * the same schema. One definition, three uses: derivation, validation, types.
  */
 
-/** Stage 1 — digest: one structured summary per session. */
+export const PreferenceScopeSchema = z.enum(["global", "project", "task"]);
+export type PreferenceScope = z.infer<typeof PreferenceScopeSchema>;
+
+export const PreferenceCitationSchema = z.object({
+  message_id: z.string().min(1),
+  quote: z.string().trim().min(1),
+});
+export type PreferenceCitation = z.infer<typeof PreferenceCitationSchema>;
+
+/** A suggestion backed by human text. It is not an accepted standing instruction. */
+export const PreferenceCandidateSchema = z.object({
+  text: z.string().trim().min(1),
+  evidence: z.string().trim().min(1),
+  scope: PreferenceScopeSchema,
+  basis: z.enum(["explicit", "inferred"]),
+  citations: z.array(PreferenceCitationSchema).min(1),
+});
+export type PreferenceCandidate = z.infer<typeof PreferenceCandidateSchema>;
+
+/** Stage 1 — the optional field keeps older paid checkpoints readable. */
 export const DigestSchema = z.object({
   goal: z.string(),
   deliverable: z.string(),
   domain: z.string(),
   keywords: z.array(z.string()),
   outcome: z.enum(["completed", "partial", "abandoned", "unclear"]),
+  preferences: z.array(PreferenceCandidateSchema).optional(),
 });
 export type Digest = z.infer<typeof DigestSchema>;
+
+/** New model calls must explicitly return candidates, even when the list is empty. */
+export const DigestResponseSchema = DigestSchema.extend({
+  preferences: z.array(PreferenceCandidateSchema),
+});
 
 /** Stage 2 — cluster: sessions grouped into semantic tasks (many-to-one). */
 export const ClusterSchema = z.object({
@@ -89,15 +114,16 @@ export const AuthorSchema = z.object({
 export type Author = z.infer<typeof AuthorSchema>;
 export type Preference = Author["preferences"][number];
 
-/** `preferences --consolidate`: one call to merge semantic duplicates. */
+/** `preferences --consolidate`: source IDs make preservation verifiable. */
 export const ConsolidateSchema = z.object({
-  preferences: z.array(
-    z.object({
-      text: z.string(),
-      /** How many of the original lines this merged item covers. */
-      merged_from: z.number(),
-    }),
-  ),
+  preferences: z
+    .array(
+      z.object({
+        text: z.string().trim().min(1),
+        source_ids: z.array(z.string().min(1)).min(1),
+      }),
+    )
+    .min(1),
 });
 export type Consolidated = z.infer<typeof ConsolidateSchema>;
 
