@@ -15,6 +15,8 @@ import { exportFileName, renderExport } from "../core/render.js";
 import { readSession, SourceReadError } from "../sources/read.js";
 import { parseSourceMode, resolveSources } from "../sources/registry.js";
 import type { SourceName, TimelineEvent } from "../sources/types.js";
+import { terminalPrivacyReminder } from "../ui/privacy.js";
+import { type Progress, startProgress } from "../ui/progress.js";
 import { dim, hint } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { flowArgs, nextCommandText, offerNext } from "./next.js";
@@ -112,6 +114,15 @@ function projectMatches(shortName: string, filter: string): boolean {
 export function runExport(opts: ExportArgs): ExportStats {
   opts = flowArgs(opts);
   const out = opts.output ?? process.stdout;
+  const progress = startProgress(out, "Discovering session history");
+  try {
+    return exportWithProgress(opts, out, progress);
+  } finally {
+    progress.clear();
+  }
+}
+
+function exportWithProgress(opts: ExportArgs, out: Writable, progress: Progress): ExportStats {
   const write = (line = "") => out.write(`${line}\n`);
 
   const paths = resolvePaths(opts);
@@ -140,6 +151,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   const readErrorPaths: string[] = [];
   for (const source of sources) {
     try {
+      progress.update(`Discovering ${source.name} sessions`);
       // Entry counts are unused by export (content is read below); skip the count.
       for (const project of source.discover({ countEntries: false })) {
         // Apply the --project filter; count the sessions it excludes for reporting.
@@ -148,6 +160,7 @@ export function runExport(opts: ExportArgs): ExportStats {
           continue;
         }
         for (const session of project.sessions) {
+          progress.update(`Reading ${source.name} history · ${inputs.length + 1} sessions`);
           // Session-level classification (kiro: exclude subagent/automation
           // sessions). Claude classifies per-entry inside extract and has none.
           if (source.classify?.({ ...session, project: project.shortName }) === "automation") {
@@ -184,6 +197,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   // The pass is a single union over all backends: cross-source (timestamp,text)
   // collisions are exactly the fork-copy semantics dedupe already handles, and
   // in practice never occur across different tools.
+  progress.update(`Deduplicating ${inputs.length} sessions`);
   const corpus = buildCorpus(inputs);
 
   // Partition sessions by the min-messages threshold.
@@ -217,6 +231,7 @@ export function runExport(opts: ExportArgs): ExportStats {
   let shortTurnsWithDecision = 0;
   let outcomeSessions = 0;
   for (const session of eligible) {
+    progress.update(`Rendering ${writes.length + 1}/${eligible.length} sessions`);
     const file = exportFileName(session.project, session.sessionId, used);
     const origin = originOf.get(session.sourcePath) ?? "claude";
     writes.push({ file, content: renderExport(session) });
@@ -261,7 +276,8 @@ export function runExport(opts: ExportArgs): ExportStats {
   // Write to disk: mkdir -p (owner-only), per-session markdown, then the JSON
   // artifacts — all with owner-only permissions (they can contain secrets).
   mkdirPrivate(exportsDir);
-  for (const { file, content } of writes) {
+  for (const [index, { file, content }] of writes.entries()) {
+    progress.update(`Saving ${index + 1}/${writes.length} exports`);
     writeFilePrivate(path.join(exportsDir, file), content);
   }
   writeFilePrivate(
@@ -313,6 +329,7 @@ export function runExport(opts: ExportArgs): ExportStats {
     files,
   };
 
+  progress.clear();
   reportExport(write, opts, corpus, eligible, stats, minMessages, readErrorPaths, attached);
   return stats;
 }
@@ -464,6 +481,7 @@ export default defineCommand({
     verbose: { type: "boolean", description: "Report every dropped piece and dedupe drop" },
   },
   async run({ args }) {
+    console.log(`${dim(terminalPrivacyReminder(process.stdout))}\n`);
     const result = runExport(args as unknown as ExportArgs);
     if (result.exportedSessions > 0) await offerNext("distill", args, { hintPrinted: true });
   },

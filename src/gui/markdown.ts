@@ -17,7 +17,7 @@ const markdown = new Marked({
   },
 });
 
-export function renderMarkdown(source: string): DocumentFragment {
+export function renderMarkdown(source: string, idPrefix = "prompt"): DocumentFragment {
   const fragment = DOMPurify.sanitize(markdown.parse(source, { async: false }), {
     RETURN_DOM_FRAGMENT: true,
     ALLOWED_TAGS: [
@@ -64,7 +64,7 @@ export function renderMarkdown(source: string): DocumentFragment {
     let slug = base;
     for (let i = 2; headings.has(slug); i++) slug = `${base}-${i}`;
     headings.add(slug);
-    heading.id = `prompt-${slug}`;
+    heading.id = `${idPrefix}-${slug}`;
   }
   for (const link of fragment.querySelectorAll("a")) {
     const href = link.getAttribute("href") ?? "";
@@ -73,7 +73,7 @@ export function renderMarkdown(source: string): DocumentFragment {
         event.preventDefault();
         try {
           document
-            .getElementById(`prompt-${decodeURIComponent(href.slice(1))}`)
+            .getElementById(`${idPrefix}-${decodeURIComponent(href.slice(1))}`)
             ?.scrollIntoView({ block: "start" });
         } catch {
           /* An invalid fragment is just text. */

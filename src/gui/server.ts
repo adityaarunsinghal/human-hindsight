@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import http, { type Server } from "node:http";
+import path from "node:path";
+import {
+  preferencesFingerprint,
+  readConsolidatedPreferences,
+} from "../core/consolidated-preferences.js";
 import { oneshotHash, parseOneshot, readLibrary } from "../core/library.js";
+import { aggregatePreferences, normalizeKey, renderPreferencesBlock } from "../core/preferences.js";
 import { GUI_CSS, GUI_HTML, GUI_JS } from "./assets.js";
 
 export interface GuiEntry {
@@ -13,13 +19,46 @@ export interface GuiEntry {
   confidence: string;
   rating: "up" | "down" | null;
   edited: boolean;
+  preferenceIds: string[];
 }
 
-/** Expose only browsing data: source transcripts, config, and filesystem paths stay private. */
-function librarySnapshot(home: string): { entries: GuiEntry[]; skipped: number } {
+export interface GuiPreference {
+  id: string;
+  text: string;
+  count: number;
+  domains: string[];
+  lastAuthoredAt: string;
+  occurrences: {
+    slug: string;
+    title: string;
+    evidence: string;
+    available: boolean;
+  }[];
+}
+
+export interface GuiSnapshot {
+  entries: GuiEntry[];
+  preferences: GuiPreference[];
+  preferencesMarkdown: string;
+  consolidation: {
+    markdown: string;
+    texts: string[];
+    generatedAt: string;
+    sourcePreferenceIds: string[];
+    stale: boolean;
+  } | null;
+  consolidationInvalid: boolean;
+  commands: Record<"preferences" | "consolidate" | "export" | "distill" | "status", string>;
+  skipped: number;
+}
+
+/** Expose browsing data and commands for this home, without raw transcripts or source paths. */
+function librarySnapshot(home: string): GuiSnapshot {
+  const library = readLibrary(home);
+  const sources = new Map(library.map((entry) => [entry.slug, entry.sources]));
   const entries: GuiEntry[] = [];
   let skipped = 0;
-  for (const entry of readLibrary(home)) {
+  for (const entry of library) {
     try {
       const content = fs.readFileSync(entry.oneshotPath, "utf8");
       const { title, body } = parseOneshot(content);
@@ -34,12 +73,71 @@ function librarySnapshot(home: string): { entries: GuiEntry[]; skipped: number }
         confidence: source.confidence,
         rating: source.rating ?? null,
         edited: Boolean(source.oneshot_hash && source.oneshot_hash !== oneshotHash(content)),
+        preferenceIds: [],
       });
     } catch {
       skipped++;
     }
   }
-  return { entries, skipped };
+  const prompts = new Map(entries.map((entry) => [entry.slug, entry]));
+  const aggregated = aggregatePreferences(library);
+  const preferences = aggregated.map((preference): GuiPreference => {
+    // Normalized text keeps bookmarks stable when punctuation or casing changes.
+    const id = oneshotHash(normalizeKey(preference.text));
+    const domains = new Set<string>();
+    const occurrences = preference.occurrences.map(({ slug, evidence }) => {
+      const prompt = prompts.get(slug);
+      const source = sources.get(slug);
+      prompt?.preferenceIds.push(id);
+      for (const domain of source?.domains ?? []) domains.add(domain);
+      return {
+        slug,
+        title: prompt?.title || source?.title || slug,
+        evidence,
+        available: Boolean(prompt),
+      };
+    });
+    return {
+      id,
+      text: preference.text,
+      count: preference.count,
+      domains: [...domains].sort((a, b) => a.localeCompare(b)),
+      lastAuthoredAt: preference.lastAuthoredAt,
+      occurrences,
+    };
+  });
+  const { artifact, invalid } = readConsolidatedPreferences(home);
+  // Commands are copyable shell text, never executed by the browser or server.
+  const homeArg = `'${path.resolve(home).replaceAll("'", "'\\''")}'`;
+  const command = (name: string, flags = "") =>
+    `npx human-hindsight@latest ${name}${flags} --home ${homeArg}`;
+  return {
+    entries,
+    preferences,
+    preferencesMarkdown: aggregated.length
+      ? renderPreferencesBlock(aggregated, library.length)
+      : "",
+    consolidation: artifact
+      ? {
+          markdown: artifact.markdown,
+          texts: artifact.preferences.map((preference) => preference.text),
+          generatedAt: artifact.generated_at,
+          sourcePreferenceIds: artifact.source_preferences.map((preference) =>
+            oneshotHash(normalizeKey(preference.text)),
+          ),
+          stale: artifact.source_hash !== preferencesFingerprint(aggregated),
+        }
+      : null,
+    consolidationInvalid: invalid,
+    commands: {
+      preferences: command("preferences"),
+      consolidate: command("preferences", " --consolidate"),
+      export: command("export"),
+      distill: command("distill"),
+      status: command("status"),
+    },
+    skipped,
+  };
 }
 
 export interface GuiServer {

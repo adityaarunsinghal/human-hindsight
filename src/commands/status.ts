@@ -5,6 +5,7 @@ import { type LibraryIssue, readLibrary, readLibraryIssues } from "../core/libra
 import { loadDigests, loadTasks, summarizeOutcomes } from "../distill/pipeline.js";
 import { countOrphanHistories } from "../sources/kiro/discover.js";
 import { parseSourceMode, resolveSources, type SourceMode } from "../sources/registry.js";
+import { withSpinner } from "../ui/progress.js";
 import { bold, dim, green, hint, yellow } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import type { ManifestEntry } from "./distill.js";
@@ -218,7 +219,7 @@ export default defineCommand({
   async run({ args }) {
     const paths = resolvePaths(args);
     let next: NextCommand | undefined;
-    console.log(
+    const report = await withSpinner(process.stdout, "Reading library status", async () =>
       renderStatus({
         ...paths,
         source: parseSourceMode(args.source),
@@ -228,6 +229,7 @@ export default defineCommand({
         },
       }),
     );
+    console.log(report);
     if (next) await offerNext(next, args, { hintPrinted: true });
   },
 });

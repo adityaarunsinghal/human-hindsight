@@ -10,6 +10,10 @@ export default defineConfig({
   target: "node22",
   dts: true,
   clean: true,
+  // The registry package ships one compact runtime bundle; source and tests
+  // stay in the repository. Third-party licenses ship separately in dist/.
+  minify: true,
+  sourcemap: false,
   // package.json has "type": "module", so ESM output can use plain .js —
   // keeping the bin path ./dist/cli.js accurate.
   fixedExtension: false,
@@ -20,5 +24,5 @@ export default defineConfig({
       new URL("./node_modules/jsonc-parser/lib/esm/main.js", import.meta.url),
     ),
   },
-  outputOptions: { inlineDynamicImports: true },
+  outputOptions: { codeSplitting: false },
 });

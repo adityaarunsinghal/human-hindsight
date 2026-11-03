@@ -5,6 +5,7 @@ import { askYesNo } from "../claude/consent.js";
 import { DEFAULT_TIMEOUT_MS } from "../claude/runner.js";
 import { type Consolidated, ConsolidateSchema } from "../claude/schemas.js";
 import { resolveTimeoutMs } from "../core/budget.js";
+import { saveConsolidatedPreferences } from "../core/consolidated-preferences.js";
 import { readLibrary } from "../core/library.js";
 import {
   type AggregatedPreference,
@@ -76,7 +77,9 @@ export async function runPreferences(
   const target = resolveTarget(args.target, parseSourceMode(args.source));
 
   const { home } = resolvePaths(args);
-  const entries = readLibrary(home);
+  const entries = await withSpinner(out, "Reading library preferences", async () =>
+    readLibrary(home),
+  );
   if (entries.length === 0) {
     write("library is empty — nothing distilled yet.");
     write(hint("human-hindsight distill"));
@@ -145,7 +148,8 @@ export async function runPreferences(
   }
 
   const runner: RunnerFn = deps.runner ?? (resolved as NonNullable<typeof resolved>).run;
-  const { merged, block } = await runConsolidation({
+  const { merged, block, saved } = await runConsolidation({
+    home,
     prefs,
     taskCount: entries.length,
     target,
@@ -170,7 +174,7 @@ export async function runPreferences(
   // in both paths; finalize is idempotent-once-per-run and emits no output, so
   // moving it past the rendering keeps the byte stream identical.
   await resolved?.finalize?.();
-  return merged === null ? 1 : 0;
+  return merged === null || !saved ? 1 : 0;
 }
 
 /**
@@ -181,6 +185,7 @@ export async function runPreferences(
 export interface ConsolidationOutcome {
   merged: AggregatedPreference[] | null;
   block: string | null;
+  saved: boolean;
 }
 
 /**
@@ -197,6 +202,7 @@ export const CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS = 5_000;
  * success renders the merged block. Teardown stays with the caller.
  */
 export async function runConsolidation(opts: {
+  home: string;
   prefs: AggregatedPreference[];
   taskCount: number;
   target: PreferencesTarget;
@@ -235,7 +241,7 @@ export async function runConsolidation(opts: {
     write(dim("falling back to the unconsolidated block; retry with --model <model>."));
     write();
     write(renderPreferencesBlock(prefs, taskCount, target));
-    return { merged: null, block: null };
+    return { merged: null, block: null, saved: false };
   }
 
   const merged: AggregatedPreference[] = consolidated.preferences.map((p) => ({
@@ -244,12 +250,28 @@ export async function runConsolidation(opts: {
     occurrences: [],
     lastAuthoredAt: "",
   }));
-  const block = renderPreferencesBlock(merged, taskCount, target);
+  const now = new Date();
+  const block = renderPreferencesBlock(merged, taskCount, target, now);
   write();
   write(block);
   write();
   write(dim(`consolidated ${prefs.length} → ${merged.length} preference(s).`));
-  return { merged, block };
+  try {
+    const file = saveConsolidatedPreferences(opts.home, {
+      source: prefs,
+      consolidated,
+      taskCount,
+      target,
+      markdown: block,
+      now,
+    });
+    write(dim(`saved to ${file} — available in the GUI after Refresh.`));
+    return { merged, block, saved: true };
+  } catch (err) {
+    write(`Could not save consolidated preferences: ${err instanceof Error ? err.message : err}`);
+    write("The block above is still available to copy.");
+    return { merged, block, saved: false };
+  }
 }
 
 /**
@@ -363,7 +385,8 @@ export default defineCommand({
     },
     consolidate: {
       type: "boolean",
-      description: "Merge semantic duplicates with one runner call (consent-gated)",
+      description:
+        "Merge semantic duplicates with one runner call and save in the library (consent-gated)",
     },
     runner: {
       type: "string",

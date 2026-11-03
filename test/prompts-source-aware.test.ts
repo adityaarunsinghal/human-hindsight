@@ -27,7 +27,7 @@ const digest = (outcome: Digest["outcome"] = "completed"): Digest => ({
 
 describe("prompt versions were bumped with the source-aware copy change", () => {
   it("digest v4, cluster v5, author v5", () => {
-    expect(DIGEST_PROMPT_VERSION).toBe(4);
+    expect(DIGEST_PROMPT_VERSION).toBe(5);
     expect(CLUSTER_PROMPT_VERSION).toBe(5);
     expect(AUTHOR_PROMPT_VERSION).toBe(5);
   });

@@ -27,6 +27,8 @@ import type { AgentRunner } from "../runners/types.js";
 import { parseSourceMode, type SourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import { renderLibraryTable } from "../ui/library-table.js";
+import { terminalPrivacyReminder } from "../ui/privacy.js";
+import { withSpinner } from "../ui/progress.js";
 import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
@@ -193,6 +195,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   const confirm = deps.confirm ?? defaultConfirm;
   const out = deps.output ?? process.stdout;
   const write = (s = "") => out.write(`${s}\n`);
+  write(dim(terminalPrivacyReminder(out)));
+  write();
 
   const { home } = resolvePaths(args);
   const manifestPath = path.join(home, "exports", "manifest.json");
@@ -210,7 +214,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   let raw: string;
   try {
-    raw = fs.readFileSync(manifestPath, "utf8");
+    raw = await withSpinner(out, "Reading exported sessions", async () =>
+      fs.readFileSync(manifestPath, "utf8"),
+    );
   } catch {
     // No manifest yet. Offer to run export first (deterministic, local, no LLM)
     // so a first-time user can go from zero to a library in one command. Same
@@ -305,10 +311,12 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   let resolvedRunner: AgentRunner | null = null;
   if (!deps.runner) {
     try {
-      resolvedRunner = await resolveRunner(parseRunnerMode(args.runner), {
-        preferSource: sourceMode === "auto" ? undefined : sourceMode,
-        scratchBase: path.join(home, "runner-scratch"),
-      });
+      resolvedRunner = await withSpinner(out, "Finding your coding harness", () =>
+        resolveRunner(parseRunnerMode(args.runner), {
+          preferSource: sourceMode === "auto" ? undefined : sourceMode,
+          scratchBase: path.join(home, "runner-scratch"),
+        }),
+      );
     } catch (err) {
       write((err as Error).message);
       return 1;
@@ -327,7 +335,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   };
 
   // Consent-time (pre-spend) overflow estimate.
-  const oversized = computeOversized(home, plan.eligible, budget);
+  const oversized = await withSpinner(out, "Checking session sizes", async () =>
+    computeOversized(home, plan.eligible, budget),
+  );
 
   // Default (--truncate=never): refuse BEFORE spending anything if any session
   // exceeds the budget. Nothing is ever cut silently — the user chooses a flag.
@@ -662,6 +672,7 @@ async function offerPreferencesCascade(opts: {
 
   const target = resolveTarget(undefined, sourceMode);
   const { merged, block } = await runConsolidation({
+    home,
     prefs,
     taskCount: entries.length,
     target,

@@ -2,6 +2,7 @@ import { defineCommand } from "citty";
 import { countOrphanHistories } from "../sources/kiro/discover.js";
 import { parseSourceMode, resolveSources } from "../sources/registry.js";
 import type { ProjectInfo } from "../sources/types.js";
+import { startProgress } from "../ui/progress.js";
 import { cyan, dim, green, hint, table } from "../ui/style.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import { flowArgs, nextCommandText, offerNext } from "./next.js";
@@ -30,15 +31,23 @@ export function runScan(args: {
   const paths = resolvePaths(args);
   const { claudeDir, codexDir, kiroDir, opencodeDir } = paths;
   const mode = parseSourceMode(args.source);
-  const sources = resolveSources(mode, paths);
-  // Merge every active backend's projects. With a single active source (the
-  // common claude-only machine) this is exactly the old single-store list.
-  const projects: ProjectInfo[] = sources
-    .flatMap((s) => s.discover())
-    .filter(
-      (project) =>
-        !args.project || project.shortName.toLowerCase().includes(args.project.toLowerCase()),
-    );
+  const progress = startProgress(process.stdout, "Scanning agent history");
+  let projects: ProjectInfo[];
+  try {
+    const sources = resolveSources(mode, paths);
+    // Merge every active backend's projects, keeping discovery feedback visible.
+    projects = sources
+      .flatMap((source) => {
+        progress.update(`Scanning ${source.name} sessions`);
+        return source.discover();
+      })
+      .filter(
+        (project) =>
+          !args.project || project.shortName.toLowerCase().includes(args.project.toLowerCase()),
+      );
+  } finally {
+    progress.clear();
+  }
 
   if (projects.length === 0) {
     if (mode === "kiro") {
@@ -106,7 +115,8 @@ export function runScan(args: {
 }
 
 export async function runScanAndNext(args: Parameters<typeof runScan>[0]): Promise<void> {
-  if (runScan(args) > 0) await offerNext("export", args, { hintPrinted: true });
+  const count = runScan(args);
+  if (count > 0) await offerNext("export", args, { hintPrinted: true });
 }
 
 export default defineCommand({

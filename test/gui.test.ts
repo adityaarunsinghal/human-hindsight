@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import http from "node:http";
 import os from "node:os";
@@ -5,8 +6,13 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runGui } from "../src/commands/gui.js";
-import { oneshotHash } from "../src/core/library.js";
-import { type GuiServer, startGuiServer } from "../src/gui/server.js";
+import {
+  CONSOLIDATED_PREFERENCES_FILE,
+  saveConsolidatedPreferences,
+} from "../src/core/consolidated-preferences.js";
+import { oneshotHash, readLibrary } from "../src/core/library.js";
+import { aggregatePreferences } from "../src/core/preferences.js";
+import { type GuiServer, type GuiSnapshot, startGuiServer } from "../src/gui/server.js";
 
 let home: string;
 const servers: GuiServer[] = [];
@@ -114,7 +120,7 @@ describe("local GUI server", () => {
     const server = await start();
     const response = await request(server, "/api/library");
     expect(response.status).toBe(200);
-    expect(JSON.parse(response.text)).toEqual({
+    expect(JSON.parse(response.text)).toMatchObject({
       entries: [
         {
           slug: "example-task",
@@ -126,8 +132,11 @@ describe("local GUI server", () => {
           authoredAt: "2026-10-21T10:00:00Z",
           rating: "up",
           edited: false,
+          preferenceIds: [],
         },
       ],
+      preferences: [],
+      preferencesMarkdown: "",
       skipped: 0,
     });
     expect(response.text).not.toContain("private");
@@ -151,16 +160,313 @@ describe("local GUI server", () => {
 
   it("handles empty libraries and missing prompt files", async () => {
     const server = await start();
-    expect(JSON.parse((await request(server, "/api/library")).text)).toEqual({
+    expect(JSON.parse((await request(server, "/api/library")).text)).toMatchObject({
       entries: [],
+      preferences: [],
+      preferencesMarkdown: "",
       skipped: 0,
     });
     const file = prompt("missing-task", "Will be removed.");
     fs.unlinkSync(file);
-    expect(JSON.parse((await request(server, "/api/library")).text)).toEqual({
+    expect(JSON.parse((await request(server, "/api/library")).text)).toMatchObject({
       entries: [],
+      preferences: [],
+      preferencesMarkdown: "",
       skipped: 1,
     });
+  });
+
+  it("aggregates preferences with evidence, domains, and links in both directions", async () => {
+    prompt("older-task", "Older prompt.", {
+      title: "Old metadata title",
+      authored_at: "2026-10-20T10:00:00Z",
+      domains: ["documentation"],
+      preferences: [
+        { text: "Use focused tests.", evidence: "Cover the behavior." },
+        { text: "Use focused tests!", evidence: "Repeated in the same task." },
+        { text: "Keep documentation concise.", evidence: "Use short instructions." },
+      ],
+    });
+    const newer = prompt("newer-task", "Newer prompt.", {
+      domains: ["testing"],
+      preferences: [{ text: "use focused tests", evidence: "Test the **edge cases**." }],
+    });
+    fs.writeFileSync(newer, "# A locally edited title\n\nNewer prompt.");
+    const server = await start();
+    const response = await request(server, "/api/library");
+    const snapshot = JSON.parse(response.text) as GuiSnapshot;
+    expect(snapshot.preferences).toHaveLength(2);
+    const recurring = snapshot.preferences[0];
+    expect(recurring).toEqual({
+      id: expect.stringMatching(/^[a-f0-9]{64}$/),
+      text: "use focused tests",
+      count: 2,
+      domains: ["documentation", "testing"],
+      lastAuthoredAt: "2026-10-21T10:00:00Z",
+      occurrences: [
+        {
+          slug: "newer-task",
+          title: "A locally edited title",
+          evidence: "Test the **edge cases**.",
+          available: true,
+        },
+        {
+          slug: "older-task",
+          title: "Title of older-task",
+          evidence: "Cover the behavior.",
+          available: true,
+        },
+      ],
+    });
+    expect(snapshot.entries.find((entry) => entry.slug === "newer-task")?.preferenceIds).toEqual([
+      recurring?.id,
+    ]);
+    expect(snapshot.entries.find((entry) => entry.slug === "older-task")?.preferenceIds).toEqual(
+      snapshot.preferences.map((preference) => preference.id),
+    );
+    expect(snapshot.preferencesMarkdown).toContain("## Working preferences");
+    expect(snapshot.preferencesMarkdown).toContain("<!-- stated in 2 of 2 tasks -->");
+    expect(snapshot.preferencesMarkdown.match(/^- use focused tests$/gm)).toHaveLength(1);
+    expect(snapshot.preferencesMarkdown).toContain("- Keep documentation concise.");
+    expect(response.text).not.toContain("private");
+    expect(response.text).not.toContain("Old metadata title");
+    expect(response.text).not.toContain("Repeated in the same task.");
+  });
+
+  it("keeps preferences available when their source prompt file is missing", async () => {
+    const file = prompt("missing-source", "Removed prompt.", {
+      title: "Missing source title",
+      preferences: [{ text: "Keep useful evidence.", evidence: "An observed instruction." }],
+    });
+    fs.unlinkSync(file);
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(snapshot.entries).toEqual([]);
+    expect(snapshot.skipped).toBe(1);
+    expect(snapshot.preferences[0]).toMatchObject({
+      text: "Keep useful evidence.",
+      count: 1,
+      occurrences: [
+        {
+          slug: "missing-source",
+          title: "Missing source title",
+          evidence: "An observed instruction.",
+          available: false,
+        },
+      ],
+    });
+    expect(snapshot.preferencesMarkdown).toContain("- Keep useful evidence.");
+  });
+
+  it("keeps available and missing source evidence in one deduplicated preference", async () => {
+    prompt("available-source", "Still available.", {
+      domains: ["Software engineering > Backend > APIs > Pagination > Cursor"],
+      authored_at: "2026-10-22T12:00:00Z",
+      preferences: [
+        { text: "Keep contracts stable.", evidence: "Preserve existing callers." },
+        { text: "Keep contracts stable!", evidence: "Repeated within the same task." },
+      ],
+    });
+    const missing = prompt("missing-source", "Removed prompt.", {
+      domains: ["release engineering"],
+      authored_at: "2026-10-21T12:00:00Z",
+      preferences: [{ text: "keep contracts stable", evidence: "Do not break the release." }],
+    });
+    fs.unlinkSync(missing);
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(snapshot.entries).toHaveLength(1);
+    expect(snapshot.preferences).toHaveLength(1);
+    expect(snapshot.preferences[0]).toMatchObject({
+      text: "Keep contracts stable.",
+      count: 2,
+      domains: [
+        "release engineering",
+        "Software engineering > Backend > APIs > Pagination > Cursor",
+      ].sort((a, b) => a.localeCompare(b)),
+      occurrences: [
+        {
+          slug: "available-source",
+          available: true,
+          evidence: "Preserve existing callers.",
+        },
+        {
+          slug: "missing-source",
+          available: false,
+          evidence: "Do not break the release.",
+        },
+      ],
+    });
+    expect(snapshot.entries[0]?.preferenceIds).toEqual([snapshot.preferences[0]?.id]);
+    expect(snapshot.skipped).toBe(1);
+  });
+
+  it("refreshes preferences without invalidating bookmarks for equivalent wording", async () => {
+    const file = prompt("updated-task", "Prompt.", {
+      preferences: [{ text: "Use focused tests.", evidence: "Original evidence." }],
+    });
+    const server = await start();
+    const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    const metadataPath = path.join(path.dirname(file), "sources.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    metadata.preferences = [
+      { text: "USE focused tests!", evidence: "Updated **evidence**." },
+      { text: "Keep the layout readable.", evidence: "Check narrow screens." },
+    ];
+    const updated = JSON.stringify(metadata);
+    fs.writeFileSync(metadataPath, updated);
+    const after = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(after.preferences).toHaveLength(2);
+    const preference = after.preferences.find((item) => item.text === "USE focused tests!");
+    expect(preference?.id).toBe(before.preferences[0]?.id);
+    expect(preference?.occurrences[0]?.evidence).toBe("Updated **evidence**.");
+    expect(fs.readFileSync(metadataPath, "utf8")).toBe(updated);
+    expect(after.preferencesMarkdown).toContain("- Keep the layout readable.");
+  });
+
+  it("offers saved consolidation without a model call and flags changed inputs", async () => {
+    const file = prompt("source-task", "Prompt.", {
+      preferences: [{ text: "Keep answers short.", evidence: "Be concise." }],
+    });
+    const source = aggregatePreferences(readLibrary(home));
+    const markdown = "## Working preferences\n\n- Keep answers concise.";
+    const savedPath = saveConsolidatedPreferences(home, {
+      source,
+      consolidated: { preferences: [{ text: "Keep answers concise.", merged_from: 1 }] },
+      markdown,
+      taskCount: 1,
+      target: "agents",
+      now: new Date("2026-11-01T12:00:00Z"),
+    });
+    const saved = fs.readFileSync(savedPath, "utf8");
+    const server = await start();
+    const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(before.consolidation).toEqual({
+      markdown,
+      texts: ["Keep answers concise."],
+      generatedAt: "2026-11-01T12:00:00.000Z",
+      sourcePreferenceIds: before.preferences.map((preference) => preference.id),
+      stale: false,
+    });
+    const metadataPath = path.join(path.dirname(file), "sources.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    metadata.preferences.push({ text: "Use focused tests.", evidence: "Check edge cases." });
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+    const after = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(after.consolidation?.stale).toBe(true);
+    expect(after.consolidation?.markdown).toBe(markdown);
+    expect(fs.readFileSync(savedPath, "utf8")).toBe(saved);
+    fs.writeFileSync(savedPath, "invalid JSON");
+    const invalid = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(invalid.consolidation).toBeNull();
+    expect(invalid.consolidationInvalid).toBe(true);
+    expect(invalid.preferences).toHaveLength(2);
+  });
+
+  it("does not stale a saved result for title or evidence edits, but detects frequency changes", async () => {
+    const file = prompt("source-task", "Original prompt.", {
+      preferences: [{ text: "Keep answers short.", evidence: "Original evidence." }],
+    });
+    const savedPath = saveConsolidatedPreferences(home, {
+      source: aggregatePreferences(readLibrary(home)),
+      consolidated: { preferences: [{ text: "Keep answers concise.", merged_from: 1 }] },
+      markdown: "## Working preferences\n\n- Keep answers concise.",
+      taskCount: 1,
+      target: "agents",
+      now: new Date("2026-11-01T12:00:00Z"),
+    });
+    const saved = fs.readFileSync(savedPath, "utf8");
+    const metadataPath = path.join(path.dirname(file), "sources.json");
+    const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
+    metadata.preferences[0].evidence = "Edited **evidence**.";
+    metadata.authored_at = "2026-11-02T12:00:00Z";
+    fs.writeFileSync(metadataPath, JSON.stringify(metadata));
+    fs.writeFileSync(file, "# Edited prompt title\n\nEdited prompt body.");
+    const server = await start();
+    const edited = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(edited.consolidation?.stale).toBe(false);
+    expect(edited.preferences[0]?.occurrences[0]).toMatchObject({
+      title: "Edited prompt title",
+      evidence: "Edited **evidence**.",
+    });
+    prompt("another-source", "Another prompt.", {
+      preferences: [{ text: "Keep answers short.", evidence: "Again, be concise." }],
+    });
+    const repeated = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(repeated.preferences[0]?.count).toBe(2);
+    expect(repeated.consolidation?.stale).toBe(true);
+    expect(fs.readFileSync(savedPath, "utf8")).toBe(saved);
+  });
+
+  it("keeps a saved result readable after all original prompt entries are removed", async () => {
+    prompt("source-task", "Original prompt.", {
+      preferences: [{ text: "Keep answers short.", evidence: "Be concise." }],
+    });
+    const savedPath = saveConsolidatedPreferences(home, {
+      source: aggregatePreferences(readLibrary(home)),
+      consolidated: { preferences: [{ text: "Keep answers concise.", merged_from: 1 }] },
+      markdown: "Saved Markdown is still available.",
+      taskCount: 1,
+      target: "agents",
+      now: new Date("2026-11-01T12:00:00Z"),
+    });
+    fs.rmSync(path.join(home, "library", "source-task"), { recursive: true });
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(snapshot.entries).toEqual([]);
+    expect(snapshot.preferences).toEqual([]);
+    expect(snapshot.consolidation).toMatchObject({
+      markdown: "Saved Markdown is still available.",
+      stale: true,
+    });
+    expect(snapshot.consolidationInvalid).toBe(false);
+    expect(fs.existsSync(savedPath)).toBe(true);
+    const head = await request(server, "/api/library", { method: "HEAD" });
+    expect(head.status).toBe(200);
+    expect(head.text).toBe("");
+    expect(Number(head.headers["content-length"])).toBeGreaterThan(0);
+  });
+
+  it("provides npx command hints for the selected home with safe shell quoting", async () => {
+    const customHome = path.join(home, "a library's $(literal) path");
+    const server = await startGuiServer({ home: customHome });
+    servers.push(server);
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(snapshot.consolidation).toBeNull();
+    expect(snapshot.consolidationInvalid).toBe(false);
+    for (const command of Object.values(snapshot.commands)) {
+      expect(command).toMatch(/^npx human-hindsight@latest /);
+      expect(command).toContain("--home '");
+      expect(command).toContain("a library'\\''s $(literal) path'");
+      expect(command).not.toContain("--yes");
+    }
+    expect(snapshot.commands.consolidate).toContain("preferences --consolidate");
+    expect(fs.existsSync(path.join(customHome, "library", CONSOLIDATED_PREFERENCES_FILE))).toBe(
+      false,
+    );
+  });
+
+  it("copies special home paths as one literal shell argument", async () => {
+    const customHome = path.join(home, "quotes' $(printf expanded) `printf expanded`\nnext line");
+    const server = await startGuiServer({ home: customHome });
+    servers.push(server);
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    const parsed = execFileSync(
+      "/bin/sh",
+      ["-c", `set -- ${snapshot.commands.consolidate}; printf '%s\\0' "$@"`],
+      { encoding: "utf8" },
+    )
+      .split("\0")
+      .filter(Boolean);
+    expect(parsed).toEqual([
+      "npx",
+      "human-hindsight@latest",
+      "preferences",
+      "--consolidate",
+      "--home",
+      customHome,
+    ]);
+    expect(fs.existsSync(customHome)).toBe(false);
   });
 
   it("rejects cross-site origins, fetches, and rebinding hostnames", async () => {
