@@ -229,9 +229,14 @@ try {
   await call("Page.enable");
   await call("Runtime.enable");
   await call("Network.enable");
+  await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   await call("Page.addScriptToEvaluateOnNewDocument", {
-    source:
-      'Object.defineProperty(navigator, "clipboard", {configurable:true, value:{writeText:async(text)=>{window.__copied=text;}}});',
+    source: `Object.defineProperty(navigator, "clipboard", {configurable:true, value:{writeText:async(text)=>{window.__copied=text;}}});
+      const originalInterval = window.setInterval.bind(window);
+      window.setInterval = (callback, delay, ...args) => {
+        if (delay === 14000) window.__rotateTip = () => callback(...args);
+        return originalInterval(callback, delay, ...args);
+      };`,
   });
   await call("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-color-scheme", value: "light" }],
@@ -256,23 +261,10 @@ try {
     true,
   );
   await screenshot("desktop-privacy-tip");
-  await until(
-    () =>
-      evaluate(
-        'document.visibilityState === "visible" && !document.getElementById("tips").matches(":hover")',
-      ),
-    "visible, unhovered tips",
-  );
-  await until(
-    () => evaluate('document.getElementById("tip-number").textContent !== "Tip 1/10"'),
-    "automatic tip rotation",
-    20_000,
-  );
-  assert.notEqual(
-    await evaluate('document.getElementById("tip-number").textContent'),
-    "Tip 1/10",
-    "the privacy tip should rotate to a different quick tip",
-  );
+  // Advance the registered timer callback deterministically, with focus outside
+  // the bar. Native window activation and wall-clock timing are not the feature.
+  await evaluate('document.getElementById("title").focus(); window.__rotateTip()');
+  assert.notEqual(await evaluate('document.getElementById("tip-number").textContent'), "Tip 1/10");
   await evaluate(`(() => {
     for (let index = 0; index < 10 && document.getElementById("tip-number").textContent !== "Tip 1/10"; index++)
       document.getElementById("previous-tip").click();
@@ -301,6 +293,9 @@ try {
     await evaluate('document.getElementById("pause-tips").getAttribute("aria-pressed")'),
     "true",
   );
+  const pausedTip = await evaluate('document.getElementById("tip-number").textContent');
+  await evaluate('document.getElementById("title").focus(); window.__rotateTip()');
+  assert.equal(await evaluate('document.getElementById("tip-number").textContent'), pausedTip);
   await evaluate('document.getElementById("hide-tips").click()');
   assert.equal(await evaluate('document.getElementById("tips").hidden'), true);
   assert.equal(await evaluate('document.getElementById("show-tips").hidden'), false);
@@ -667,6 +662,10 @@ try {
             code: "Escape",
             windowsVirtualKeyCode: 27,
           });
+          // macOS native menus can consume Escape outside the renderer. Disable
+          // only during teardown so the next control gets its own fresh popup.
+          await evaluate(`document.getElementById(${JSON.stringify(item.id)}).disabled = true`);
+          await settle();
           if (process.env.GUI_HEADED === "1") {
             await until(
               () => evaluate('!document.querySelector("select:open")'),
@@ -674,6 +673,7 @@ try {
               3000,
             );
           }
+          await evaluate(`document.getElementById(${JSON.stringify(item.id)}).disabled = false`);
           await delay(120);
         }
       }
