@@ -40,6 +40,8 @@ jobs:
         run: node scripts/smoke-install.mjs
       - name: Verify interactive workflow handoffs
         run: python3 scripts/smoke-flow.py
+      - name: Verify immediate terminal progress and privacy reminders
+        run: python3 scripts/smoke-terminal.py
       - name: Verify Markdown and monochrome GUI in Chrome
         if: runner.os == 'Linux'
         run: node scripts/smoke-gui.mjs

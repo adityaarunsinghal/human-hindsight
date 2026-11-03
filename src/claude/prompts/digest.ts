@@ -18,7 +18,7 @@ import type { SourceName } from "../../sources/types.js";
  * `DIGEST_PROMPT_VERSION` is recorded in provenance downstream and MUST be
  * bumped on any meaningful change to the prompt text.
  */
-export const DIGEST_PROMPT_VERSION = 4;
+export const DIGEST_PROMPT_VERSION = 5;
 
 /** Human-facing name of a session's source backend. */
 export function sourceLabel(origin: SourceName | undefined): string {
@@ -83,7 +83,12 @@ export function buildDigestPrompt(input: DigestPromptInput): string {
     "Produce a JSON digest with:",
     '- "goal": the underlying goal the human was pursuing, one sentence.',
     '- "deliverable": the concrete artifact or effect they wanted, one sentence.',
-    '- "domain": a short domain label (e.g. "web frontend", "devops", "data pipeline").',
+    '- "domain": a hierarchical path of 1-5 short labels, broadest first, separated by " > ".',
+    '  Choose a broad root: "Software engineering", "Data & AI", "Design",',
+    '  "Writing & research", "Business & operations", "Personal", or "Other".',
+    '  Add only useful levels, e.g. "Software engineering > Frontend > Accessibility"',
+    '  or "Software engineering > Backend > APIs > Pagination > Cursor".',
+    "  Reuse common category names; avoid making project names or whole sentences into domains.",
     '- "keywords": 3-8 lowercase keywords useful for grouping related sessions.',
     '- "outcome": how the session ended, judged from the outcome evidence below:',
     '    "completed" — the goal was achieved;',

@@ -48,7 +48,7 @@ export async function runGui(
 export default defineCommand({
   meta: {
     name: "gui",
-    description: "Open a lightweight local browser for viewing and copying your prompt library",
+    description: "Browse and copy your prompts and working preferences in a local browser",
   },
   args: {
     ...sharedArgs,

@@ -162,10 +162,14 @@ npm run stage:release
 node scripts/pack-release.mjs
 node scripts/smoke-install.mjs
 python3 scripts/smoke-flow.py
+python3 scripts/smoke-terminal.py
 node scripts/smoke-gui.mjs
 ```
 
-The build embeds the browser bundle and produces third-party license notices.
+The build minifies the CLI and embedded browser bundle and produces third-party license notices.
+The GUI smoke checks both tabs, five-level domain filters, Markdown copying,
+saved preferences, tips, and every dropdown in both themes. The terminal smoke
+uses only synthetic history and a fake runner to verify progress without model calls.
 The stage step creates `.release/human-hindsight` and `.release/cc-hindsight`
 with minimal publish manifests. Pack checks inspect those actual tarballs,
 including dependencies and scripts. A loopback npm registry exercises the

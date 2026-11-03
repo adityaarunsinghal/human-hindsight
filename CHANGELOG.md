@@ -4,6 +4,38 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.1] - 2026-11-03
+
+### Added
+
+- A Preferences tab with Markdown preview/source, individual and combined
+  copying, frequency sorting, searchable evidence, and links in both directions
+  between preferences and their source prompts. Browser bookmarks and history
+  work across both tabs.
+- Hierarchical domain filters, from broad categories down to five levels.
+  Existing flat domains are grouped locally without rewriting the library or
+  invoking a model; new digests produce hierarchical paths.
+- A rotating, pausable, hideable tips bar with copyable
+  `npx human-hindsight@latest` commands. Its first tip explains local processing
+  and links to the public source repository.
+- Saved preference consolidation at `library/preferences.consolidated.json`,
+  including the copyable Markdown and input metadata. The GUI can browse the
+  last successful result and flags changed inputs; failed or declined model
+  calls preserve earlier results.
+- Immediate colorful progress feedback for terminal scans, exports, and model
+  work, with elapsed time and export stages. Export and distill introduce the
+  open-source/local-processing reminder and explain the chosen harness/provider
+  boundary. Pipes remain free of animation.
+
+### Changed
+
+- Both the browser code and the self-contained CLI are now minified. The
+  published application continues to have no npm dependencies or install
+  scripts; tests, source, caches, and build tools remain outside the package.
+  Removed the unused terminal UI dependency and its transitive packages.
+- Expanded synthetic API, browser, terminal, domain, persistence, and packaging
+  checks, including narrow light/dark dropdowns at every hierarchy level.
+
 ## [1.8.0] - 2026-10-22
 
 ### Fixed

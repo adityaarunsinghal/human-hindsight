@@ -1,26 +1,76 @@
+import { PRIVACY_REMINDER, PUBLIC_REPOSITORY_URL } from "../core/privacy.js";
 import { renderMarkdown } from "./markdown.js";
-import type { GuiEntry } from "./server.js";
+import type { GuiEntry, GuiPreference, GuiSnapshot } from "./server.js";
 
+type Tab = "prompts" | "preferences";
+interface BrowseState {
+  selected: string;
+  query: string;
+  domain: string;
+  sort: string;
+}
+interface BrowseItem {
+  id: string;
+  title: string;
+  body: string;
+  preview?: string;
+  domains: string[];
+  authoredAt: string;
+  searchText: string;
+  prompt?: GuiEntry;
+  preference?: GuiPreference;
+}
+
+const ALL = "all";
+const SAVED = "consolidated";
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const search = byId<HTMLInputElement>("search");
 const domain = byId<HTMLSelectElement>("domain");
+const domainSelects = [domain];
+for (let level = 2; level <= MAX_DOMAIN_DEPTH; level++) {
+  const field = document.createElement("div");
+  field.className = "domain-level";
+  field.hidden = true;
+  const label = document.createElement("label");
+  label.htmlFor = `domain-${level}`;
+  label.textContent = `Subdomain · level ${level}`;
+  const select = document.createElement("select");
+  select.id = label.htmlFor;
+  select.setAttribute("aria-label", `Filter by subdomain level ${level}`);
+  field.append(label, select);
+  byId("domain-children").append(field);
+  domainSelects.push(select);
+}
 const sort = byId<HTMLSelectElement>("sort");
 const list = byId("list");
 const copy = byId<HTMLButtonElement>("copy");
 const refresh = byId<HTMLButtonElement>("refresh");
+const allPreferences = byId<HTMLButtonElement>("all-preferences");
+const savedPreferences = byId<HTMLButtonElement>("saved-preferences");
 const body = byId("body");
 const source = byId<HTMLTextAreaElement>("source");
 const previewButton = byId<HTMLButtonElement>("preview-mode");
 const sourceButton = byId<HTMLButtonElement>("source-mode");
-let entries: (GuiEntry & { searchText: string })[] = [];
-let selected = "";
+const tabs = {
+  prompts: byId<HTMLButtonElement>("prompts-tab"),
+  preferences: byId<HTMLButtonElement>("preferences-tab"),
+};
+const states: Record<Tab, BrowseState> = {
+  prompts: { selected: "", query: "", domain: "", sort: "newest" },
+  preferences: { selected: ALL, query: "", domain: "", sort: "frequency" },
+};
+let tab: Tab = "prompts";
+let promptItems: BrowseItem[] = [];
+let preferenceItems: BrowseItem[] = [];
+let preferences: GuiPreference[] = [];
+let preferencesMarkdown = "";
+let consolidation: GuiSnapshot["consolidation"] = null;
+let consolidationInvalid = false;
+let commands: GuiSnapshot["commands"] | null = null;
 let mode: "preview" | "source" = "preview";
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
-try {
-  selected = decodeURIComponent(location.hash.slice(1));
-} catch {
-  /* Ignore malformed bookmarks. */
-}
+let selectionVersion = 0;
+let renderedHash = "";
 
 function textElement(tag: string, text: string, className?: string) {
   const element = document.createElement(tag);
@@ -28,11 +78,168 @@ function textElement(tag: string, text: string, className?: string) {
   if (className) element.className = className;
   return element;
 }
+function plainText(text: string) {
+  return text
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(/[*`~]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 function dateLabel(value: string) {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
     ? ""
     : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+function taskCount(count: number) {
+  return `${count} ${count === 1 ? "task" : "tasks"}`;
+}
+function items() {
+  return tab === "prompts" ? promptItems : preferenceItems;
+}
+function currentItem(): BrowseItem | undefined {
+  if (tab === "preferences" && states[tab].selected === SAVED && consolidation) {
+    return {
+      id: SAVED,
+      title: "Consolidated preferences",
+      body: consolidation.markdown,
+      preview: consolidation.texts.map((text) => `- ${text}`).join("\n"),
+      domains: [],
+      authoredAt: consolidation.generatedAt,
+      searchText: "",
+    };
+  }
+  if (tab === "preferences" && states[tab].selected === ALL && preferences.length) {
+    return {
+      id: ALL,
+      title: "Working preferences",
+      body: preferencesMarkdown,
+      // Generated provenance and frequency comments stay in the copyable source.
+      preview: preferences.map((preference) => `- ${preference.text}`).join("\n"),
+      domains: [],
+      authoredAt: "",
+      searchText: "",
+    };
+  }
+  return items().find((item) => item.id === states[tab].selected);
+}
+function route(nextTab: Tab, id: string) {
+  return `#${nextTab}${id && !(nextTab === "preferences" && id === ALL) ? `/${encodeURIComponent(id)}` : ""}`;
+}
+function readRoute() {
+  try {
+    const hash = location.hash.slice(1);
+    if (hash === "preferences" || hash.startsWith("preferences/")) {
+      tab = "preferences";
+      states.preferences.selected = decodeURIComponent(hash.slice("preferences/".length)) || ALL;
+    } else {
+      tab = "prompts";
+      // Preserve bookmarks from the original prompt-only viewer.
+      states.prompts.selected = decodeURIComponent(
+        hash === "prompts"
+          ? ""
+          : hash.startsWith("prompts/")
+            ? hash.slice("prompts/".length)
+            : hash,
+      );
+    }
+  } catch {
+    /* Ignore malformed bookmarks. */
+  }
+}
+function rememberControls() {
+  Object.assign(states[tab], {
+    query: search.value,
+    domain: domainSelects.findLast((select) => select.value)?.value ?? "",
+    sort: sort.value,
+  });
+}
+function syncDomainControls() {
+  const paths = items().flatMap((item) => item.domains.map(domainPath));
+  const selected = states[tab].domain.split(" > ").filter(Boolean);
+  let parent: string[] = [];
+  for (const [level, select] of domainSelects.entries()) {
+    const children = [
+      ...new Map(
+        paths
+          .filter((path) =>
+            parent.every((part, index) => path[index]?.toLowerCase() === part.toLowerCase()),
+          )
+          .map((path) => path[level])
+          .filter((part): part is string => Boolean(part))
+          .map((part) => [part.toLowerCase(), part]),
+      ).values(),
+    ].sort((a, b) => a.localeCompare(b));
+    const visible = level === 0 || (parent.length === level && children.length > 0);
+    if (level > 0 && select.parentElement) select.parentElement.hidden = !visible;
+    select.replaceChildren(
+      ...["", ...(visible ? children : [])].map((part) => {
+        const option = textElement(
+          "option",
+          part || (level ? "All subdomains" : "All domains"),
+        ) as HTMLOptionElement;
+        option.value = part ? [...parent, part].join(" > ") : "";
+        return option;
+      }),
+    );
+    const part = children.find((value) => value.toLowerCase() === selected[level]?.toLowerCase());
+    if (visible && part && parent.length === level) {
+      parent = [...parent, part];
+      select.value = parent.join(" > ");
+    } else {
+      select.value = "";
+    }
+    select.title = select.selectedOptions[0]?.textContent ?? "";
+  }
+  states[tab].domain = parent.join(" > ");
+}
+function syncControls() {
+  const isPreferences = tab === "preferences";
+  const noun = isPreferences ? "preferences" : "prompts";
+  for (const key of ["prompts", "preferences"] as const) {
+    tabs[key].setAttribute("aria-selected", String(tab === key));
+    tabs[key].tabIndex = tab === key ? 0 : -1;
+  }
+  byId("browse-panel").setAttribute("aria-labelledby", `${tab}-tab`);
+  byId("browser").setAttribute("aria-label", `Browse ${noun}`);
+  byId("list").setAttribute("aria-label", isPreferences ? "Preferences" : "Prompts");
+  byId("search-label").textContent = `Search ${noun}`;
+  search.placeholder = isPreferences ? "Text, evidence, or domain…" : "Title, text, or domain…";
+  search.value = states[tab].query;
+  sort.setAttribute("aria-label", `Sort ${noun}`);
+  const sorts = [
+    ...(isPreferences ? [["frequency", "Most frequent first"]] : []),
+    ["newest", "Newest first"],
+    ["title", isPreferences ? "Text A–Z" : "Title A–Z"],
+  ];
+  sort.replaceChildren(
+    ...sorts.map(([value, label]) => {
+      const option = textElement("option", label ?? "") as HTMLOptionElement;
+      option.value = value ?? "";
+      return option;
+    }),
+  );
+  sort.value = states[tab].sort;
+  syncDomainControls();
+  allPreferences.hidden = !isPreferences;
+  allPreferences.disabled = !preferences.length;
+  savedPreferences.hidden = !isPreferences || !consolidation;
+  savedPreferences.textContent = consolidation?.stale
+    ? "Saved consolidation · outdated"
+    : "Saved consolidation";
+  byId("list-empty-text").textContent = `No matching ${noun}.`;
+  byId("empty-title").textContent = isPreferences ? "No preferences yet" : "No prompts yet";
+  byId("empty-text").textContent = isPreferences
+    ? "Preferences appear when distilled tasks include your working preferences. Distill more tasks in the terminal, then refresh."
+    : "Build your library in the terminal, then refresh this page.";
+  byId("empty-command").textContent = isPreferences ? "human-hindsight distill" : "human-hindsight";
+  byId("viewer").setAttribute(
+    "aria-label",
+    isPreferences ? "Selected preference" : "Selected prompt",
+  );
+  byId("view-mode").setAttribute("aria-label", isPreferences ? "Preference view" : "Prompt view");
+  body.setAttribute("aria-label", isPreferences ? "Rendered preference" : "Rendered prompt");
+  document.title = `${isPreferences ? "Preferences" : "Prompts"} · Human Hindsight`;
 }
 function setMode(next: typeof mode) {
   mode = next;
@@ -45,89 +252,239 @@ function setMode(next: typeof mode) {
     source.style.height = `${Math.max(260, source.scrollHeight + 2)}px`;
   }
 }
-function selectEntry(slug: string) {
-  selected = slug;
-  for (const button of list.children)
-    button.setAttribute("aria-current", String((button as HTMLElement).dataset.slug === slug));
-  const entry = entries.find((item) => item.slug === slug);
+function openItem(nextTab: Tab, id: string, clearFilters = false) {
+  rememberControls();
+  tab = nextTab;
+  states[tab].selected = id;
+  if (clearFilters) {
+    states[tab].query = "";
+    states[tab].domain = "";
+  }
+  syncControls();
+  render("push");
+  if (matchMedia("(max-width: 760px)").matches) byId("viewer").scrollIntoView({ block: "start" });
+  byId("title").focus({ preventScroll: true });
+}
+function relatedLink(nextTab: Tab, id: string, label: string) {
+  const link = textElement("a", label) as HTMLAnchorElement;
+  link.href = route(nextTab, id);
+  link.addEventListener("click", (event) => {
+    if (event.button || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+    event.preventDefault();
+    // A related item must remain reachable even when its tab had active filters.
+    openItem(nextTab, id, true);
+  });
+  return link;
+}
+function renderRelated(item: BrowseItem | undefined) {
+  const related = byId("related");
+  const relatedList = byId("related-list");
+  relatedList.replaceChildren();
+  if (item?.prompt || item?.id === SAVED) {
+    byId("related-title").textContent = item.prompt
+      ? "Preferences from this prompt"
+      : "Original observed preferences";
+    for (const id of item.prompt?.preferenceIds ?? consolidation?.sourcePreferenceIds ?? []) {
+      const preference = preferences.find((value) => value.id === id);
+      if (!preference) continue;
+      const row = document.createElement("li");
+      row.append(
+        relatedLink("preferences", id, plainText(preference.text)),
+        textElement("span", `Stated in ${taskCount(preference.count)}`, "muted"),
+      );
+      relatedList.append(row);
+    }
+  } else if (item?.preference) {
+    byId("related-title").textContent = "Source prompts";
+    item.preference.occurrences.forEach((occurrence, index) => {
+      const row = document.createElement("li");
+      row.append(
+        occurrence.available
+          ? relatedLink("prompts", occurrence.slug, occurrence.title)
+          : textElement("span", occurrence.title),
+      );
+      if (!occurrence.available)
+        row.append(textElement("span", "Prompt file unavailable", "muted"));
+      if (occurrence.evidence.trim()) {
+        const evidence = document.createElement("div");
+        evidence.className = "evidence markdown";
+        evidence.append(renderMarkdown(occurrence.evidence, `evidence-${index}`));
+        row.append(evidence);
+      }
+      relatedList.append(row);
+    });
+  }
+  related.hidden = !relatedList.childElementCount;
+}
+function copyLabel() {
+  return tab === "prompts"
+    ? "Copy prompt"
+    : states.preferences.selected === SAVED
+      ? "Copy consolidated"
+      : states.preferences.selected === ALL
+        ? "Copy all preferences"
+        : "Copy preference";
+}
+function renderDetail() {
+  selectionVersion++;
+  const item = currentItem();
   clearTimeout(copyTimer);
-  copy.textContent = "Copy prompt";
-  copy.disabled = !entry?.body;
-  previewButton.disabled = sourceButton.disabled = !entry;
+  copy.textContent = copyLabel();
+  copy.disabled = !item?.body;
+  previewButton.disabled = sourceButton.disabled = !item;
   byId("copy-status").textContent = "";
-  byId("metadata").replaceChildren();
-  byId("title").textContent = entry
-    ? entry.title
-    : entries.length
-      ? "No matching prompts"
-      : "Your prompt library";
-  source.value = entry?.body ?? "";
-  body.replaceChildren(entry ? renderMarkdown(entry.body) : document.createDocumentFragment());
+  const metadata = byId("metadata");
+  metadata.replaceChildren();
+  byId("title").textContent = item
+    ? item.preference
+      ? "Working preference"
+      : item.title
+    : items().length
+      ? `No matching ${tab}`
+      : tab === "prompts"
+        ? "Your prompt library"
+        : "Your working preferences";
+  source.value = item?.body ?? "";
+  body.replaceChildren(
+    item ? renderMarkdown(item.preview ?? item.body) : document.createDocumentFragment(),
+  );
   setMode(mode);
-  byId("empty").hidden = entries.length !== 0;
-  byId("word-count").textContent = entry
-    ? `${entry.body.split(/\s+/).filter(Boolean).length} words`
+  byId("empty").hidden = items().length !== 0 || Boolean(item);
+  byId("word-count").textContent = item
+    ? `${item.body.split(/\s+/).filter(Boolean).length} words`
     : "";
-  if (!entry) return;
-  for (const value of entry.domains) byId("metadata").append(textElement("span", value, "tag"));
-  const details = [
-    dateLabel(entry.authoredAt),
-    `${entry.sessions} ${entry.sessions === 1 ? "session" : "sessions"}`,
-    `${entry.confidence} confidence`,
-  ];
-  if (entry.edited) details.push("Edited");
-  if (entry.rating === "up") details.push("Liked");
-  if (entry.rating === "down") details.push("Disliked");
-  byId("metadata").append(textElement("span", details.filter(Boolean).join(" · ")));
-  history.replaceState(null, "", `#${encodeURIComponent(slug)}`);
+  allPreferences.setAttribute(
+    "aria-current",
+    String(tab === "preferences" && states.preferences.selected === ALL),
+  );
+  savedPreferences.setAttribute(
+    "aria-current",
+    String(tab === "preferences" && states.preferences.selected === SAVED),
+  );
+  const consolidationNotice = byId("consolidation-notice");
+  consolidationNotice.hidden = true;
+  if (tab === "preferences" && consolidationInvalid) {
+    consolidationNotice.textContent =
+      "The saved consolidation could not be read. Your observed preferences are still available. The optional consolidation command can create a new saved result.";
+    consolidationNotice.hidden = false;
+  } else if (item?.id === SAVED && consolidation?.stale) {
+    consolidationNotice.textContent =
+      "Your observed preferences have changed since this result was saved. You can still copy it, or optionally run consolidation again using your agent subscription or credits.";
+    consolidationNotice.hidden = false;
+  }
+  if (item) {
+    for (const value of item.domains) metadata.append(textElement("span", value, "tag"));
+    const details: string[] = [];
+    if (item.prompt) {
+      const prompt = item.prompt;
+      details.push(
+        dateLabel(item.authoredAt),
+        `${prompt.sessions} ${prompt.sessions === 1 ? "session" : "sessions"}`,
+        `${prompt.confidence} confidence`,
+      );
+      if (prompt.edited) details.push("Edited");
+      if (prompt.rating === "up") details.push("Liked");
+      if (prompt.rating === "down") details.push("Disliked");
+    } else if (item.preference) {
+      details.push(`Stated in ${taskCount(item.preference.count)}`, dateLabel(item.authoredAt));
+    } else if (item.id === SAVED && consolidation) {
+      details.push(
+        `${consolidation.texts.length} consolidated preferences`,
+        dateLabel(consolidation.generatedAt),
+        `From ${consolidation.sourcePreferenceIds.length} observed preferences`,
+      );
+    } else {
+      const recurring = preferences.filter((preference) => preference.count > 1).length;
+      details.push(
+        `${preferences.length} ${preferences.length === 1 ? "preference" : "preferences"}`,
+        `${recurring} recurring`,
+        "Ready to paste into CLAUDE.md or AGENTS.md",
+      );
+    }
+    metadata.append(textElement("span", details.filter(Boolean).join(" · ")));
+  }
+  renderRelated(item);
   byId("viewer").scrollTop = 0;
 }
-function render() {
+function render(historyMode: "push" | "replace" = "replace") {
+  const state = states[tab];
   domain.title = domain.value || "All domains";
   sort.title = sort.selectedOptions[0]?.textContent || "";
-  const terms = search.value.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-  const visible = entries.filter(
-    (entry) =>
-      (!domain.value || entry.domains.includes(domain.value)) &&
-      terms.every((term) => entry.searchText.includes(term)),
+  const terms = state.query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
+  const all = items();
+  const visible = all.filter(
+    (item) =>
+      (!state.domain || item.domains.some((value) => matchesDomain(value, state.domain))) &&
+      terms.every((term) => item.searchText.includes(term)),
   );
-  visible.sort(
-    sort.value === "title"
-      ? (a, b) => a.title.localeCompare(b.title) || a.slug.localeCompare(b.slug)
-      : (a, b) => b.authoredAt.localeCompare(a.authoredAt) || a.slug.localeCompare(b.slug),
-  );
+  visible.sort((a, b) => {
+    if (state.sort === "title") return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
+    return (
+      (state.sort === "frequency" ? (b.preference?.count ?? 0) - (a.preference?.count ?? 0) : 0) ||
+      b.authoredAt.localeCompare(a.authoredAt) ||
+      a.id.localeCompare(b.id)
+    );
+  });
+  const singular = tab === "prompts" ? "prompt" : "preference";
   byId("count").textContent =
-    visible.length === entries.length
-      ? `${entries.length} ${entries.length === 1 ? "prompt" : "prompts"}`
-      : `${visible.length} of ${entries.length} prompts`;
-  byId("list-empty").hidden = visible.length !== 0 || entries.length === 0;
+    visible.length === all.length
+      ? `${all.length} ${all.length === 1 ? singular : tab}`
+      : `${visible.length} of ${all.length} ${tab}`;
+  byId("list-empty").hidden = visible.length !== 0 || all.length === 0;
+  const overview =
+    tab === "preferences" &&
+    preferences.length > 0 &&
+    (!state.selected || state.selected === ALL) &&
+    terms.length === 0 &&
+    !state.domain;
+  const saved =
+    tab === "preferences" &&
+    consolidation &&
+    state.selected === SAVED &&
+    terms.length === 0 &&
+    !state.domain;
+  state.selected = saved
+    ? SAVED
+    : overview
+      ? ALL
+      : visible.some((item) => item.id === state.selected)
+        ? state.selected
+        : visible[0]?.id || "";
   list.replaceChildren(
-    ...visible.map((entry) => {
-      const button = textElement("button", "", "entry") as HTMLButtonElement;
+    ...visible.map((item) => {
+      const button = textElement(
+        "button",
+        "",
+        item.preference ? "entry preference-entry" : "entry",
+      ) as HTMLButtonElement;
       button.type = "button";
-      button.dataset.slug = entry.slug;
+      button.dataset.id = item.id;
+      button.setAttribute("aria-current", String(item.id === state.selected));
+      const details = [
+        ...(item.preference ? [taskCount(item.preference.count)] : []),
+        item.domains.join(", "),
+        dateLabel(item.authoredAt),
+      ];
       button.append(
-        textElement("span", entry.title, "entry-title"),
+        textElement("span", item.title, "entry-title"),
         textElement(
           "span",
-          entry.body
-            .replace(/^#{1,6}\s+/gm, "")
-            .replace(/[*`~]/g, "")
-            .replace(/\s+/g, " ")
-            .slice(0, 140),
+          plainText(item.preference?.occurrences[0]?.evidence ?? item.body).slice(0, 140),
           "entry-preview",
         ),
-        textElement(
-          "span",
-          [entry.domains.join(", "), dateLabel(entry.authoredAt)].filter(Boolean).join(" · "),
-          "entry-meta",
-        ),
+        textElement("span", details.filter(Boolean).join(" · "), "entry-meta"),
       );
-      button.addEventListener("click", () => selectEntry(entry.slug));
+      button.addEventListener("click", () => openItem(tab, item.id));
       return button;
     }),
   );
-  selectEntry(visible.some((entry) => entry.slug === selected) ? selected : visible[0]?.slug || "");
+  renderDetail();
+  const hash = route(tab, state.selected);
+  if (location.hash !== hash) {
+    if (historyMode === "push") history.pushState(null, "", hash);
+    else history.replaceState(null, "", hash);
+  }
+  renderedHash = location.hash;
 }
 async function load() {
   refresh.disabled = true;
@@ -135,26 +492,53 @@ async function load() {
   try {
     const response = await fetch("/api/library", { cache: "no-store" });
     if (!response.ok) throw new Error("Library unavailable");
-    const data = (await response.json()) as { entries: GuiEntry[]; skipped: number };
-    if (!Array.isArray(data.entries)) throw new Error("Invalid library response");
-    entries = data.entries.map((entry) => ({
-      ...entry,
-      searchText: [entry.title, entry.slug, entry.body, ...entry.domains]
+    const data = (await response.json()) as GuiSnapshot;
+    if (!Array.isArray(data.entries) || !Array.isArray(data.preferences))
+      throw new Error("Invalid library response");
+    promptItems = data.entries.map((entry) => ({
+      id: entry.slug,
+      title: entry.title,
+      body: entry.body,
+      domains: entry.domains,
+      authoredAt: entry.authoredAt,
+      searchText: [
+        entry.title,
+        entry.slug,
+        entry.body,
+        ...entry.domains,
+        ...entry.domains.flatMap(domainPath),
+      ]
         .join(" ")
         .toLocaleLowerCase(),
+      prompt: entry,
     }));
-    const previous = domain.value;
-    const domains = [...new Set(entries.flatMap((entry) => entry.domains))].sort((a, b) =>
-      a.localeCompare(b),
-    );
-    domain.replaceChildren(
-      ...["", ...domains].map((value) => {
-        const option = textElement("option", value || "All domains") as HTMLOptionElement;
-        option.value = value;
-        return option;
-      }),
-    );
-    if (domains.includes(previous)) domain.value = previous;
+    preferences = data.preferences;
+    preferencesMarkdown = data.preferencesMarkdown;
+    consolidation = data.consolidation;
+    consolidationInvalid = data.consolidationInvalid;
+    commands = data.commands;
+    preferenceItems = preferences.map((preference) => ({
+      id: preference.id,
+      title: plainText(preference.text),
+      body: `- ${preference.text}`,
+      domains: preference.domains,
+      authoredAt: preference.lastAuthoredAt,
+      searchText: [
+        preference.text,
+        ...preference.domains,
+        ...preference.domains.flatMap(domainPath),
+        ...preference.occurrences.flatMap((occurrence) => [
+          occurrence.title,
+          occurrence.slug,
+          occurrence.evidence,
+        ]),
+      ]
+        .join(" ")
+        .toLocaleLowerCase(),
+      preference,
+    }));
+    syncControls();
+    renderTip();
     byId("skipped").hidden = !data.skipped;
     byId("skipped").textContent =
       `${data.skipped} prompt file(s) could not be read. Run human-hindsight status for details.`;
@@ -163,57 +547,99 @@ async function load() {
     byId("notice").textContent =
       "Couldn't load the library. Check that the server is still running, then refresh.";
     byId("notice").hidden = false;
-    if (!entries.length) byId("count").textContent = "Library unavailable";
+    if (!items().length) byId("count").textContent = "Library unavailable";
   } finally {
     refresh.disabled = false;
   }
 }
 copy.addEventListener("click", async () => {
-  const entry = entries.find((item) => item.slug === selected);
-  if (!entry?.body) return;
+  const item = currentItem();
+  if (!item?.body) return;
+  const version = selectionVersion;
   copy.disabled = true;
   try {
-    await navigator.clipboard.writeText(entry.body);
-    if (selected !== entry.slug) return;
+    await navigator.clipboard.writeText(item.body);
+    if (version !== selectionVersion) return;
     copy.textContent = "Copied";
     byId("copy-status").textContent = "Markdown copied. Ready to paste.";
     copyTimer = setTimeout(() => {
-      copy.textContent = "Copy prompt";
+      copy.textContent = copyLabel();
     }, 1800);
   } catch {
-    if (selected !== entry.slug) return;
+    if (version !== selectionVersion) return;
     setMode("source");
     source.focus({ preventScroll: true });
     source.select();
     byId("copy-status").textContent =
       `Markdown selected. Press ${/Mac/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} to copy.`;
   } finally {
-    copy.disabled = !entries.find((item) => item.slug === selected)?.body;
+    if (version === selectionVersion) copy.disabled = !currentItem()?.body;
   }
 });
+function switchTab(next: Tab) {
+  if (next === tab) return;
+  rememberControls();
+  tab = next;
+  syncControls();
+  render("push");
+}
+for (const key of ["prompts", "preferences"] as const) {
+  tabs[key].addEventListener("click", () => switchTab(key));
+  tabs[key].addEventListener("keydown", (event) => {
+    if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const next =
+      event.key === "Home"
+        ? "prompts"
+        : event.key === "End"
+          ? "preferences"
+          : key === "prompts"
+            ? "preferences"
+            : "prompts";
+    switchTab(next);
+    tabs[next].focus();
+  });
+}
+function filterChanged() {
+  rememberControls();
+  render();
+}
 previewButton.addEventListener("click", () => setMode("preview"));
 sourceButton.addEventListener("click", () => setMode("source"));
-search.addEventListener("input", render);
-domain.addEventListener("change", render);
-sort.addEventListener("change", render);
+search.addEventListener("input", filterChanged);
+for (const [level, select] of domainSelects.entries()) {
+  select.addEventListener("change", () => {
+    states[tab].domain = select.value || domainSelects[level - 1]?.value || "";
+    syncDomainControls();
+    rememberControls();
+    render();
+  });
+}
+sort.addEventListener("change", filterChanged);
 refresh.addEventListener("click", load);
+allPreferences.addEventListener("click", () => openItem("preferences", ALL, true));
+savedPreferences.addEventListener("click", () => openItem("preferences", SAVED, true));
 byId("clear").addEventListener("click", () => {
   search.value = "";
-  domain.value = "";
-  render();
+  states[tab].domain = "";
+  syncDomainControls();
+  filterChanged();
   search.focus();
 });
 window.addEventListener("resize", () => {
   if (mode === "source") setMode(mode);
 });
-window.addEventListener("hashchange", () => {
-  try {
-    selected = decodeURIComponent(location.hash.slice(1));
-    render();
-  } catch {
-    /* Ignore malformed bookmarks. */
-  }
-});
+function followLocation() {
+  if (location.hash === renderedHash) return;
+  rememberControls();
+  readRoute();
+  states[tab].query = "";
+  states[tab].domain = "";
+  syncControls();
+  render();
+}
+window.addEventListener("popstate", followLocation);
+window.addEventListener("hashchange", followLocation);
 document.addEventListener("keydown", (event) => {
   if (
     event.key === "/" &&
@@ -227,7 +653,178 @@ document.addEventListener("keydown", (event) => {
   }
   if (event.key === "Escape" && document.activeElement === search) {
     search.value = "";
-    render();
+    filterChanged();
   }
 });
+interface Tip {
+  title: string;
+  text: string;
+  cost?: string;
+  command?: string;
+  repository?: boolean;
+}
+const tips = byId("tips");
+const showTips = byId<HTMLButtonElement>("show-tips");
+const copyTip = byId<HTMLButtonElement>("copy-tip");
+let tipIndex = 0;
+let tipVersion = 0;
+let tipsPaused = false;
+let tipsEnabled = true;
+try {
+  tipsEnabled = localStorage.getItem("human-hindsight-tips") !== "hidden";
+} catch {
+  /* Tips still work when browser storage is unavailable. */
+}
+function availableTips(): Tip[] {
+  return [
+    {
+      title: "Open source, with your history under your control",
+      text: PRIVACY_REMINDER,
+      cost: "Local-first",
+      repository: true,
+    },
+    {
+      title: "Carry your preferences into the next session",
+      text: "Print a Markdown block for CLAUDE.md or AGENTS.md, or copy it from the Preferences tab.",
+      cost: "No model call",
+      command: commands?.preferences,
+    },
+    {
+      title: "Optionally consolidate overlapping preferences",
+      text: "One model call merges similar wording and saves the result in this library. The terminal asks before running. Refresh here afterward.",
+      cost: "Optional · uses subscription/credits",
+      command: commands?.consolidate,
+    },
+    {
+      title: "Export your latest history",
+      text: "Refresh the local session exports before distilling new prompts.",
+      cost: "No model call",
+      command: commands?.export,
+    },
+    {
+      title: "Build more prompts and preferences",
+      text: "Distill your exports using a local agent CLI. Review the terminal's cost and consent prompt before proceeding.",
+      cost: "Uses subscription/credits",
+      command: commands?.distill,
+    },
+    {
+      title: "Check what is ready and what needs attention",
+      text: "See pipeline progress, skipped files, and the next suggested step.",
+      cost: "No model call",
+      command: commands?.status,
+    },
+    {
+      title: "Follow a preference back to its evidence",
+      text: "Open a preference to see its source prompts. Each prompt also links to the preferences observed in it.",
+    },
+    {
+      title: "The Markdown you see is the Markdown you copy",
+      text: "Switch between Preview and Markdown at any time. Copy preserves the source, including lists and code.",
+    },
+    {
+      title: "Start broad, then narrow your domain",
+      text: "Choose a domain to include all its children. Optional subdomain filters let you refine the results up to five levels deep.",
+    },
+    {
+      title: "Search without reaching for the mouse",
+      text: "Press / to focus search and Escape to clear it. Each tab remembers its own search, domain, and sort.",
+    },
+  ];
+}
+function renderTip() {
+  const choices = availableTips();
+  const tip = choices[tipIndex % choices.length];
+  if (!tip) return;
+  tipVersion++;
+  tips.hidden = !tipsEnabled;
+  showTips.hidden = tipsEnabled;
+  byId("tip-number").textContent = `Tip ${tipIndex + 1}/${choices.length}`;
+  byId("tip-title").textContent = tip.title;
+  if (tip.repository) {
+    const [before, after] = tip.text.split("fully open source");
+    const link = textElement("a", "fully open source") as HTMLAnchorElement;
+    link.href = PUBLIC_REPOSITORY_URL;
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    byId("tip-text").replaceChildren(
+      document.createTextNode(before ?? ""),
+      link,
+      document.createTextNode(after ?? ""),
+    );
+  } else byId("tip-text").textContent = tip.text;
+  byId("tip-cost").textContent = tip.cost ?? "";
+  byId("tip-cost").hidden = !tip.cost;
+  byId("tip-command-row").hidden = !tip.command;
+  byId("tip-command").textContent = tip.command ?? "";
+  byId("tip-status").textContent = "";
+  copyTip.textContent = "Copy command";
+  copyTip.disabled = !tip.command;
+}
+function stepTip(step: number) {
+  tipIndex = (tipIndex + step + availableTips().length) % availableTips().length;
+  renderTip();
+}
+function setTipsEnabled(enabled: boolean) {
+  tipsEnabled = enabled;
+  try {
+    localStorage.setItem("human-hindsight-tips", enabled ? "visible" : "hidden");
+  } catch {
+    /* Hiding tips does not depend on browser storage. */
+  }
+  renderTip();
+  (enabled ? byId("hide-tips") : showTips).focus();
+}
+byId("previous-tip").addEventListener("click", () => stepTip(-1));
+byId("next-tip").addEventListener("click", () => stepTip(1));
+byId("hide-tips").addEventListener("click", () => setTipsEnabled(false));
+showTips.addEventListener("click", () => setTipsEnabled(true));
+byId("pause-tips").addEventListener("click", () => {
+  tipsPaused = !tipsPaused;
+  byId("pause-tips").textContent = tipsPaused ? "Resume" : "Pause";
+  byId("pause-tips").setAttribute("aria-pressed", String(tipsPaused));
+});
+copyTip.addEventListener("click", async () => {
+  const command = availableTips()[tipIndex]?.command;
+  if (!command) return;
+  const version = tipVersion;
+  copyTip.disabled = true;
+  try {
+    await navigator.clipboard.writeText(command);
+    if (version !== tipVersion) return;
+    copyTip.textContent = "Copied";
+    byId("tip-status").textContent = "Command copied. Run it in your terminal when ready.";
+  } catch {
+    if (version !== tipVersion) return;
+    const code = byId("tip-command");
+    code.focus({ preventScroll: true });
+    const range = document.createRange();
+    range.selectNodeContents(code);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    byId("tip-status").textContent =
+      `Command selected. Press ${/Mac/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} to copy.`;
+  } finally {
+    if (version === tipVersion) copyTip.disabled = false;
+  }
+});
+setInterval(() => {
+  if (
+    tipsEnabled &&
+    !tipsPaused &&
+    document.visibilityState === "visible" &&
+    !tips.matches(":hover") &&
+    !tips.contains(document.activeElement)
+  ) {
+    const choices = availableTips()
+      .map((_, index) => index)
+      .filter((index) => index !== 0 && index !== tipIndex);
+    tipIndex = choices[Math.floor(Math.random() * choices.length)] ?? 0;
+    renderTip();
+  }
+}, 14_000);
+
+readRoute();
 void load();
+
+import { domainPath, MAX_DOMAIN_DEPTH, matchesDomain } from "../core/domains.js";

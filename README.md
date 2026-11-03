@@ -13,7 +13,7 @@
 </p>
 
 ```bash
-npx human-hindsight
+npx human-hindsight@latest
 ```
 
 Human Hindsight mines your coding-agent session history (Claude Code, Codex, Kiro, OpenCode)
@@ -106,7 +106,7 @@ Use `--no-follow-up` for one command at a time; pipes, dry runs, and scripted
 You can also start directly with distillation:
 
 ```bash
-npx human-hindsight distill    # offers to export first, then digest → cluster →
+npx human-hindsight@latest distill    # offers to export first, then digest → cluster →
                             # author (asks before any runner call), then shows
                             # offers the finished library in your browser
 ```
@@ -114,24 +114,24 @@ npx human-hindsight distill    # offers to export first, then digest → cluster
 Prefer to drive each stage yourself? The pipeline is just three verbs:
 
 ```bash
-npx human-hindsight            # 1. scan: inventory your projects (read-only)
-npx human-hindsight export     # 2. export: human-only markdown per session
-npx human-hindsight distill    # 3. distill: digest → cluster → author (asks first)
+npx human-hindsight@latest            # 1. scan: inventory your projects (read-only)
+npx human-hindsight@latest export     # 2. export: human-only markdown per session
+npx human-hindsight@latest distill    # 3. distill: digest → cluster → author (asks first)
 ```
 
 Then browse and curate the results:
 
 ```bash
-npx human-hindsight list                # your library (✎ edited / ▲▼ rating badges)
-npx human-hindsight gui                 # browse, search, and copy in your browser
-npx human-hindsight show <slug>         # read a oneshot
-npx human-hindsight copy <slug>         # → clipboard, paste into a fresh session
-npx human-hindsight edit <slug>         # open in $EDITOR; your edits are protected
-npx human-hindsight rate <slug> up      # record a verdict (up|down)
-npx human-hindsight prune               # remove orphaned entries (asks first)
-npx human-hindsight preferences         # → CLAUDE.md block
-npx human-hindsight status              # pipeline funnel + orphan/skip flags
-npx human-hindsight retention           # optional: preview longer local retention
+npx human-hindsight@latest list                # your library (✎ edited / ▲▼ rating badges)
+npx human-hindsight@latest gui                 # browse, search, and copy in your browser
+npx human-hindsight@latest show <slug>         # read a oneshot
+npx human-hindsight@latest copy <slug>         # → clipboard, paste into a fresh session
+npx human-hindsight@latest edit <slug>         # open in $EDITOR; your edits are protected
+npx human-hindsight@latest rate <slug> up      # record a verdict (up|down)
+npx human-hindsight@latest prune               # remove orphaned entries (asks first)
+npx human-hindsight@latest preferences         # → CLAUDE.md block
+npx human-hindsight@latest status              # pipeline funnel + orphan/skip flags
+npx human-hindsight@latest retention           # optional: preview longer local retention
 ```
 
 Requires Node 22.13+ on Node 22, or Node 23.4+ on newer releases, on macOS or Linux (Windows is untested and currently
@@ -142,16 +142,45 @@ with a consent prompt (or your explicit `--yes`).
 ### A small local library viewer
 
 ```bash
-npx human-hindsight gui                    # start locally and open your browser
-npx human-hindsight gui --no-open          # print the address without opening it
-npx human-hindsight gui --port 3210        # choose a port (default: any available port)
-npx human-hindsight gui --home /path/to/library-home
+npx human-hindsight@latest gui                    # start locally and open your browser
+npx human-hindsight@latest gui --no-open          # print the address without opening it
+npx human-hindsight@latest gui --port 3210        # choose a port (default: any available port)
+npx human-hindsight@latest gui --home /path/to/library-home
 ```
 
-Search titles and text, filter by domain, sort, and copy prompts with one click.
+Switch between **Prompts** and **Preferences** to search, filter by domain,
+sort, and copy items with one click. Preferences are deduplicated across tasks
+and can be sorted by frequency, recency, or text. Search also matches their
+evidence and source prompt titles.
+Domain filters start with broad categories and reveal optional subdomains,
+up to five levels deep. Selecting a parent includes all its descendants.
+Existing flat labels are grouped locally without changing the library or
+making a model call; newly distilled sessions use hierarchical domain paths.
 **Preview** renders Markdown headings, lists, tables, links, blockquotes, task
 lists, and code blocks. **Markdown** shows the original source. Copy always
 uses that original Markdown, including when the preview is selected.
+
+Each prompt links to its observed preferences; each preference shows its
+evidence and links back to the source prompts. You can bookmark either view
+and use your browser's Back and Forward buttons. **View all preferences**
+opens a combined Markdown block ready to copy into `CLAUDE.md` or `AGENTS.md`.
+
+The tips bar starts with an open-source and privacy reminder, then rotates
+through quick tips with copyable `npx human-hindsight@latest` commands.
+Pause it, hide it, or restore it with **Show tips**. Hidden tips stay hidden
+when you reload the same local address.
+
+Export and distill show an open-source/privacy reminder near the start.
+Interactive terminals get a colorful elapsed-time progress indicator during
+scanning, export, and model work; redirected output stays free of animation.
+
+Consolidation is optional: `npx human-hindsight@latest preferences --consolidate`
+uses one call through your own coding harness and its configured provider,
+with consent and the subscription/credit cost explained first. Successful
+results are saved, with their Markdown and input metadata, in
+`<home>/library/preferences.consolidated.json`. Refresh the GUI to open
+**Saved consolidation**. It flags results whose observed preferences have
+changed. Failed or declined calls leave the last saved result intact.
 
 The viewer uses a minimal black-and-white palette and system monospace fonts.
 Light and dark appearance follow your system setting. Local edits, ratings,
@@ -201,14 +230,14 @@ then falls back in the order Claude → Codex → Kiro → OpenCode. Models are 
 with `--model`; without it, the chosen CLI uses its configured default.
 
 ```bash
-npx human-hindsight export --source codex
-npx human-hindsight distill --source codex --runner codex
-npx human-hindsight distill --source claude --runner codex
-npx human-hindsight preferences --target codex  # AGENTS.md; alias of --target agents
-npx human-hindsight export --source opencode
-npx human-hindsight distill --source opencode --runner opencode
-npx human-hindsight distill --source claude --runner opencode --model provider/model
-npx human-hindsight preferences --target opencode  # AGENTS.md
+npx human-hindsight@latest export --source codex
+npx human-hindsight@latest distill --source codex --runner codex
+npx human-hindsight@latest distill --source claude --runner codex
+npx human-hindsight@latest preferences --target codex  # AGENTS.md; alias of --target agents
+npx human-hindsight@latest export --source opencode
+npx human-hindsight@latest distill --source opencode --runner opencode
+npx human-hindsight@latest distill --source claude --runner opencode --model provider/model
+npx human-hindsight@latest preferences --target opencode  # AGENTS.md
 ```
 
 `preferences --target claude|codex|kiro|opencode|agents` emits a `CLAUDE.md` block,
@@ -258,10 +287,10 @@ OpenCode preferences can go into the project's `AGENTS.md`, or the global
 ### Optional: keep more local history
 
 ```bash
-npx human-hindsight retention                    # read-only preview
-npx human-hindsight retention --apply            # preview, then confirm
-npx human-hindsight retention --apply --yes      # explicit opt-in for scripting
-npx human-hindsight retention --source codex --apply
+npx human-hindsight@latest retention                    # read-only preview
+npx human-hindsight@latest retention --apply            # preview, then confirm
+npx human-hindsight@latest retention --apply --yes      # explicit opt-in for scripting
+npx human-hindsight@latest retention --source codex --apply
 ```
 
 The default reviews existing tool directories. An explicit `--source` can

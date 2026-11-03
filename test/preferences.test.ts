@@ -9,6 +9,10 @@ import {
   CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS,
   runPreferences,
 } from "../src/commands/preferences.js";
+import {
+  CONSOLIDATED_PREFERENCES_FILE,
+  readConsolidatedPreferences,
+} from "../src/core/consolidated-preferences.js";
 import type { LibraryEntry } from "../src/core/library.js";
 import {
   aggregatePreferences,
@@ -240,6 +244,7 @@ describe("runPreferences", () => {
     expect(cap.text()).toContain("1 preference(s) across 2 task(s)");
     expect(cap.text()).toContain("- be terse");
     expect(cap.text()).toContain("stated in 2 of 2 tasks");
+    expect(readConsolidatedPreferences(home)).toEqual({ artifact: null, invalid: false });
   });
 
   it("--target kiro renders the steering-file block and footer", async () => {
@@ -293,7 +298,7 @@ describe("runPreferences", () => {
     }) as RunnerFn;
     const code = await runPreferences(
       { home, consolidate: true, yes: true, model: "sonnet" },
-      { output: cap.out, runner },
+      { output: cap.out, runner, clipboard: fakeClipboard().copy },
     );
     expect(code).toBe(0);
     expect(model).toBe("sonnet"); // --model must reach the claude call
@@ -303,6 +308,14 @@ describe("runPreferences", () => {
     expect(cap.text()).toContain("- be terse");
     // consolidated items carry no per-task evidence counts:
     expect(cap.text()).not.toContain("stated in 2 of 2");
+    const saved = readConsolidatedPreferences(home);
+    expect(saved.invalid).toBe(false);
+    expect(saved.artifact?.preferences).toEqual([{ text: "be terse", merged_from: 2 }]);
+    expect(saved.artifact?.source_preferences).toHaveLength(2);
+    expect(saved.artifact?.markdown).toContain("- be terse");
+    expect(
+      fs.statSync(path.join(home, "library", CONSOLIDATED_PREFERENCES_FILE)).mode & 0o777,
+    ).toBe(0o600);
   });
 
   it("scales the consolidation call's default timeout with the preference count", async () => {
@@ -317,7 +330,7 @@ describe("runPreferences", () => {
     }) as RunnerFn;
     const code = await runPreferences(
       { home, consolidate: true, yes: true },
-      { output: cap.out, runner },
+      { output: cap.out, runner, clipboard: fakeClipboard().copy },
     );
     expect(code).toBe(0);
     // 2 aggregated preferences → base + 2 × per-preference allowance.
@@ -335,7 +348,7 @@ describe("runPreferences", () => {
     }) as RunnerFn;
     const code = await runPreferences(
       { home, consolidate: true, yes: true, timeout: "900" },
-      { output: cap.out, runner },
+      { output: cap.out, runner, clipboard: fakeClipboard().copy },
     );
     expect(code).toBe(0);
     expect(seen).toBe(900_000);
@@ -358,6 +371,66 @@ describe("runPreferences", () => {
     // still yields the usable deterministic artifact:
     expect(cap.text()).toContain("## Working preferences");
     expect(cap.text()).toContain("- be terse");
+    expect(readConsolidatedPreferences(home)).toEqual({ artifact: null, invalid: false });
+  });
+
+  it("retains the last saved consolidation when a later model call fails or is declined", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("one-task", [{ text: "be terse", evidence: "e" }]));
+    const clipboard = fakeClipboard().copy;
+    await runPreferences(
+      { home, consolidate: true, yes: true },
+      {
+        output: capture().out,
+        clipboard,
+        runner: (async () => ({
+          preferences: [{ text: "Keep replies concise.", merged_from: 1 }],
+        })) as RunnerFn,
+      },
+    );
+    const file = path.join(home, "library", CONSOLIDATED_PREFERENCES_FILE);
+    const before = fs.readFileSync(file, "utf8");
+    const runner = (async () => {
+      throw new Error("Unavailable");
+    }) as RunnerFn;
+    expect(
+      await runPreferences(
+        { home, consolidate: true, yes: true },
+        { runner, clipboard, output: capture().out },
+      ),
+    ).toBe(1);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+    expect(
+      await runPreferences(
+        { home, consolidate: true },
+        { runner, clipboard, output: capture().out, input: inputWith("n\n") },
+      ),
+    ).toBe(2);
+    expect(fs.readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("reports a failed save while keeping the generated block available to copy", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("one-task", [{ text: "be terse", evidence: "e" }]));
+    fs.mkdirSync(path.join(home, "library", CONSOLIDATED_PREFERENCES_FILE));
+    const cap = capture();
+    const clipboard = fakeClipboard();
+    const code = await runPreferences(
+      { home, consolidate: true, yes: true },
+      {
+        output: cap.out,
+        clipboard: clipboard.copy,
+        runner: (async () => ({
+          preferences: [{ text: "Keep replies concise.", merged_from: 1 }],
+        })) as RunnerFn,
+      },
+    );
+    expect(code).toBe(1);
+    expect(cap.text()).toContain("Could not save consolidated preferences");
+    expect(clipboard.calls[0]).toContain("- Keep replies concise.");
+    expect(fs.readdirSync(path.join(home, "library")).some((file) => file.endsWith(".tmp"))).toBe(
+      false,
+    );
   });
 
   it("plain mode: enter (default yes) copies the exact rendered block and shows the target", async () => {

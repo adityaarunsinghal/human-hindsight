@@ -70,6 +70,21 @@ for (const field of [
     `Release contains ${field}`,
   );
 }
-if (!compat)
-  assert(report[0].size < 600_000, "The bundled CLI exceeded its compressed size budget.");
+if (!compat) {
+  const cli = execFileSync("tar", ["-xOf", tarball, "package/dist/cli.js"], {
+    encoding: "utf8",
+    maxBuffer: 2_000_000,
+  });
+  assert(cli.startsWith("#!/usr/bin/env node\n"), "The minified CLI lost its executable shebang.");
+  assert(!cli.includes("sourceMappingURL="), "Do not ship development source maps in the CLI.");
+  execFileSync(process.execPath, ["--check", "--input-type=module"], {
+    input: cli,
+    encoding: "utf8",
+  });
+  assert(
+    Buffer.byteLength(cli) < 500_000,
+    "The minified runtime bundle exceeded its uncompressed size budget.",
+  );
+  assert(report[0].size < 250_000, "The bundled CLI exceeded its compressed size budget.");
+}
 console.log(`package contents OK (${files.length} files, all expected).`);

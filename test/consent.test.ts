@@ -523,6 +523,9 @@ describe("runDistill", () => {
     expect(cap.text()).toContain("consolidated 1 → 1 preference(s).");
     expect(cap.text()).toContain("copied (1 preference(s), via pbcopy)");
     expect(copiedText).toContain("- be terse");
+    expect(
+      fs.readFileSync(path.join(home, "library", "preferences.consolidated.json"), "utf8"),
+    ).toContain("be terse");
     expect(cap.text()).toContain("CLAUDE.md");
   });
 
