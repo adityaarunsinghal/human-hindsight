@@ -545,12 +545,15 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       `library: ${authoredTotal} entr${authoredTotal === 1 ? "y" : "ies"} authored` +
       (authorResult.resumed.length ? ` (${authorResult.resumed.length} resumed)` : "") +
       (authorResult.skipped.length
-        ? `, ${authorResult.skipped.length} task(s) skipped (no successful sessions)`
+        ? `, ${authorResult.skipped.length} task(s) skipped (no completed/partial outcomes)`
         : "") +
       (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in misc` : "");
     write(authoredTotal > 0 ? green(librarySummary) : librarySummary);
     for (const s of authorResult.skipped) {
       write(`  · skipped ${s.slug}: ${s.reason}`);
+    }
+    if (authorResult.skipped.some((task) => task.reason.includes("unclear"))) {
+      write(dim("  unclear = outcome unverified. Supported preferences remain available."));
     }
 
     if (authorResult.failed.length > 0) {

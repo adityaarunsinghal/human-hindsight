@@ -1,6 +1,6 @@
 {
   "name": "human-hindsight",
-  "version": "1.8.2",
+  "version": "1.8.3",
   "description": "Mine coding-agent history (Claude Code, Codex, Kiro, OpenCode) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",

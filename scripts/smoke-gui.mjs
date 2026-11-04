@@ -81,7 +81,7 @@ for (const [slug, title, domain, body, authored_at] of samples) {
     JSON.stringify({
       slug,
       title,
-      domains: [domain],
+      domains: [domain, domain.toLowerCase()],
       authored_at,
       confidence: "high",
       members: ["one.md", "two.md"],
@@ -136,6 +136,34 @@ try {
       "/usr/bin/chromium",
     ].find((file) => fs.existsSync(file));
   assert(chromePath, "Chrome is required for browser verification");
+  const chromeLog = path.join(scratch, "chrome-startup.log");
+  const chromeStartedAt = Date.now();
+  const maxChromeStderr = 16 * 1024;
+  let chromeStderr = "";
+  let chromeSpawnError;
+  let chromeExit;
+  const chromeDiagnostics = () =>
+    [
+      `Executable: ${chromePath}`,
+      `Mode: ${process.env.GUI_HEADED === "1" ? "headed" : "headless"}`,
+      `Elapsed: ${Date.now() - chromeStartedAt}ms`,
+      `PID: ${chrome?.pid ?? "not started"}`,
+      `Spawn error: ${chromeSpawnError?.message ?? "none"}`,
+      `Exit: ${chromeExit ? JSON.stringify(chromeExit) : chromeSpawnError ? "not started" : "still running"}`,
+      `Stderr (last ${maxChromeStderr} characters):`,
+      chromeStderr || "(no stderr captured)",
+    ].join("\n");
+  const saveChromeDiagnostics = () => {
+    try {
+      fs.writeFileSync(chromeLog, `${chromeDiagnostics()}\n`, { mode: 0o600 });
+    } catch {
+      // Reporting the original startup failure must not depend on log writes.
+    }
+  };
+  const chromeStartupFailure = (reason) => {
+    saveChromeDiagnostics();
+    return new Error(`${reason}\n${chromeDiagnostics()}\nChrome diagnostic log: ${chromeLog}`);
+  };
   chrome = spawn(
     chromePath,
     [
@@ -153,10 +181,40 @@ try {
       "--window-size=1280,900",
       "about:blank",
     ],
-    { stdio: ["ignore", "ignore", "ignore"] },
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
+  chrome.stderr.setEncoding("utf8");
+  chrome.stderr.on("data", (chunk) => {
+    chromeStderr = (chromeStderr + chunk).slice(-maxChromeStderr);
+    saveChromeDiagnostics();
+  });
+  chrome.once("error", (error) => {
+    chromeSpawnError = error;
+    saveChromeDiagnostics();
+  });
+  chrome.once("exit", (code, signal) => {
+    chromeExit = { code, signal };
+    saveChromeDiagnostics();
+  });
+  saveChromeDiagnostics();
   const portFile = path.join(profile, "DevToolsActivePort");
-  await until(() => fs.existsSync(portFile), "Chrome debugging port");
+  try {
+    await until(
+      () => {
+        if (chromeSpawnError) throw new Error("Chrome could not be started.");
+        if (chromeExit) throw new Error("Chrome exited before its debugging port became ready.");
+        if (!fs.existsSync(portFile)) return false;
+        // The file can be observed while Chrome is still writing it.
+        const value = fs.readFileSync(portFile, "utf8").split("\n")[0];
+        const port = Number(value);
+        return /^[0-9]+$/.test(value) && port > 0 && port <= 65535;
+      },
+      "Chrome debugging port",
+      30_000,
+    );
+  } catch (error) {
+    throw chromeStartupFailure(error.message);
+  }
   const port = fs.readFileSync(portFile, "utf8").split("\n")[0];
   const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const target = pages.find((page) => page.type === "page");
@@ -212,26 +270,123 @@ try {
       "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))",
     );
   }
-  async function selectDomain(parts) {
+  async function selectDomain(parts, choose = true) {
     await evaluate(`(() => {
-      const root = document.getElementById("domain");
-      root.value = "";
-      root.dispatchEvent(new Event("change"));
-      ${JSON.stringify(parts)}.forEach((label, index) => {
-        const select = document.getElementById(index ? "domain-" + (index + 1) : "domain");
-        const option = [...select.options].find(option => option.textContent === label);
-        if (!option) throw new Error("Missing domain: " + label);
-        select.value = option.value;
-        select.dispatchEvent(new Event("change"));
-      });
+      const menu = document.getElementById("domain-menu");
+      const trigger = document.getElementById("domain");
+      trigger.scrollIntoView({block:"center"});
+      if (menu.hidden) trigger.click();
+      const parts = ${JSON.stringify(parts)};
+      for (let depth = 1; depth < parts.length; depth++) {
+        const key = parts.slice(0, depth).join(" > ").toLowerCase();
+        const toggle = [...menu.querySelectorAll(".domain-toggle")].find(el => el.dataset.domainKey === key);
+        if (!toggle) throw new Error("Missing domain branch: " + key);
+        if (toggle.getAttribute("aria-expanded") !== "true") toggle.click();
+      }
+      const key = parts.join(" > ").toLowerCase();
+      const button = [...menu.querySelectorAll(".domain-select")].find(el => el.dataset.domainKey === key);
+      if (!button || button.closest("[hidden]")) throw new Error("Missing visible domain: " + key);
+      button.scrollIntoView({block:"nearest"});
+      if (${choose}) button.click();
     })()`);
+    await settle();
+  }
+  async function expandEvidence() {
+    await evaluate(`(() => {
+      const details = document.getElementById("related");
+      if (!details.hidden && !details.open) details.querySelector("summary").click();
+    })()`);
+    await settle();
+  }
+  async function setTipExpanded(expanded) {
+    await evaluate(`(() => {
+      const button = document.getElementById("tip-toggle");
+      if ((button.getAttribute("aria-expanded") === "true") !== ${expanded}) button.click();
+    })()`);
+    await settle();
+  }
+  async function stepTip(amount) {
+    const before = await evaluate(
+      'Number(document.getElementById("tip-number").textContent.match(/[0-9]+/)[0])',
+    );
+    await evaluate(
+      `document.getElementById("${amount > 0 ? "next-tip" : "previous-tip"}").click()`,
+    );
+    const expected = ((before - 1 + amount + 10) % 10) + 1;
+    await until(
+      () =>
+        evaluate(
+          `document.getElementById("tip-number").textContent === "Tip ${expected}/10" && document.getElementById("tip-face").getAnimations().length === 0`,
+        ),
+      "tip transition",
+    );
+  }
+  async function reloadPage() {
+    const previous = await evaluate("window.__documentId");
+    await call("Page.reload");
+    await until(
+      () =>
+        evaluate(
+          `window.__documentId !== ${JSON.stringify(previous)} && (document.querySelector(".entry") !== null || document.getElementById("empty")?.hidden === false)`,
+        ),
+      "reloaded library",
+    );
+  }
+  async function pressEscape() {
+    for (const type of ["keyDown", "keyUp"]) {
+      await call("Input.dispatchKeyEvent", {
+        type,
+        key: "Escape",
+        code: "Escape",
+        windowsVirtualKeyCode: 27,
+      });
+    }
+    await settle();
+  }
+  async function inspectTree(selector) {
+    const measured = await evaluate(`(() => {
+      const root = document.querySelector(${JSON.stringify(selector)});
+      const box = root.getBoundingClientRect();
+      const rows = [...root.querySelectorAll(".domain-row")].filter(row => !row.closest("[hidden]")).map(row => {
+        const label = row.querySelector(".domain-select");
+        const gutter = row.querySelector(".domain-toggle,.domain-gutter");
+        const arrow = gutter.querySelector("svg");
+        const gap = gutter.getBoundingClientRect();
+        const range = document.createRange();
+        range.setStart(label.firstChild, 0);
+        range.setEnd(label.firstChild, 1);
+        const line = range.getBoundingClientRect();
+        const icon = arrow?.getBoundingClientRect();
+        return {
+          path: label.dataset.domainKey,
+          gutter: gap.width,
+          textGap: line.left - gap.right,
+          arrowCount: gutter.querySelectorAll("svg").length,
+          arrowOffset: icon ? Math.abs(icon.top + icon.height / 2 - line.top - line.height / 2) : 0,
+          clipped: label.scrollWidth > label.clientWidth + 1,
+        };
+      });
+      const keys = [...root.querySelectorAll(".domain-select")].map(button => button.dataset.domainKey);
+      return {x:box.x,y:box.y,width:box.width,height:box.height,right:box.right,bottom:box.bottom,viewportWidth:innerWidth,viewportHeight:innerHeight,rows,unique:keys.length===new Set(keys).size};
+    })()`);
+    assert.equal(measured.unique, true, "case variants must not duplicate domain nodes");
+    assert.ok(measured.x >= 0 && measured.right <= measured.viewportWidth + 1);
+    assert.ok(measured.y >= 0 && measured.bottom <= measured.viewportHeight + 1);
+    for (const row of measured.rows) {
+      assert.equal(row.gutter, 24, row.path);
+      assert.ok(row.textGap >= 0, `text overlaps the arrow gutter: ${row.path}`);
+      assert.ok(row.arrowCount <= 1, row.path);
+      assert.ok(row.arrowOffset <= 4, `arrow is not aligned to the first line: ${row.path}`);
+      assert.equal(row.clipped, false, row.path);
+    }
+    return measured;
   }
   await call("Page.enable");
   await call("Runtime.enable");
   await call("Network.enable");
   await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   await call("Page.addScriptToEvaluateOnNewDocument", {
-    source: `Object.defineProperty(navigator, "clipboard", {configurable:true, value:{writeText:async(text)=>{window.__copied=text;}}});
+    source: `window.__documentId = Math.random(); Object.defineProperty(navigator, "clipboard", {configurable:true, value:{writeText:async(text)=>{window.__copied=text;}}});
       const originalInterval = window.setInterval.bind(window);
       window.setInterval = (callback, delay, ...args) => {
         if (delay === 14000) window.__rotateTip = () => callback(...args);
@@ -250,6 +405,11 @@ try {
   );
   await settle();
   assert.equal(await evaluate('document.getElementById("tip-number").textContent'), "Tip 1/10");
+  assert.equal(await evaluate('document.getElementById("tip-details").hidden'), true);
+  assert.equal(
+    await evaluate('document.querySelector(".topbar").getBoundingClientRect().height'),
+    53,
+  );
   assert.equal(
     await evaluate('document.querySelector("#tip-text a").href'),
     "https://github.com/adityaarunsinghal/human-hindsight",
@@ -260,24 +420,30 @@ try {
     ),
     true,
   );
+  await setTipExpanded(true);
   await screenshot("desktop-privacy-tip");
+  await setTipExpanded(false);
   // Advance the registered timer callback deterministically, with focus outside
   // the bar. Native window activation and wall-clock timing are not the feature.
   await evaluate('document.getElementById("title").focus(); window.__rotateTip()');
-  assert.notEqual(await evaluate('document.getElementById("tip-number").textContent'), "Tip 1/10");
-  await evaluate(`(() => {
-    for (let index = 0; index < 10 && document.getElementById("tip-number").textContent !== "Tip 1/10"; index++)
-      document.getElementById("previous-tip").click();
-  })()`);
-  await evaluate(
-    'document.getElementById("next-tip").click(); document.getElementById("copy-tip").click()',
+  await until(
+    () =>
+      evaluate(
+        'document.getElementById("tip-number").textContent === "Tip 2/10" && document.getElementById("tip-face").getAnimations().length === 0',
+      ),
+    "automatic tip rotation",
   );
+  await stepTip(-1);
+  await setTipExpanded(true);
+  await stepTip(1);
+  await evaluate('document.getElementById("copy-tip").click()');
   await until(() => evaluate("window.__copied !== undefined"), "tip command copy");
   assert.match(
     await evaluate("window.__copied"),
     /^npx human-hindsight@latest preferences --home /,
   );
-  await evaluate('window.__copied=undefined; document.getElementById("next-tip").click()');
+  await evaluate("window.__copied=undefined");
+  await stepTip(1);
   assert.equal(
     await evaluate('document.getElementById("tip-cost").textContent.includes("credits")'),
     true,
@@ -294,6 +460,7 @@ try {
     "true",
   );
   const pausedTip = await evaluate('document.getElementById("tip-number").textContent');
+  await setTipExpanded(false);
   await evaluate('document.getElementById("title").focus(); window.__rotateTip()');
   assert.equal(await evaluate('document.getElementById("tip-number").textContent'), pausedTip);
   await evaluate('document.getElementById("hide-tips").click()');
@@ -381,10 +548,15 @@ try {
     'navigator.clipboard.writeText=async(text)=>{window.__copied=text;}; document.getElementById("preferences-tab").click()',
   );
   assert.equal(await evaluate('document.getElementById("count").textContent'), "5 preferences");
-  assert.equal(await evaluate('document.getElementById("domain").options.length'), 2);
+  assert.equal(
+    await evaluate(
+      'document.querySelectorAll("#domain-menu > .domain-tree > .domain-node").length',
+    ),
+    1,
+  );
   assert.equal(await evaluate('document.getElementById("sort").value'), "frequency");
   assert.equal(
-    await evaluate('document.getElementById("copy").textContent'),
+    await evaluate('document.getElementById("copy").getAttribute("aria-label")'),
     "Review candidates first",
   );
   assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
@@ -398,13 +570,32 @@ try {
   assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
   await evaluate('document.getElementById("accept-preference").click()');
   await until(
-    () => evaluate('document.getElementById("accept-preference").textContent === "Accepted"'),
+    () =>
+      evaluate(
+        'document.getElementById("accept-preference").getAttribute("aria-label") === "Accepted preference"',
+      ),
     "explicit preference acceptance",
   );
   await evaluate('window.__copied=undefined; document.getElementById("copy").click()');
   await until(() => evaluate("window.__copied !== undefined"), "preference copy");
   assert.equal(await evaluate("window.__copied"), `- ${sharedPreference}`);
+  await expandEvidence();
   await screenshot("desktop-preference-evidence");
+  await evaluate('document.querySelector(".domain-context-summary").click()');
+  assert.deepEqual(
+    await evaluate(
+      '[...document.querySelectorAll(".domain-context-tree > .domain-tree > .domain-node > .domain-row > .domain-select")].map(el => el.textContent)',
+    ),
+    ["Software engineering"],
+  );
+  assert.equal(
+    await evaluate(
+      '[...document.querySelectorAll(".domain-context-tree .domain-select")].filter(el => el.dataset.domainKey === "software engineering").length',
+    ),
+    1,
+  );
+  await screenshot("desktop-grouped-domains");
+  await evaluate('document.querySelector(".domain-context-summary").click()');
   await evaluate('document.querySelector("#related-list > li > a").click()');
   assert.equal(
     await evaluate('document.getElementById("prompts-tab").getAttribute("aria-selected")'),
@@ -498,7 +689,10 @@ try {
   );
   await evaluate('document.getElementById("accept-preference").click()');
   await until(
-    () => evaluate('document.getElementById("accept-preference").textContent === "Accepted"'),
+    () =>
+      evaluate(
+        'document.getElementById("accept-preference").getAttribute("aria-label") === "Accepted preference"',
+      ),
     "accept literal markup as inert content",
   );
   await evaluate(
@@ -530,13 +724,14 @@ try {
     () => evaluate('document.getElementById("source").value.includes("focused tests")'),
     "preference bookmark",
   );
-  await call("Page.reload");
+  await reloadPage();
   await until(
     () => evaluate('document.getElementById("source")?.value.includes("focused tests")'),
     "reloaded preference bookmark",
   );
   assert.equal(await evaluate('document.getElementById("tips").hidden'), true);
   await evaluate('document.getElementById("show-tips").click()');
+  await setTipExpanded(true);
   assert.equal(await evaluate('document.getElementById("tip-number").textContent'), "Tip 1/10");
   await evaluate('document.getElementById("hide-tips").click()');
   await selectDomain(["Software engineering"]);
@@ -544,8 +739,10 @@ try {
   await selectDomain(["Software engineering", "Backend", "APIs", "Pagination", "Cursor"]);
   assert.equal(await evaluate('document.querySelectorAll(".entry").length'), 1);
   assert.equal(
-    await evaluate('document.querySelectorAll(".domain-level:not([hidden])").length'),
-    4,
+    await evaluate(
+      `["Software engineering", "Software engineering > Backend", "Software engineering > Backend > APIs", "Software engineering > Backend > APIs > Pagination"].every(path => [...document.querySelectorAll("#domain-menu .domain-toggle")].find(el => el.dataset.domainKey === path.toLowerCase())?.getAttribute("aria-expanded") === "true")`,
+    ),
+    true,
   );
   await screenshot("desktop-five-level-domains");
   await evaluate('document.getElementById("all-preferences").click()');
@@ -589,7 +786,7 @@ try {
       markdown: savedMarkdown,
     }),
   );
-  await evaluate('document.getElementById("refresh").click()');
+  await reloadPage();
   await until(
     () => evaluate('document.getElementById("saved-preferences").hidden === false'),
     "saved consolidation",
@@ -607,7 +804,7 @@ try {
   const metadata = JSON.parse(fs.readFileSync(metadataFile, "utf8"));
   metadata.preferences[0].evidence += " Updated source evidence.";
   fs.writeFileSync(metadataFile, JSON.stringify(metadata));
-  await evaluate('document.getElementById("refresh").click()');
+  await reloadPage();
   await until(
     () => evaluate('document.getElementById("consolidation-notice").hidden === false'),
     "stale saved consolidation",
@@ -640,7 +837,7 @@ try {
         );
         if (tab === "preferences" && branch === "long-label") {
           await evaluate(
-            'document.getElementById("edit-preference").click(); document.getElementById("preference-scope").value="task"; document.getElementById("preference-scope").dispatchEvent(new Event("change"));',
+            '[...document.querySelectorAll(".entry")].find(el => el.textContent.includes("Preserve existing behavior")).click(); document.getElementById("edit-preference").click(); document.getElementById("preference-scope").value="task"; document.getElementById("preference-scope").dispatchEvent(new Event("change"));',
           );
         }
         if (branch === "accepted-instructions") {
@@ -655,8 +852,13 @@ try {
           );
         }
         await settle();
+        const triggerPoint = await evaluate(`(() => {
+          const element=document.getElementById("domain"); element.scrollIntoView({block:"center"});
+          const rect=element.getBoundingClientRect(); return {x:rect.x+rect.width/2,y:rect.y+rect.height/2};
+        })()`);
+        await call("Input.dispatchMouseEvent", { type: "mouseMoved", ...triggerPoint });
         const measured = await evaluate(
-          '[...document.querySelectorAll("select")].filter(el => !el.closest("[hidden]")).map(el => { const s=getComputedStyle(el); const r=el.getBoundingClientRect(); return {id:el.id,value:el.value,appearance:s.appearance,paddingRight:s.paddingRight,backgroundSize:s.backgroundSize,backgroundPosition:s.backgroundPosition,backgroundImage:s.backgroundImage,textOverflow:s.textOverflow,x:r.x,y:r.y,width:r.width,height:r.height}; })',
+          '[...document.querySelectorAll("select,#domain")].filter(el => !el.closest("[hidden]")).map(el => { const s=getComputedStyle(el); const r=el.getBoundingClientRect(); return {id:el.id,tag:el.tagName,value:el.value,appearance:s.appearance,paddingRight:s.paddingRight,backgroundSize:s.backgroundSize,backgroundPosition:s.backgroundPosition,backgroundImage:s.backgroundImage,textOverflow:s.textOverflow,x:r.x,y:r.y,width:r.width,height:r.height}; })',
         );
         for (const item of measured) {
           assert.equal(item.appearance, "none");
@@ -667,7 +869,7 @@ try {
           );
           assert.equal((item.backgroundImage.match(/url\(/g) || []).length, 1);
           assert.equal(item.textOverflow, "ellipsis");
-          assert.ok(item.width > 250);
+          assert.ok(item.width >= 100, `${item.id} keeps usable label space beside its arrow`);
         }
         assert.equal(await evaluate("document.documentElement.scrollWidth <= innerWidth"), true);
         measurements.push({
@@ -686,7 +888,53 @@ try {
           assert.equal(c[1], c[2]);
         }
         await screenshot(`narrow-${tab}-${theme}-${branch}`);
-        for (const item of measured) {
+        if (parts.length) {
+          await selectDomain(parts, false);
+          const tree = await inspectTree("#domain-menu");
+          measurements.push({ theme, tab, branch, domainTree: tree });
+          await screenshot(`narrow-${tab}-${theme}-${branch}-domain-tree`);
+          await pressEscape();
+          assert.equal(await evaluate('document.getElementById("domain-menu").hidden'), true);
+          assert.equal(await evaluate("document.activeElement.id"), "domain");
+          if (branch === "five-levels") {
+            await selectDomain(parts, false);
+            await evaluate(`(() => {
+              const toggle=[...document.querySelectorAll("#domain-menu .domain-toggle")].find(el=>el.dataset.domainKey==="software engineering");
+              toggle.focus(); toggle.click();
+            })()`);
+            await pressEscape();
+            await evaluate('document.getElementById("domain").click()');
+            assert.equal(
+              await evaluate("document.activeElement.dataset.domainKey"),
+              "software engineering",
+              "reopening a collapsed selection focuses its visible ancestor",
+            );
+            await evaluate('document.getElementById("title").focus()');
+            assert.equal(await evaluate('document.getElementById("domain-menu").hidden'), true);
+            assert.equal(await evaluate("document.activeElement.id"), "title");
+          }
+        }
+        if (tab === "preferences" && branch === "long-label") {
+          await evaluate(`(() => {
+            const summary=document.querySelector(".domain-context-summary");
+            summary.scrollIntoView({block:"center"}); summary.click();
+          })()`);
+          await settle();
+          measurements.push({
+            theme,
+            tab,
+            branch,
+            contextTree: await inspectTree(".domain-context-tree"),
+          });
+          await screenshot(`narrow-${theme}-grouped-domain-context`);
+          await evaluate('document.querySelector(".domain-context-summary").focus()');
+          await pressEscape();
+          assert.equal(
+            await evaluate('document.querySelector(".domain-context-more").open'),
+            false,
+          );
+        }
+        for (const item of measured.filter((item) => item.tag === "SELECT")) {
           await call("Page.bringToFront");
           const point = await evaluate(`(() => {
             const element = document.getElementById(${JSON.stringify(item.id)});
@@ -729,18 +977,7 @@ try {
             );
           }
           await screenshot(`${theme}-${tab}-${branch}-${item.id}-open`);
-          await call("Input.dispatchKeyEvent", {
-            type: "keyDown",
-            key: "Escape",
-            code: "Escape",
-            windowsVirtualKeyCode: 27,
-          });
-          await call("Input.dispatchKeyEvent", {
-            type: "keyUp",
-            key: "Escape",
-            code: "Escape",
-            windowsVirtualKeyCode: 27,
-          });
+          await pressEscape();
           // macOS native menus can consume Escape outside the renderer. Disable
           // only during teardown so the next control gets its own fresh popup.
           await evaluate(`document.getElementById(${JSON.stringify(item.id)}).disabled = true`);
@@ -764,13 +1001,14 @@ try {
     [],
   );
   await evaluate(
-    'document.getElementById("prompts-tab").click(); document.getElementById("domain").value=""; document.getElementById("domain").dispatchEvent(new Event("change")); document.getElementById("search").value="pagination"; document.getElementById("search").dispatchEvent(new Event("input"));',
+    'document.getElementById("prompts-tab").click(); document.getElementById("search").value="pagination"; document.getElementById("search").dispatchEvent(new Event("input"));',
   );
+  await selectDomain([]);
   fs.writeFileSync(
     path.join(home, "library/users-pagination/users-pagination.oneshot.md"),
     "# Add pagination to the users endpoint\n\nA refreshed pagination prompt.",
   );
-  await evaluate('document.getElementById("refresh").click()');
+  await reloadPage();
   await until(
     () =>
       evaluate(
@@ -779,7 +1017,7 @@ try {
     "refresh",
   );
   fs.renameSync(path.join(home, "library"), path.join(home, "library-saved"));
-  await evaluate('document.getElementById("refresh").click()');
+  await reloadPage();
   await until(() => evaluate('document.getElementById("empty").hidden === false'), "empty library");
   assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
   await evaluate('document.getElementById("preferences-tab").click()');
@@ -805,11 +1043,13 @@ try {
           "copy fallback",
           "preference Markdown, evidence, and links in both directions",
           "preference search, remembered filters, and bookmarks",
-          "hierarchical parent filters and five-level drill-down",
-          "copy all preferences and saved consolidation",
+          "hierarchical parent filters and five-level domain tree",
+          "case-insensitive domain dedupe and grouped context",
+          "domain popup keyboard focus and arrow gutters",
+          "copy accepted preferences and saved consolidation",
           "saved consolidation freshness",
           "linked privacy reminder and copyable npx tips",
-          "tips pause, hide, restore, and remember visibility",
+          "compact animated tips pause, hide, restore, and remember visibility",
           "literal markup",
           "refresh",
           "empty library",

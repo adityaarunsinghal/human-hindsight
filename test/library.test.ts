@@ -253,7 +253,9 @@ describe("renderStatus", () => {
     expect(out).toContain("clustered   3 task(s), 0 in misc");
     expect(out).toContain("authored    1 of 3 task(s)");
     expect(out).toContain("✓ authored-task-here");
-    expect(out).toContain("· doomed-task-here skipped (no successful sessions: 1 abandoned)");
+    expect(out).toContain(
+      "· doomed-task-here skipped (no completed/partial outcomes: 1 abandoned)",
+    );
     expect(out).toContain("· pending-task-here pending");
     expect(out).toContain("1 orphaned library entry");
     expect(out).toContain("⚠ orphaned-task-here (generation g1)");

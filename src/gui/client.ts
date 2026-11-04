@@ -1,6 +1,9 @@
-import { PRIVACY_REMINDER, PUBLIC_REPOSITORY_URL } from "../core/privacy.js";
+import { domainPath, matchesDomain } from "../core/domains.js";
+import { createDomainPicker, renderDomainContext } from "./domains.js";
+import { icon, setIconButton } from "./icons.js";
 import { renderMarkdown } from "./markdown.js";
 import type { GuiEntry, GuiPreference, GuiSnapshot } from "./server.js";
+import { initTips } from "./tips.js";
 
 type Tab = "prompts" | "preferences";
 interface BrowseState {
@@ -26,26 +29,9 @@ const ACCEPTED = "accepted";
 const SAVED = "consolidated";
 const byId = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const search = byId<HTMLInputElement>("search");
-const domain = byId<HTMLSelectElement>("domain");
-const domainSelects = [domain];
-for (let level = 2; level <= MAX_DOMAIN_DEPTH; level++) {
-  const field = document.createElement("div");
-  field.className = "domain-level";
-  field.hidden = true;
-  const label = document.createElement("label");
-  label.htmlFor = `domain-${level}`;
-  label.textContent = `Subdomain · level ${level}`;
-  const select = document.createElement("select");
-  select.id = label.htmlFor;
-  select.setAttribute("aria-label", `Filter by subdomain level ${level}`);
-  field.append(label, select);
-  byId("domain-children").append(field);
-  domainSelects.push(select);
-}
 const sort = byId<HTMLSelectElement>("sort");
 const list = byId("list");
 const copy = byId<HTMLButtonElement>("copy");
-const refresh = byId<HTMLButtonElement>("refresh");
 const allPreferences = byId<HTMLButtonElement>("all-preferences");
 const acceptedPreferences = byId<HTMLButtonElement>("accepted-preferences");
 const savedPreferences = byId<HTMLButtonElement>("saved-preferences");
@@ -80,6 +66,8 @@ let mode: "preview" | "source" = "preview";
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
 let selectionVersion = 0;
 let renderedHash = "";
+const domainPicker = createDomainPicker(byId("domain-picker"), selectDomain);
+const tipsController = initTips(() => commands);
 
 function textElement(tag: string, text: string, className?: string) {
   const element = document.createElement(tag);
@@ -179,48 +167,21 @@ function readRoute() {
 function rememberControls() {
   Object.assign(states[tab], {
     query: search.value,
-    domain: domainSelects.findLast((select) => select.value)?.value ?? "",
     sort: sort.value,
   });
 }
 function syncDomainControls() {
-  const paths = items().flatMap((item) => item.domains.map(domainPath));
-  const selected = states[tab].domain.split(" > ").filter(Boolean);
-  let parent: string[] = [];
-  for (const [level, select] of domainSelects.entries()) {
-    const children = [
-      ...new Map(
-        paths
-          .filter((path) =>
-            parent.every((part, index) => path[index]?.toLowerCase() === part.toLowerCase()),
-          )
-          .map((path) => path[level])
-          .filter((part): part is string => Boolean(part))
-          .map((part) => [part.toLowerCase(), part]),
-      ).values(),
-    ].sort((a, b) => a.localeCompare(b));
-    const visible = level === 0 || (parent.length === level && children.length > 0);
-    if (level > 0 && select.parentElement) select.parentElement.hidden = !visible;
-    select.replaceChildren(
-      ...["", ...(visible ? children : [])].map((part) => {
-        const option = textElement(
-          "option",
-          part || (level ? "All subdomains" : "All domains"),
-        ) as HTMLOptionElement;
-        option.value = part ? [...parent, part].join(" > ") : "";
-        return option;
-      }),
-    );
-    const part = children.find((value) => value.toLowerCase() === selected[level]?.toLowerCase());
-    if (visible && part && parent.length === level) {
-      parent = [...parent, part];
-      select.value = parent.join(" > ");
-    } else {
-      select.value = "";
-    }
-    select.title = select.selectedOptions[0]?.textContent ?? "";
-  }
-  states[tab].domain = parent.join(" > ");
+  states[tab].domain = domainPicker.update(
+    items().flatMap((item) => item.domains),
+    states[tab].domain,
+  );
+}
+function selectDomain(path: string) {
+  rememberControls();
+  states[tab].domain = path;
+  syncDomainControls();
+  render();
+  byId("domain").focus({ preventScroll: true });
 }
 function syncControls() {
   const isPreferences = tab === "preferences";
@@ -233,13 +194,13 @@ function syncControls() {
   byId("browser").setAttribute("aria-label", `Browse ${noun}`);
   byId("list").setAttribute("aria-label", isPreferences ? "Preferences" : "Prompts");
   byId("search-label").textContent = `Search ${noun}`;
-  search.placeholder = isPreferences ? "Text, evidence, or domain…" : "Title, text, or domain…";
+  search.placeholder = isPreferences ? "Search preferences…" : "Search prompts…";
   search.value = states[tab].query;
   sort.setAttribute("aria-label", `Sort ${noun}`);
   const sorts = [
-    ...(isPreferences ? [["frequency", "Most frequent first"]] : []),
-    ["newest", "Newest first"],
-    ["title", isPreferences ? "Text A–Z" : "Title A–Z"],
+    ...(isPreferences ? [["frequency", "Frequent"]] : []),
+    ["newest", "Newest"],
+    ["title", "A–Z"],
   ];
   sort.replaceChildren(
     ...sorts.map(([value, label]) => {
@@ -252,18 +213,19 @@ function syncControls() {
   syncDomainControls();
   allPreferences.hidden = !isPreferences;
   allPreferences.disabled = !preferences.length;
-  allPreferences.textContent = "View all candidates";
+  allPreferences.textContent = "All";
+  allPreferences.title = "View all candidates";
   acceptedPreferences.hidden = !isPreferences;
-  acceptedPreferences.textContent = `Accepted instructions · ${acceptedCount}`;
+  acceptedPreferences.textContent = `Accepted · ${acceptedCount}`;
+  acceptedPreferences.title = "Accepted instructions";
   savedPreferences.hidden = !isPreferences || !consolidation;
-  savedPreferences.textContent = consolidation?.stale
-    ? "Saved consolidation · outdated"
-    : "Saved consolidation";
+  savedPreferences.textContent = consolidation?.stale ? "Saved · outdated" : "Saved";
+  savedPreferences.title = "Saved consolidation";
   byId("list-empty-text").textContent = `No matching ${noun}.`;
   byId("empty-title").textContent = isPreferences ? "No preferences yet" : "No prompts yet";
   byId("empty-text").textContent = isPreferences
-    ? "Preferences appear when distilled tasks include your working preferences. Distill more tasks in the terminal, then refresh."
-    : "Build your library in the terminal, then refresh this page.";
+    ? "Distill your sessions in the terminal, then reload this page to review preferences."
+    : "Build your library in the terminal, then reload this page.";
   byId("empty-command").textContent = isPreferences ? "human-hindsight distill" : "human-hindsight";
   byId("viewer").setAttribute(
     "aria-label",
@@ -309,11 +271,12 @@ function relatedLink(nextTab: Tab, id: string, label: string) {
   return link;
 }
 function renderRelated(item: BrowseItem | undefined) {
-  const related = byId("related");
+  const related = byId<HTMLDetailsElement>("related");
+  related.open = false;
   const relatedList = byId("related-list");
   relatedList.replaceChildren();
   if (item?.id === SAVED && consolidation) {
-    byId("related-title").textContent = "Evidence for each consolidated instruction";
+    byId("related-title").textContent = "Source evidence";
     for (const instruction of consolidation.items) {
       const row = document.createElement("li");
       row.append(textElement("strong", plainText(instruction.text)));
@@ -330,7 +293,7 @@ function renderRelated(item: BrowseItem | undefined) {
       relatedList.append(row);
     }
   } else if (item?.prompt) {
-    byId("related-title").textContent = "Preferences from this prompt";
+    byId("related-title").textContent = "Related preferences";
     for (const id of item.prompt.preferenceIds) {
       const preference = preferences.find((value) => value.id === id);
       if (!preference) continue;
@@ -342,7 +305,9 @@ function renderRelated(item: BrowseItem | undefined) {
       relatedList.append(row);
     }
   } else if (item?.preference) {
-    byId("related-title").textContent = "Source evidence";
+    byId("related-title").textContent = item.preference.verified
+      ? "Source evidence"
+      : "Source evidence · unverified";
     item.preference.occurrences.forEach((occurrence, index) => {
       const row = document.createElement("li");
       row.append(
@@ -372,6 +337,7 @@ function renderRelated(item: BrowseItem | undefined) {
       relatedList.append(row);
     });
   }
+  byId("related-count").textContent = String(relatedList.childElementCount);
   related.hidden = !relatedList.childElementCount;
 }
 function copyLabel() {
@@ -402,21 +368,30 @@ function renderReview(item: BrowseItem | undefined) {
   const review = preference.review;
   const scope =
     review.scope === "global"
-      ? "Every project"
+      ? "All projects"
       : review.scope === "project"
-        ? `Project: ${review.project || "choose a project"}`
-        : "This task only";
+        ? review.project || "Choose a project"
+        : "This task";
   byId("review-summary").textContent = [
-    review.stale ? "Evidence changed; review again." : `${review.status}.`,
-    `${scope}.`,
+    review.stale ? "Evidence changed" : review.status,
+    scope,
+    reviewsInvalid ? "Reviews unavailable" : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  byId("review-summary").title = [
     preference.verified
-      ? `${preference.basis === "explicit" ? "Explicit instruction" : "Inferred preference"}; original quotation below.`
-      : "Legacy observation; check its evidence before accepting.",
+      ? `${preference.basis === "explicit" ? "Explicit instruction" : "Inferred preference"}. Open Source evidence to read the original quotation.`
+      : "Legacy observation. Check its evidence before accepting.",
     reviewsInvalid ? "Saved reviews could not be read." : "",
   ].join(" ");
   const accept = byId<HTMLButtonElement>("accept-preference");
   accept.disabled = reviewBusy || reviewsInvalid || review.status === "accepted";
-  accept.textContent = review.status === "accepted" ? "Accepted" : "Accept";
+  setIconButton(
+    accept,
+    "check",
+    review.status === "accepted" ? "Accepted preference" : "Accept preference",
+  );
   byId<HTMLButtonElement>("dismiss-preference").disabled =
     reviewBusy || reviewsInvalid || review.status === "dismissed";
   byId<HTMLButtonElement>("edit-preference").disabled = reviewBusy || reviewsInvalid;
@@ -424,21 +399,33 @@ function renderReview(item: BrowseItem | undefined) {
   reset.hidden = review.status === "pending" && !review.stale;
   reset.disabled = reviewBusy || reviewsInvalid;
 }
+function metadataDetails(lines: string[]): HTMLDetailsElement {
+  const details = document.createElement("details");
+  details.className = "entry-details";
+  const summary = document.createElement("summary");
+  summary.setAttribute("aria-label", "More details");
+  summary.title = "More details";
+  summary.append(icon("info"));
+  const panel = document.createElement("div");
+  panel.className = "entry-details-panel";
+  for (const line of lines.filter(Boolean)) panel.append(textElement("p", line));
+  details.append(summary, panel);
+  return details;
+}
 function renderDetail() {
   selectionVersion++;
   const item = currentItem();
   clearTimeout(copyTimer);
-  copy.textContent = copyLabel();
+  setIconButton(copy, "copy", copyLabel());
   copy.disabled = !canCopy(item);
   previewButton.disabled = sourceButton.disabled = !item;
   byId("copy-status").textContent = "";
   const metadata = byId("metadata");
   metadata.replaceChildren();
+  byId("viewer").dataset.kind = item?.preference ? "preference" : "prompt";
   byId("title").textContent = item
     ? item.preference
-      ? item.preference.review.status === "accepted"
-        ? "Accepted preference"
-        : "Preference candidate"
+      ? "Preference"
       : item.title
     : items().length
       ? `No matching ${tab}`
@@ -482,47 +469,56 @@ function renderDetail() {
     consolidationNotice.hidden = false;
   } else if (item?.id === ALL) {
     consolidationNotice.textContent =
-      "These are suggestions from your history. Open a candidate to check the evidence, choose its scope, and accept, edit, or dismiss it. Accepted instructions are available as a separate block.";
+      "Open a candidate to review it. Accepted preferences become your reusable instructions.";
     consolidationNotice.hidden = false;
   }
   if (item) {
-    for (const value of item.domains) metadata.append(textElement("span", value, "tag"));
+    if (item.domains.length) metadata.append(renderDomainContext(item.domains, selectDomain));
     const details: string[] = [];
     if (item.prompt) {
       const prompt = item.prompt;
-      details.push(
-        dateLabel(item.authoredAt),
-        `${prompt.sessions} ${prompt.sessions === 1 ? "session" : "sessions"}`,
-        `${prompt.confidence} confidence`,
+      const summary = textElement("div", "", "metadata-summary");
+      const more = [dateLabel(item.authoredAt), `${prompt.confidence} confidence`];
+      if (prompt.edited) more.push("Edited");
+      if (prompt.rating === "up") more.push("Liked");
+      if (prompt.rating === "down") more.push("Disliked");
+      summary.append(
+        textElement("span", `${prompt.sessions} ${prompt.sessions === 1 ? "session" : "sessions"}`),
+        metadataDetails(more),
       );
-      if (prompt.edited) details.push("Edited");
-      if (prompt.rating === "up") details.push("Liked");
-      if (prompt.rating === "down") details.push("Disliked");
+      metadata.append(summary);
     } else if (item.preference) {
-      details.push(
-        `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
-        dateLabel(item.authoredAt),
+      const summary = textElement("div", "", "metadata-summary");
+      summary.append(
+        textElement(
+          "span",
+          `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
+        ),
+        metadataDetails([
+          dateLabel(item.authoredAt),
+          item.preference.verified
+            ? item.preference.basis === "explicit"
+              ? "Explicit instruction"
+              : "Inferred preference"
+            : "Legacy observation · unverified",
+        ]),
       );
+      metadata.append(summary);
     } else if (item.id === ACCEPTED) {
-      details.push(
-        instructionProject.value ? `Project: ${instructionProject.value}` : "Global preferences",
-        "Only accepted instructions",
-      );
+      details.push(instructionProject.value || "All projects");
     } else if (item.id === SAVED && consolidation) {
       details.push(
-        `${consolidation.texts.length} consolidated preferences`,
-        dateLabel(consolidation.generatedAt),
-        `From ${consolidation.sourcePreferenceIds.length} observed preferences`,
+        `${consolidation.texts.length} instructions`,
+        `From ${consolidation.sourcePreferenceIds.length} preferences`,
       );
     } else {
       const recurring = preferences.filter((preference) => preference.count > 1).length;
       details.push(
         `${preferences.length} ${preferences.length === 1 ? "preference" : "preferences"}`,
         `${recurring} recurring`,
-        "Review before adding to CLAUDE.md or AGENTS.md",
       );
     }
-    metadata.append(textElement("span", details.filter(Boolean).join(" · ")));
+    if (details.length) metadata.append(textElement("span", details.filter(Boolean).join(" · ")));
   }
   renderReview(item);
   renderRelated(item);
@@ -530,7 +526,6 @@ function renderDetail() {
 }
 function render(historyMode: "push" | "replace" = "replace") {
   const state = states[tab];
-  domain.title = domain.value || "All domains";
   sort.title = sort.selectedOptions[0]?.textContent || "";
   const terms = state.query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   const all = items();
@@ -586,26 +581,50 @@ function render(historyMode: "push" | "replace" = "replace") {
       button.type = "button";
       button.dataset.id = item.id;
       button.setAttribute("aria-current", String(item.id === state.selected));
-      const details = [
-        ...(item.preference
-          ? [
-              item.preference.review.status,
-              item.preference.review.scope,
-              `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
-            ]
-          : []),
-        item.domains.join(", "),
-        dateLabel(item.authoredAt),
-      ];
-      button.append(
-        textElement("span", item.title, "entry-title"),
-        textElement(
+      button.title = item.title;
+      const meta = textElement("span", "", "entry-meta");
+      if (item.preference) {
+        const review = item.preference.review;
+        const state = textElement("span", "", "entry-state");
+        state.dataset.state = review.status;
+        state.setAttribute("role", "img");
+        state.setAttribute("aria-label", review.status);
+        state.title = review.stale ? "Evidence changed" : review.status;
+        meta.append(
+          state,
+          textElement(
+            "span",
+            review.scope === "global"
+              ? "All projects"
+              : review.scope === "project"
+                ? review.project || "Project"
+                : "This task",
+            "entry-meta-label",
+          ),
+          textElement(
+            "span",
+            `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
+            "entry-meta-tail",
+          ),
+        );
+      } else {
+        const label = textElement(
           "span",
-          plainText(item.preference?.occurrences[0]?.evidence ?? item.body).slice(0, 140),
-          "entry-preview",
-        ),
-        textElement("span", details.filter(Boolean).join(" · "), "entry-meta"),
-      );
+          domainPath(item.domains[0] ?? "").at(-1) ?? "",
+          "entry-meta-label",
+        );
+        label.title = item.domains[0] ?? "";
+        meta.append(label);
+        if (item.prompt)
+          meta.append(
+            textElement(
+              "span",
+              `${item.prompt.sessions} session${item.prompt.sessions === 1 ? "" : "s"}`,
+              "entry-meta-tail",
+            ),
+          );
+      }
+      button.append(textElement("span", item.title, "entry-title"), meta);
       button.addEventListener("click", () => openItem(tab, item.id));
       return button;
     }),
@@ -619,7 +638,6 @@ function render(historyMode: "push" | "replace" = "replace") {
   renderedHash = location.hash;
 }
 async function load(snapshot?: GuiSnapshot): Promise<boolean> {
-  refresh.disabled = true;
   byId("notice").hidden = true;
   try {
     let data = snapshot;
@@ -678,6 +696,7 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
       id: preference.id,
       title: plainText(preference.review.text),
       body: `- ${preference.review.text}`,
+      preview: preference.review.text,
       domains: preference.domains,
       authoredAt: preference.lastAuthoredAt,
       searchText: [
@@ -698,7 +717,7 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
       preference,
     }));
     syncControls();
-    renderTip();
+    tipsController.refresh();
     byId("skipped").hidden = !data.skipped;
     byId("skipped").textContent =
       `${data.skipped} prompt file(s) could not be read. Run human-hindsight status for details.`;
@@ -710,8 +729,6 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
     byId("notice").hidden = false;
     if (!items().length) byId("count").textContent = "Library unavailable";
     return false;
-  } finally {
-    refresh.disabled = false;
   }
 }
 copy.addEventListener("click", async () => {
@@ -722,10 +739,10 @@ copy.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(item.body);
     if (version !== selectionVersion) return;
-    copy.textContent = "Copied";
+    setIconButton(copy, "check", "Copied");
     byId("copy-status").textContent = "Markdown copied. Ready to paste.";
     copyTimer = setTimeout(() => {
-      copy.textContent = copyLabel();
+      setIconButton(copy, "copy", copyLabel());
     }, 1800);
   } catch {
     if (version !== selectionVersion) return;
@@ -769,16 +786,7 @@ function filterChanged() {
 previewButton.addEventListener("click", () => setMode("preview"));
 sourceButton.addEventListener("click", () => setMode("source"));
 search.addEventListener("input", filterChanged);
-for (const [level, select] of domainSelects.entries()) {
-  select.addEventListener("change", () => {
-    states[tab].domain = select.value || domainSelects[level - 1]?.value || "";
-    syncDomainControls();
-    rememberControls();
-    render();
-  });
-}
 sort.addEventListener("change", filterChanged);
-refresh.addEventListener("click", () => load());
 allPreferences.addEventListener("click", () => openItem("preferences", ALL, true));
 acceptedPreferences.addEventListener("click", () => openItem("preferences", ACCEPTED, true));
 savedPreferences.addEventListener("click", () => openItem("preferences", SAVED, true));
@@ -852,10 +860,10 @@ async function reviewPreference(status: GuiPreference["review"]["status"], edite
       byId("review-status").textContent =
         status === "accepted"
           ? scope === "task"
-            ? "Accepted for this task. It will stay out of standing instruction blocks."
-            : "Accepted. Open Accepted instructions to copy the reviewed block."
+            ? "Saved for this task."
+            : "Saved to accepted instructions."
           : status === "dismissed"
-            ? "Dismissed. This candidate will stay out of instruction blocks."
+            ? "Dismissed."
             : "Returned to review.";
     }
   } catch (error) {
@@ -923,176 +931,21 @@ document.addEventListener("keydown", (event) => {
     search.value = "";
     filterChanged();
   }
-});
-interface Tip {
-  title: string;
-  text: string;
-  cost?: string;
-  command?: string;
-  repository?: boolean;
-}
-const tips = byId("tips");
-const showTips = byId<HTMLButtonElement>("show-tips");
-const copyTip = byId<HTMLButtonElement>("copy-tip");
-let tipIndex = 0;
-let tipVersion = 0;
-let tipsPaused = false;
-let tipsEnabled = true;
-try {
-  tipsEnabled = localStorage.getItem("human-hindsight-tips") !== "hidden";
-} catch {
-  /* Tips still work when browser storage is unavailable. */
-}
-function availableTips(): Tip[] {
-  return [
-    {
-      title: "Open source, with your history under your control",
-      text: PRIVACY_REMINDER,
-      cost: "Local-first",
-      repository: true,
-    },
-    {
-      title: "Carry your preferences into the next session",
-      text: "Review candidates in Preferences, then copy Accepted instructions into CLAUDE.md or AGENTS.md.",
-      cost: "No model call",
-      command: commands?.preferences,
-    },
-    {
-      title: "Optionally consolidate overlapping preferences",
-      text: "One model call merges similar wording and saves the result in this library. The terminal asks before running. Refresh here afterward.",
-      cost: "Optional · uses subscription/credits",
-      command: commands?.consolidate,
-    },
-    {
-      title: "Export your latest history",
-      text: "Refresh the local session exports before distilling new prompts.",
-      cost: "No model call",
-      command: commands?.export,
-    },
-    {
-      title: "Build more prompts and preferences",
-      text: "Distill your exports using a local agent CLI. Review the terminal's cost and consent prompt before proceeding.",
-      cost: "Uses subscription/credits",
-      command: commands?.distill,
-    },
-    {
-      title: "Check what is ready and what needs attention",
-      text: "See pipeline progress, skipped files, and the next suggested step.",
-      cost: "No model call",
-      command: commands?.status,
-    },
-    {
-      title: "Follow a preference back to its evidence",
-      text: "Open a preference to check its original quotation and scope before accepting it. Legacy observations are labeled for review.",
-    },
-    {
-      title: "The Markdown you see is the Markdown you copy",
-      text: "Switch between Preview and Markdown at any time. Copy preserves the source, including lists and code.",
-    },
-    {
-      title: "Start broad, then narrow your domain",
-      text: "Choose a domain to include all its children. Optional subdomain filters let you refine the results up to five levels deep.",
-    },
-    {
-      title: "Search without reaching for the mouse",
-      text: "Press / to focus search and Escape to clear it. Each tab remembers its own search, domain, and sort.",
-    },
-  ];
-}
-function renderTip() {
-  const choices = availableTips();
-  const tip = choices[tipIndex % choices.length];
-  if (!tip) return;
-  tipVersion++;
-  tips.hidden = !tipsEnabled;
-  showTips.hidden = tipsEnabled;
-  byId("tip-number").textContent = `Tip ${tipIndex + 1}/${choices.length}`;
-  byId("tip-title").textContent = tip.title;
-  if (tip.repository) {
-    const [before, after] = tip.text.split("fully open source");
-    const link = textElement("a", "fully open source") as HTMLAnchorElement;
-    link.href = PUBLIC_REPOSITORY_URL;
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    byId("tip-text").replaceChildren(
-      document.createTextNode(before ?? ""),
-      link,
-      document.createTextNode(after ?? ""),
-    );
-  } else byId("tip-text").textContent = tip.text;
-  byId("tip-cost").textContent = tip.cost ?? "";
-  byId("tip-cost").hidden = !tip.cost;
-  byId("tip-command-row").hidden = !tip.command;
-  byId("tip-command").textContent = tip.command ?? "";
-  byId("tip-status").textContent = "";
-  copyTip.textContent = "Copy command";
-  copyTip.disabled = !tip.command;
-}
-function stepTip(step: number) {
-  tipIndex = (tipIndex + step + availableTips().length) % availableTips().length;
-  renderTip();
-}
-function setTipsEnabled(enabled: boolean) {
-  tipsEnabled = enabled;
-  try {
-    localStorage.setItem("human-hindsight-tips", enabled ? "visible" : "hidden");
-  } catch {
-    /* Hiding tips does not depend on browser storage. */
-  }
-  renderTip();
-  (enabled ? byId("hide-tips") : showTips).focus();
-}
-byId("previous-tip").addEventListener("click", () => stepTip(-1));
-byId("next-tip").addEventListener("click", () => stepTip(1));
-byId("hide-tips").addEventListener("click", () => setTipsEnabled(false));
-showTips.addEventListener("click", () => setTipsEnabled(true));
-byId("pause-tips").addEventListener("click", () => {
-  tipsPaused = !tipsPaused;
-  byId("pause-tips").textContent = tipsPaused ? "Resume" : "Pause";
-  byId("pause-tips").setAttribute("aria-pressed", String(tipsPaused));
-});
-copyTip.addEventListener("click", async () => {
-  const command = availableTips()[tipIndex]?.command;
-  if (!command) return;
-  const version = tipVersion;
-  copyTip.disabled = true;
-  try {
-    await navigator.clipboard.writeText(command);
-    if (version !== tipVersion) return;
-    copyTip.textContent = "Copied";
-    byId("tip-status").textContent = "Command copied. Run it in your terminal when ready.";
-  } catch {
-    if (version !== tipVersion) return;
-    const code = byId("tip-command");
-    code.focus({ preventScroll: true });
-    const range = document.createRange();
-    range.selectNodeContents(code);
-    const selection = window.getSelection();
-    selection?.removeAllRanges();
-    selection?.addRange(range);
-    byId("tip-status").textContent =
-      `Command selected. Press ${/Mac/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} to copy.`;
-  } finally {
-    if (version === tipVersion) copyTip.disabled = false;
+  if (event.key === "Escape") {
+    for (const details of document.querySelectorAll<HTMLDetailsElement>(
+      ".entry-details[open], .domain-context-more[open]",
+    )) {
+      details.open = false;
+      details.querySelector("summary")?.focus();
+    }
   }
 });
-setInterval(() => {
-  if (
-    tipsEnabled &&
-    !tipsPaused &&
-    document.visibilityState === "visible" &&
-    !tips.matches(":hover") &&
-    !tips.contains(document.activeElement)
-  ) {
-    const choices = availableTips()
-      .map((_, index) => index)
-      .filter((index) => index !== 0 && index !== tipIndex);
-    tipIndex = choices[Math.floor(Math.random() * choices.length)] ?? 0;
-    renderTip();
+document.addEventListener("pointerdown", (event) => {
+  for (const details of document.querySelectorAll<HTMLDetailsElement>(
+    ".entry-details[open], .domain-context-more[open]",
+  )) {
+    if (event.target instanceof Node && !details.contains(event.target)) details.open = false;
   }
-}, 14_000);
-
+});
 readRoute();
 void load();
-
-import { domainPath, MAX_DOMAIN_DEPTH, matchesDomain } from "../core/domains.js";

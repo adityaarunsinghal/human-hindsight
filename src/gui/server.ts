@@ -7,6 +7,7 @@ import {
   preferencesFingerprint,
   readConsolidatedPreferences,
 } from "../core/consolidated-preferences.js";
+import { domainPath } from "../core/domains.js";
 import { oneshotHash, parseOneshot, readLibrary } from "../core/library.js";
 import {
   preferenceReview,
@@ -80,6 +81,18 @@ export interface GuiSnapshot {
   skipped: number;
 }
 
+/** Canonical path separators and case-insensitive identity, preserving readable labels. */
+function normalizedDomains(values: string[]): string[] {
+  const paths = new Map<string, string>();
+  for (const value of values) {
+    const normalized = domainPath(value).join(" > ");
+    if (normalized && !paths.has(normalized.toLowerCase())) {
+      paths.set(normalized.toLowerCase(), normalized);
+    }
+  }
+  return [...paths.values()].sort((a, b) => a.localeCompare(b));
+}
+
 /** Expose browsing data and commands for this home, without raw transcripts or source paths. */
 function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
   const library = readLibrary(home);
@@ -112,13 +125,25 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
   const reviewState = readPreferenceReviews(home);
   const preferences = aggregated.map((preference): GuiPreference => {
     const id = preferenceId(preference);
-    const domains = new Set<string>(preference.domains ?? []);
+    // A grouped prompt can span unrelated sessions. Its full domain union must
+    // not become evidence for each individual preference associated with it.
+    const evidenceDomains = normalizedDomains(
+      preference.occurrences.flatMap((occurrence) => occurrence.domains ?? []),
+    );
+    const ownDomains = normalizedDomains(preference.domains ?? []);
+    const domains =
+      evidenceDomains.length > 0
+        ? evidenceDomains
+        : ownDomains.length > 0
+          ? ownDomains
+          : normalizedDomains(
+              preference.occurrences.flatMap(({ slug }) => sources.get(slug)?.domains ?? []),
+            );
     const occurrences = preference.occurrences.map((occurrence) => {
       const { slug, evidence } = occurrence;
       const prompt = prompts.get(slug);
       const source = sources.get(slug);
       prompt?.preferenceIds.push(id);
-      for (const domain of source?.domains ?? []) domains.add(domain);
       return {
         slug,
         title: prompt?.title || source?.title || occurrence.exportName || slug,
@@ -134,7 +159,7 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
       id,
       text: preference.text,
       count: preference.count,
-      domains: [...domains].sort((a, b) => a.localeCompare(b)),
+      domains,
       lastAuthoredAt: preference.lastAuthoredAt,
       scope: preference.scope ?? "global",
       project: preference.project,
