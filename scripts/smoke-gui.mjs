@@ -136,6 +136,34 @@ try {
       "/usr/bin/chromium",
     ].find((file) => fs.existsSync(file));
   assert(chromePath, "Chrome is required for browser verification");
+  const chromeLog = path.join(scratch, "chrome-startup.log");
+  const chromeStartedAt = Date.now();
+  const maxChromeStderr = 16 * 1024;
+  let chromeStderr = "";
+  let chromeSpawnError;
+  let chromeExit;
+  const chromeDiagnostics = () =>
+    [
+      `Executable: ${chromePath}`,
+      `Mode: ${process.env.GUI_HEADED === "1" ? "headed" : "headless"}`,
+      `Elapsed: ${Date.now() - chromeStartedAt}ms`,
+      `PID: ${chrome?.pid ?? "not started"}`,
+      `Spawn error: ${chromeSpawnError?.message ?? "none"}`,
+      `Exit: ${chromeExit ? JSON.stringify(chromeExit) : chromeSpawnError ? "not started" : "still running"}`,
+      `Stderr (last ${maxChromeStderr} characters):`,
+      chromeStderr || "(no stderr captured)",
+    ].join("\n");
+  const saveChromeDiagnostics = () => {
+    try {
+      fs.writeFileSync(chromeLog, `${chromeDiagnostics()}\n`, { mode: 0o600 });
+    } catch {
+      // Reporting the original startup failure must not depend on log writes.
+    }
+  };
+  const chromeStartupFailure = (reason) => {
+    saveChromeDiagnostics();
+    return new Error(`${reason}\n${chromeDiagnostics()}\nChrome diagnostic log: ${chromeLog}`);
+  };
   chrome = spawn(
     chromePath,
     [
@@ -153,10 +181,40 @@ try {
       "--window-size=1280,900",
       "about:blank",
     ],
-    { stdio: ["ignore", "ignore", "ignore"] },
+    { stdio: ["ignore", "ignore", "pipe"] },
   );
+  chrome.stderr.setEncoding("utf8");
+  chrome.stderr.on("data", (chunk) => {
+    chromeStderr = (chromeStderr + chunk).slice(-maxChromeStderr);
+    saveChromeDiagnostics();
+  });
+  chrome.once("error", (error) => {
+    chromeSpawnError = error;
+    saveChromeDiagnostics();
+  });
+  chrome.once("exit", (code, signal) => {
+    chromeExit = { code, signal };
+    saveChromeDiagnostics();
+  });
+  saveChromeDiagnostics();
   const portFile = path.join(profile, "DevToolsActivePort");
-  await until(() => fs.existsSync(portFile), "Chrome debugging port");
+  try {
+    await until(
+      () => {
+        if (chromeSpawnError) throw new Error("Chrome could not be started.");
+        if (chromeExit) throw new Error("Chrome exited before its debugging port became ready.");
+        if (!fs.existsSync(portFile)) return false;
+        // The file can be observed while Chrome is still writing it.
+        const value = fs.readFileSync(portFile, "utf8").split("\n")[0];
+        const port = Number(value);
+        return /^[0-9]+$/.test(value) && port > 0 && port <= 65535;
+      },
+      "Chrome debugging port",
+      30_000,
+    );
+  } catch (error) {
+    throw chromeStartupFailure(error.message);
+  }
   const port = fs.readFileSync(portFile, "utf8").split("\n")[0];
   const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
   const target = pages.find((page) => page.type === "page");
