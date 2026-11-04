@@ -10,6 +10,7 @@ import {
   CONSOLIDATED_PREFERENCES_FILE,
   saveConsolidatedPreferences,
 } from "../src/core/consolidated-preferences.js";
+import { digestSourceFingerprint } from "../src/core/fingerprint.js";
 import { oneshotHash, readLibrary } from "../src/core/library.js";
 import { preferenceReview, savePreferenceReview } from "../src/core/preference-review.js";
 import {
@@ -220,7 +221,7 @@ describe("local GUI server", () => {
         revision: expect.stringMatching(/^[a-f0-9]{64}$/),
       }),
       count: 2,
-      domains: ["documentation", "testing"],
+      domains: ["Software engineering > Testing", "Writing & research > documentation"],
       lastAuthoredAt: "2026-10-21T10:00:00Z",
       occurrences: [
         {
@@ -250,6 +251,91 @@ describe("local GUI server", () => {
     expect(response.text).not.toContain("private");
     expect(response.text).not.toContain("Old metadata title");
     expect(response.text).not.toContain("Repeated in the same task.");
+  });
+
+  it("uses only supporting session domains instead of the grouped prompt's full domain union", async () => {
+    const text = "Check keyboard navigation and accessible labels.";
+    const sessions = [
+      { export: "first.md", domain: "Software engineering > Frontend > Accessibility" },
+      { export: "second.md", domain: "software engineering → frontend → accessibility" },
+    ];
+    fs.mkdirSync(path.join(home, "exports"));
+    fs.mkdirSync(path.join(home, "distill"));
+    const digests: Record<string, unknown> = {};
+    const lineage: Record<string, unknown> = {};
+    const manifest = sessions.map((session) => {
+      const content = `### 2026-11-01T12:00:00Z\n\n${text}\n`;
+      const metadata = {
+        export: session.export,
+        project: "sample",
+        sessionId: session.export,
+        origin: "codex" as const,
+      };
+      fs.writeFileSync(path.join(home, "exports", session.export), content);
+      digests[session.export] = {
+        goal: "Improve accessibility.",
+        deliverable: "Accessible controls.",
+        domain: session.domain,
+        keywords: ["accessibility"],
+        outcome: "completed",
+        preferences: [
+          {
+            text,
+            evidence: "Explicit human request.",
+            scope: "global",
+            basis: "explicit",
+            citations: [{ message_id: `${session.export}#m0`, quote: text }],
+          },
+        ],
+      };
+      lineage[session.export] = {
+        source_hash: digestSourceFingerprint({ content, ...metadata }),
+      };
+      return metadata;
+    });
+    fs.writeFileSync(path.join(home, "exports", "manifest.json"), JSON.stringify(manifest));
+    fs.writeFileSync(
+      path.join(home, "distill", "digests.json"),
+      JSON.stringify({ digests, lineage }),
+    );
+    prompt("grouped-work", "A task spanning several kinds of work.", {
+      members: ["first.md", "second.md", "unrelated.md"],
+      domains: [
+        "software engineering > frontend > accessibility",
+        "Data & AI > Data pipelines",
+        "Software engineering > Infrastructure > Deployment",
+      ],
+    });
+
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(snapshot.preferences).toHaveLength(1);
+    expect(snapshot.preferences[0]?.domains).toEqual([
+      "Software engineering > Frontend > Accessibility",
+    ]);
+    expect(snapshot.preferences[0]?.occurrences).toHaveLength(2);
+    expect(snapshot.entries[0]?.domains).toContain("Data & AI > Data pipelines");
+  });
+
+  it("normalizes duplicate legacy domains without changing their source metadata", async () => {
+    const domains = [
+      "Software engineering > Frontend > Accessibility",
+      "software engineering → frontend → accessibility",
+      "  Software engineering  /  Frontend  /  Accessibility  ",
+    ];
+    const file = prompt("legacy-work", "Legacy prompt.", {
+      domains,
+      preferences: [{ text: "Keep labels accessible.", evidence: "Check the labels." }],
+    });
+    const server = await start();
+    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(snapshot.preferences[0]?.domains).toEqual([
+      "Software engineering > Frontend > Accessibility",
+    ]);
+    const saved = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(file), "sources.json"), "utf8"),
+    );
+    expect(saved.domains).toEqual(domains);
   });
 
   it("keeps preferences available when their source prompt file is missing", async () => {
@@ -300,7 +386,7 @@ describe("local GUI server", () => {
       text: "Keep contracts stable.",
       count: 2,
       domains: [
-        "release engineering",
+        "Software engineering > Infrastructure > release engineering",
         "Software engineering > Backend > APIs > Pagination > Cursor",
       ].sort((a, b) => a.localeCompare(b)),
       occurrences: [

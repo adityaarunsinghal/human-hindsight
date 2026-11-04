@@ -165,8 +165,11 @@ Switch between **Prompts** and **Preferences** to search, filter by domain,
 sort, and copy items with one click. Preferences are deduplicated across tasks
 and can be sorted by frequency, recency, or text. Search also matches their
 evidence and source prompt titles.
-Domain filters start with broad categories and reveal optional subdomains,
-up to five levels deep. Selecting a parent includes all its descendants.
+One expandable domain tree lets you browse from broad categories down to
+five levels. Select a parent to include its descendants, or expand its arrow
+to choose a child. Prompt details show shared ancestry once; open **+N** to
+see the full grouped hierarchy. Domain labels from the same evidence are
+deduplicated regardless of casing.
 Existing flat labels are grouped locally without changing the library or
 making a model call; newly distilled sessions use hierarchical domain paths.
 **Preview** renders Markdown headings, lists, tables, links, blockquotes, task
@@ -175,20 +178,23 @@ uses that original Markdown, including when the preview is selected.
 
 Each prompt links to its preference candidates. Newly distilled candidates
 show exact human quotations, message references, and global/project/task scope;
-older observations are labeled for review. Candidates can come from failed or
-unfinished sessions too. You can bookmark either view and use your browser's
-Back and Forward buttons. **View all candidates** shows observations;
-**Accepted instructions** provides the reviewed block for `CLAUDE.md` or
-`AGENTS.md`. Changed source evidence returns a candidate to review.
+older observations are labeled for review. Open the collapsed **Source evidence**
+section to see quotations. Use the check, pencil, and dismiss icons to review
+a candidate; each control has an accessible label and hover description.
+Candidates can come from failed or unfinished sessions too. You can bookmark
+either view and use your browser's Back and Forward buttons. **All** shows
+observations; **Accepted** provides the reviewed instruction block for `CLAUDE.md`
+or `AGENTS.md`. Changed source evidence returns a candidate to review.
 
 The terminal `preferences` command also exports accepted rules by default.
 Use `--include-unreviewed` explicitly to inspect draft observations in scripts.
 This flag does not accept them or change their review status.
 
-The tips bar starts with an open-source and privacy reminder, then rotates
-through quick tips with copyable `npx human-hindsight@latest` commands.
-Pause it, hide it, or restore it with **Show tips**. Hidden tips stay hidden
-when you reload the same local address.
+A compact tip card sits in the header and flips through quick suggestions.
+Open it to read the explanation, copy a `npx human-hindsight@latest` command,
+or pause or hide tips. The lightbulb restores hidden tips. Rotation pauses
+while you interact, and reduced-motion settings disable the flip animation.
+Hidden tips stay hidden when you reload the same local address.
 
 Export and distill show an open-source/privacy reminder near the start.
 Interactive terminals get a colorful elapsed-time progress indicator during
@@ -198,8 +204,8 @@ Consolidation is optional: `npx human-hindsight@latest preferences --consolidate
 uses your accepted rules in a call through your own coding harness and its configured provider,
 with consent and the subscription/credit cost explained first. Successful
 results are saved, with their Markdown and input metadata, in
-`<home>/library/preferences.consolidated.json`. Refresh the GUI to open
-**Saved consolidation**. Every output rule links to its input preferences.
+`<home>/library/preferences.consolidated.json`. Reload the browser and select
+**Saved** to open the consolidation. Every output rule links to its input preferences.
 Coverage, scope, explicit conditions, and direct contradictions are checked;
 invalid output gets one semantic correction attempt. Failed, empty, incomplete,
 or declined results leave the last saved result intact. Saved results are
@@ -208,9 +214,10 @@ results remain readable and need regeneration before copying as reviewed
 instructions.
 
 The viewer uses a minimal black-and-white palette and system monospace fonts.
-Light and dark appearance follow your system setting. Local edits, ratings,
-and session counts remain visible. Use **Refresh** after changing files and
-press `/` to focus search.
+Light and dark appearance follow your system setting. Rows emphasize titles;
+session counts remain visible, and the information icon reveals dates,
+confidence, local edits, and ratings. Reload the browser after changing files
+and press `/` to focus search.
 
 The GUI uses Node's built-in HTTP server and bundled HTML/CSS/JavaScript:
 no frontend framework, database, font download, or external assets.

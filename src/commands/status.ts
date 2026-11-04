@@ -160,7 +160,7 @@ export function renderStatus(opts: {
     if (entry && entry.sources.generation === tasks.generation) {
       lines.push(`  ${green("✓")} ${task.slug}`);
     } else {
-      // Not authored in this generation: was it skipped (no successful
+      // Not authored in this generation: was it skipped (no completed/partial
       // member) or is it simply pending?
       const outcomes = digests ? summarizeOutcomes(task.members, digests.digests) : "";
       const viable = task.members.some((m) => {
@@ -168,7 +168,9 @@ export function renderStatus(opts: {
         return o === "completed" || o === "partial";
       });
       if (!viable) {
-        lines.push(`  · ${task.slug} ${yellow(`skipped (no successful sessions: ${outcomes})`)}`);
+        lines.push(
+          `  · ${task.slug} ${yellow(`skipped (no completed/partial outcomes: ${outcomes})`)}`,
+        );
       } else {
         lines.push(`  · ${task.slug} ${dim("pending — run human-hindsight distill")}`);
       }

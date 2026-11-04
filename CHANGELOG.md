@@ -4,6 +4,28 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.3] - 2026-11-04
+
+### Changed
+
+- One expandable domain tree replaces cascading subdomain menus. Prompt details
+  show shared ancestry once, with the full grouped hierarchy available on demand.
+- Denser library rows emphasize titles and one short metadata line. Secondary
+  prompt details and source evidence are collapsed by default.
+- Compact icon controls replace wordy copy, preview, and preference-review
+  buttons, with accessible labels and hover descriptions. Removed the redundant
+  Local and Refresh controls; use the browser's reload after changing files.
+- Tips fit in the header and flip between cards. Commands and explanations open
+  on demand; rotation pauses during interaction and respects reduced motion.
+
+### Fixed
+
+- Preference domains come from their supporting evidence instead of every
+  session in a linked prompt. Case variants share one hierarchy branch.
+- The skip summary says no completed/partial outcomes, and clarifies that
+  `unclear` means unverified rather than failed. Supported preferences remain
+  available even when prompt authoring skips a task.
+
 ## [1.8.2] - 2026-11-03
 
 ### Fixed
