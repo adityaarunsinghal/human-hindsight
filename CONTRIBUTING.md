@@ -54,8 +54,15 @@ untested.
   a real browser at narrow widths in both themes: one centered 12 × 8 px
   chevron, a 12 px right inset, and 36 px reserved right padding.
 - **Follow-ups require a terminal and an explicit y.** Keep source/path/model
-  selections, never forward `--yes`, `--fresh`, or `--apply`, and keep the
-  model-spending consent gate. Honor `--no-follow-up`, pipes, and dry runs.
+  selections, never forward `--yes`, `--fresh`, `--apply`, `--retry-failed`, or
+  `--recover-tasks`, and keep the model-spending consent gate. Honor
+  `--no-follow-up`, pipes, and dry runs.
+- **Retry only the recorded selection.** Use synthetic operation histories and
+  fake runners to check exact operation identities, successful-output
+  preservation, queued exclusions, read-only preview, saved-result recovery,
+  and unchanged grouping. Exercise process interruption as well as thrown
+  errors. Older task recovery must select explicit saved slugs and never infer
+  a failed call from an absent output. Test both installed command names.
 - **Preserve rename compatibility.** Keep `CC_HINDSIGHT_HOME`, existing
   `~/.cc-hindsight` libraries, and old `[cc-hindsight distill]` markers readable.
   Historical fixtures deliberately retain the former name.
@@ -176,7 +183,7 @@ than a general claim of semantic equivalence.
 
 ```bash
 npm test && npm run lint && npm run typecheck && npm run build
-node scripts/check-release.mjs
+node scripts/check-release.mjs   # add vX.Y.Z to validate the intended release tag
 npm run stage:release
 node scripts/pack-release.mjs
 node scripts/smoke-install.mjs
@@ -193,12 +200,27 @@ The stage step creates `.release/human-hindsight` and `.release/cc-hindsight`
 with minimal publish manifests. Pack checks inspect those actual tarballs,
 including dependencies and scripts. A loopback npm registry exercises the
 normal `npx ...@latest` path with an empty cache.
+Staging copies the existing build; it does not rebuild. Build after final edits,
+and restage after the final commit so the manifest's `gitHead` matches the
+revision being verified. Keep `.release`, `dist`, tarballs, and local test homes
+out of commits.
 
 For a version bump, update the main package/development lockfile and
 `compat/cc-hindsight/package.json` together, including the wrapper's exact
 `human-hindsight` dependency. The release workflow verifies both identities,
 publishes the new package first, then the deprecated wrapper, then creates the
 GitHub release. Reruns skip versions already published from the same commit.
+Prepare the changelog section and comparison links in the same PR as the
+version bump. Wait for PR CI, merge, and verify main CI for the merge commit
+before tagging that exact revision. Pushing `vX.Y.Z` triggers the release
+workflow; publish through its staged-package OIDC path.
+
+After publication, check both exact versions and both `latest` tags against
+the merge SHA, including the wrapper's exact dependency. Use separate empty npm
+caches to install and exercise `human-hindsight@X.Y.Z`, `cc-hindsight@X.Y.Z`,
+`human-hindsight@latest`, and `cc-hindsight@latest`. Check version/help and the
+synthetic retry scenario through those installed entrypoints. A green workflow
+or registry metadata alone does not prove the installed commands work.
 
 Each npm package needs a trusted publisher for
 `adityaarunsinghal/human-hindsight`, workflow `release.yml`, with direct

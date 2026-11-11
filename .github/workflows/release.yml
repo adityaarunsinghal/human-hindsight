@@ -50,6 +50,7 @@ jobs:
       - run: npm run lint
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build
       - run: npm run stage:release
       - run: node scripts/pack-release.mjs
       - run: node scripts/smoke-install.mjs

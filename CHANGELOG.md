@@ -4,6 +4,31 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.4] - 2026-11-11
+
+### Added
+
+- Strict `distill --retry-failed` recovery with
+  `--retry-stage=all|digest|cluster|author`. Preview recorded failures,
+  interruptions, resolved blockers, and local result repairs before consent.
+  Successful operations and never-attempted work remain excluded.
+- `distill --recover-tasks=slug-a,slug-b` for explicit author-only recovery of
+  saved tasks from older runs without recorded failure history. Existing
+  successful and manually edited prompts remain protected.
+- Durable operation records, saved validated responses, and individual
+  clustering checkpoints. Saved responses can be recovered without another
+  model call; recovered clustering results await a normal run for adoption.
+
+### Changed
+
+- The shared model-call timeout is now 900 seconds. Clustering and preference
+  consolidation retain their five-second-per-item scaling; explicit timeouts
+  remain exact. The default input budget remains 400,000 characters.
+- Retry previews and status distinguish recorded failures, interruptions,
+  blockers, queued work, local repairs, and clustering results awaiting adoption.
+  Strict recovery preserves the saved grouping and does not start downstream
+  stages or automatically export more history.
+
 ## [1.8.3] - 2026-11-04
 
 ### Changed
@@ -531,7 +556,11 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.4...HEAD
+[1.8.4]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.3...v1.8.4
+[1.8.3]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.2...v1.8.3
+[1.8.2]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.1...v1.8.2
+[1.8.1]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.0...v1.8.1
 [1.8.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.5.0...v1.6.0

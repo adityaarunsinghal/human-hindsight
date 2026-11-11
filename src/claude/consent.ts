@@ -35,6 +35,22 @@ export interface DistillPlan {
   truncate?: "never" | "extreme";
   /** Eligible sessions whose content exceeds the budget (consent-time estimate). */
   oversized?: { export: string; chars: number }[];
+  /** Exact immutable strict-retry selection; counts are logical operations. */
+  retry?: {
+    mode: "retry-failed" | "recover-tasks";
+    operations: {
+      kind: string;
+      unitId: string;
+      runner: string;
+      model: string | null;
+      timeoutMs: number;
+      budget: number;
+      truncate: string;
+    }[];
+    repairs: { kind: string; unitId: string }[];
+    excluded: { kind: string; unitId: string; reason: string }[];
+    blocked: { kind: string; unitId: string; reason: string }[];
+  };
 }
 
 /** Human-facing CLI name + the cost noun, per runner (for consent copy). */
@@ -70,6 +86,29 @@ export const PROCEED_PROMPT = "  Proceed? [y/N] ";
  * *not* part of this block — dry-run prints the block but must not prompt.
  */
 export function renderPlan(plan: DistillPlan): string {
+  if (plan.retry) {
+    const retry = plan.retry;
+    const lines = [
+      `  ${retry.mode === "retry-failed" ? "Strict retry" : "Named task recovery"}: ${retry.operations.length} model operation(s), ${retry.repairs.length} local repair(s).`,
+      "  Saved task grouping and successful operations are preserved.",
+      "  Counts are logical operations; bounded validation retries may make additional requests.",
+    ];
+    for (const item of retry.operations) {
+      lines.push(
+        `    • ${item.kind} ${item.unitId} — ${item.runner}, ${item.model ?? "harness default model"}, timeout ${item.timeoutMs / 1000}s, budget ${item.budget}, truncate=${item.truncate}`,
+      );
+    }
+    for (const item of retry.repairs)
+      lines.push(`    • local repair: ${item.kind} ${item.unitId} (no model call)`);
+    for (const item of retry.blocked)
+      lines.push(`    blocked: ${item.kind} ${item.unitId} — ${item.reason}`);
+    if (retry.excluded.length) {
+      lines.push(`  Excluded ${retry.excluded.length} operation(s):`);
+      for (const item of retry.excluded)
+        lines.push(`    ${item.kind} ${item.unitId} — ${item.reason}`);
+    }
+    return lines.join("\n");
+  }
   const digestStr = String(plan.digests);
   const clusterStr = String(plan.cluster);
   const authorStr = `~${plan.authorEstimate}`;

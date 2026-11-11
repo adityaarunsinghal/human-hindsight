@@ -1,4 +1,6 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
+import path from "node:path";
 
 /**
  * core/fsutil.ts — owner-only writes for the private data directory.
@@ -32,5 +34,37 @@ export function writeFilePrivate(file: string, data: string): void {
     fs.chmodSync(file, FILE_MODE); // writeFileSync's mode only applies on create
   } catch {
     // not owner / unsupported — best-effort
+  }
+}
+
+/**
+ * Replace one private file after flushing a unique same-directory temporary.
+ * Directory flush is best-effort: Windows and some filesystems do not support
+ * it. Multi-file publications still need their own durable transaction intent.
+ */
+export function atomicWriteFilePrivate(file: string, data: string): void {
+  mkdirPrivate(path.dirname(file));
+  const temporary = `${file}.${crypto.randomUUID()}.tmp`;
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(temporary, "wx", FILE_MODE);
+    fs.writeFileSync(fd, data);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    fs.renameSync(temporary, file);
+    try {
+      const dir = fs.openSync(path.dirname(file), "r");
+      try {
+        fs.fsyncSync(dir);
+      } finally {
+        fs.closeSync(dir);
+      }
+    } catch {
+      /* Unsupported directory fsync; file contents were flushed. */
+    }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    fs.rmSync(temporary, { force: true });
   }
 }

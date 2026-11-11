@@ -61,6 +61,57 @@ Updating the old npm package installs the small compatibility wrapper, so
 the main package owns `human-hindsight`, and the wrapper owns `cc-hindsight`.
 The GitHub repository was renamed in place; old repository links redirect.
 
+### Retrying unfinished distillation
+
+Choose the mode that matches the work you want to do:
+
+| Command | Work selected | Existing grouping and successful prompts |
+|---|---|---|
+| `distill` | Normal refresh using current inputs and settings | May refresh affected results and grouping |
+| `distill --retry-failed` | Recorded failed or interrupted operations, and recorded blockers that are now resolved | Preserved |
+| `distill --recover-tasks=slug-a,slug-b` | Explicitly named saved tasks from an older run without failure history | Preserved; authoring only |
+
+Preview strict retry before spending:
+
+```bash
+npx human-hindsight@latest distill --retry-failed --dry-run
+npx human-hindsight@latest distill --retry-failed
+
+# Narrow the retry to recorded authoring failures:
+npx human-hindsight@latest distill --retry-failed --retry-stage=author
+```
+
+`--retry-stage` accepts `all` (the default), `digest`, `cluster`, or `author`.
+A recovered digest does not trigger clustering or authoring. A recovered cluster
+result is saved for adoption by a later normal `distill`; retry never replaces
+the saved task grouping. Successful operations and work never attempted are
+excluded, even when you override the model or input budget.
+
+Older runs have no recorded failure history. Select their saved task slugs
+explicitly instead of inferring failures from missing files:
+
+```bash
+npx human-hindsight@latest distill \
+  --recover-tasks=slug-a,slug-b --runner=claude \
+  --input-budget=600000 --dry-run
+```
+
+Use real slugs from your saved grouping, then repeat without `--dry-run` to
+reach consent. Existing successful or manually edited prompts are protected.
+Both recovery modes show selected work, local repairs, exclusions, and blockers.
+Strict retry requires unchanged recorded inputs and compatible operation
+records; legacy recovery requires the saved task and its source evidence.
+A changed or missing input can require a normal refresh. Neither mode combines with
+`--fresh`, `--force`, or explicit grouping, project, source, or substance filters.
+
+The default input budget remains **400,000 content characters**; `600000` is an
+explicit override, not a guarantee that a provider accepts the request. Digest
+and author calls default to **900 seconds**. Clustering and preference
+consolidation add five seconds per input item to that base. An explicit
+`--timeout=N` uses exactly N seconds. Strict retry inherits recorded attempt settings
+unless explicitly overridden; a previously default timeout follows the current
+default. Review the effective settings in the preview.
+
 ## The t=0 problem
 
 You get better results the more context you front-load into your first prompt,
@@ -444,9 +495,12 @@ discovered mid-session (paths, root causes, error messages). And they respect
 an **effort budget**, staying around the length a motivated human would
 actually type rather than ballooning into a 700-word spec.
 
-Every distill stage checkpoints to disk after each unit of work: Ctrl-C loses
-nothing, re-running resumes, `--fresh` resets deliberately, and `status` flags
-library entries orphaned by re-clustering.
+Distillation records operation progress and saves validated results before
+publishing outputs. Strict retry can recover saved results locally and retry
+recorded failures without rerunning successes. A provider response lost before
+it is saved may still need another call. Normal `distill` refreshes changed work,
+`--fresh` resets deliberately, and `status` flags library entries orphaned by
+re-clustering.
 
 ## How it compares
 
@@ -472,11 +526,12 @@ chosen local agent CLI to its configured provider, using its authentication.
 
 **What does distill cost?**
 Whatever your chosen agent CLI costs you: it runs on your existing subscription or
-API credits. The consent prompt estimates the invocation count up front
-(one call per session digested, one to cluster, one per task authored), and
-`--dry-run` prints the same plan without running anything. Checkpoints mean an
-interrupted run can reuse completed work. Retries and windowed grouping may add
-calls. Sessions too large for the input budget
+API credits. Normal distillation estimates the invocation count up front;
+strict retry lists the selected operations and local repairs. `--dry-run`
+prints the plan without model calls or writes. Checkpoints let an interrupted
+run reuse completed work. Bounded validation retries and windowed grouping may
+add calls, so an operation count is not an exact provider-request count.
+Sessions too large for the input budget
 (default 400k chars, `--input-budget`) are **refused before anything is
 spent**. Re-run with `--truncate=extreme` to cut them (recorded in
 provenance) or narrow the scope. Digest and author calls run 3 at a time by
