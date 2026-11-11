@@ -2,7 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { defineCommand } from "citty";
 import { type LibraryIssue, readLibrary, readLibraryIssues } from "../core/library.js";
-import { loadDigests, loadTasks, summarizeOutcomes } from "../distill/pipeline.js";
+import {
+  createRetryHandlers,
+  loadDigests,
+  loadTasks,
+  summarizeOutcomes,
+} from "../distill/pipeline.js";
+import { prepareRetry } from "../distill/retry.js";
 import { countOrphanHistories } from "../sources/kiro/discover.js";
 import { parseSourceMode, resolveSources, type SourceMode } from "../sources/registry.js";
 import { withSpinner } from "../ui/progress.js";
@@ -127,6 +133,42 @@ export function renderStatus(opts: {
     `exported    ${bold(String(exported))} session(s)`,
     `digested    ${bold(String(digested))} session(s)${digests ? dim(`  (generation ${digests.generation})`) : ""}`,
   );
+  if (fs.existsSync(path.join(opts.home, "distill", "operations.json"))) {
+    try {
+      const retry = prepareRetry({ home: opts.home, handlers: createRetryHandlers(opts.home) });
+      lines.push(
+        `retry       ${retry.modelOperations.length} retryable, ${retry.localRepairs.length} local repair(s), ${retry.blocked.length} blocked`,
+      );
+      for (const item of [...retry.modelOperations, ...retry.localRepairs]) {
+        lines.push(
+          `  ${item.operation.kind} ${item.operation.unitId} — ${retry.localRepairs.includes(item) ? "saved result: local repair" : item.operation.state === "running" ? "interrupted" : item.operation.state}`,
+        );
+      }
+      for (const item of retry.blocked)
+        lines.push(`  ${item.kind} ${item.unitId} — blocked: ${item.reason}`);
+      const queued = retry.excluded.filter((item) => item.reason === "not attempted").length;
+      const pending = retry.excluded.filter((item) =>
+        item.reason.includes("adoption pending"),
+      ).length;
+      if (queued)
+        lines.push(
+          `  ${queued} queued operation(s) were never attempted; excluded from strict retry`,
+        );
+      if (pending)
+        lines.push(`  ${pending} recovered clustering result(s) await adoption by normal distill`);
+      if (retry.modelOperations.length || retry.localRepairs.length || retry.blocked.length) {
+        lines.push(
+          hint(`${nextCommandText("distill", { home: opts.home })} --retry-failed --dry-run`),
+        );
+      }
+    } catch (error) {
+      lines.push(`retry       unavailable: ${(error as Error).message}`);
+    }
+  } else {
+    lines.push(
+      "retry       no recorded failure history; older saved tasks require --recover-tasks",
+    );
+  }
 
   if (!tasks) {
     lines.push("clustered   —");

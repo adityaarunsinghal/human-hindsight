@@ -14,8 +14,8 @@ import type { RunnerErrorKind } from "./types.js";
  * layer. A shim at `src/claude/runner.ts` re-exports these for old imports.
  */
 
-/** Default per-invocation timeout: 5 minutes. */
-export const DEFAULT_TIMEOUT_MS = 300_000;
+/** Default per-invocation timeout: 15 minutes. */
+export const DEFAULT_TIMEOUT_MS = 900_000;
 
 /** Grace period between SIGTERM and SIGKILL on timeout. */
 export const KILL_GRACE_MS = 2_000;

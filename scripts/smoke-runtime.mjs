@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { fileURLToPath } from "node:url";
 
 // Built-ins only: exercise installed packages on the minimum supported Node,
 // independently of the development toolchain's own Node requirement.
@@ -152,6 +153,16 @@ try {
       );
     }
   }
+  execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./smoke-retry.mjs", import.meta.url)),
+      ...["human-hindsight", "cc-hindsight"].map((name) =>
+        path.resolve(prefix, "node_modules/.bin", name),
+      ),
+    ],
+    { stdio: "inherit", timeout: 180_000 },
+  );
 } finally {
   gui?.kill("SIGKILL");
   fs.rmSync(root, { recursive: true, force: true });

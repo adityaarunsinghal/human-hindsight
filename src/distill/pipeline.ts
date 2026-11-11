@@ -35,17 +35,29 @@ import { DEFAULT_INPUT_BUDGET, middleCut, type TruncatePolicy } from "../core/bu
 import {
   contentFingerprint,
   digestSourceFingerprint,
+  fingerprint,
   type StageLineage,
   sameLineage,
   stageLineage,
 } from "../core/fingerprint.js";
-import { mkdirPrivate, writeFilePrivate } from "../core/fsutil.js";
+import { atomicWriteFilePrivate, mkdirPrivate } from "../core/fsutil.js";
 import { oneshotHash } from "../core/library.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
 import { exportMessages, validatePreferenceCandidates } from "../core/preference-evidence.js";
 import type { SourceName } from "../sources/types.js";
 import { withSpinner } from "../ui/progress.js";
 import { dim, fail, green, skip as skipGlyph } from "../ui/style.js";
+import {
+  type AttemptSettings,
+  checkSourceGuards,
+  guardedPath,
+  type OperationInput,
+  type OperationRecord,
+  OperationStore,
+  type PreparedRequest,
+  type QueueOperation,
+} from "./operations.js";
+import type { RetryHandler } from "./retry.js";
 
 /**
  * distill/pipeline.ts — stage orchestration, checkpoints, generations.
@@ -59,6 +71,55 @@ import { dim, fail, green, skip as skipGlyph } from "../ui/style.js";
 
 /** Signature of the stage runner — {@link runClaude} or a test double. */
 export type RunnerFn = <T>(opts: RunClaudeOptions<T>) => Promise<T>;
+
+/** Attempt settings are durable independently of normal cache lineage. */
+function operationSettings(
+  opts: {
+    model?: string;
+    runnerName?: SourceName;
+    timeoutMs?: number;
+    budget?: number;
+    truncate?: TruncatePolicy;
+  },
+  timeoutUnits = 0,
+): AttemptSettings {
+  return {
+    runner: opts.runnerName ?? "claude",
+    model: opts.model ?? null,
+    timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * timeoutUnits,
+    timeoutExplicit: opts.timeoutMs !== undefined,
+    budget: opts.budget ?? DEFAULT_INPUT_BUDGET,
+    truncate: opts.truncate ?? "never",
+  };
+}
+
+function sourceReference(exportName: string, content: string) {
+  return {
+    path: `exports/${exportName}`,
+    hash: contentFingerprint(content),
+    length: content.length,
+  };
+}
+
+/** A normal run can adopt an exact saved inference result without buying it again. */
+function reusableOperation(
+  store: OperationStore,
+  kind: OperationRecord["kind"],
+  unitId: string,
+  logicalInput: unknown,
+  settings: AttemptSettings,
+): OperationRecord | undefined {
+  return store.list().find((record) => {
+    if (record.kind !== kind || record.unitId !== unitId || record.state !== "result-saved")
+      return false;
+    const input = store.loadInput(record.id);
+    return (
+      fingerprint(input.logicalInput) === fingerprint(logicalInput) &&
+      fingerprint(record.attempts.at(-1)?.settings ?? input.settings) === fingerprint(settings) &&
+      Boolean(store.readResult(record.id))
+    );
+  });
+}
 
 /** The `distill/digests.json` checkpoint. */
 export interface DigestsCheckpoint {
@@ -151,9 +212,7 @@ export function loadDigests(home: string): DigestsCheckpoint | null {
 export function saveDigests(home: string, checkpoint: DigestsCheckpoint): void {
   const target = digestsPath(home);
   mkdirPrivate(path.dirname(target));
-  const tmp = `${target}.tmp`;
-  writeFilePrivate(tmp, `${JSON.stringify(checkpoint, null, 2)}\n`);
-  fs.renameSync(tmp, target);
+  atomicWriteFilePrivate(target, `${JSON.stringify(checkpoint, null, 2)}\n`);
 }
 
 /** Delete distill checkpoints (used by `distill --fresh`). */
@@ -412,6 +471,8 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
   }
   checkpoint.prompt_version = DIGEST_PROMPT_VERSION;
 
+  const store = new OperationStore(opts.home, checkpoint.generation);
+  const runId = newGeneration();
   const outcomes = readOutcomes(opts.home);
   const failed: StageFailure[] = [];
   const blocked: BlockedSession[] = [];
@@ -461,11 +522,41 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       return;
     }
     const originalContent = content;
+    let operation: OperationRecord | undefined;
+    const logicalInput = {
+      entry,
+      outcome: outcomes[entry.export] ?? null,
+      contentHash: contentFingerprint(originalContent),
+    };
+    const settings = operationSettings(opts);
+    const queueDigest = (prompt: string) =>
+      store.queue({
+        kind: "digest",
+        unitId: entry.export,
+        generation: checkpoint.generation,
+        runId,
+        promptVersion: DIGEST_PROMPT_VERSION,
+        schema: toJsonSchema(DigestResponseSchema),
+        logicalInput,
+        sources: [sourceReference(entry.export, originalContent)],
+        settings,
+        request: { prompt },
+        publication: { kind: "digest", exportName: entry.export },
+      });
 
     // Input budget / overflow policy. Nothing is cut silently.
     if (content.length > budget) {
       if (truncatePolicy === "never") {
         invalidate();
+        operation = queueDigest(
+          buildDigestPrompt({
+            exportName: entry.export,
+            content,
+            outcome: outcomes[entry.export],
+            origin: entry.origin,
+          }),
+        );
+        store.block(operation.id, `input ${content.length} exceeds budget ${budget}`);
         blocked.push({ export: entry.export, chars: content.length });
         write(
           `  ${label} — ${skipGlyph(`blocked: ${content.length} chars exceed the input budget (${budget}).`)} ` +
@@ -495,11 +586,28 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
         write(`  ${label} — input, model, or prompt changed; regenerating stale digest`);
       }
       // A failed refresh must not let downstream stages consume the old digest.
+      operation =
+        reusableOperation(store, "digest", entry.export, logicalInput, settings) ??
+        queueDigest(prompt);
       invalidate();
       write(`  ${label} — digesting…`);
+      const saved = store.readResult(operation.id);
+      checkSourceGuards(opts.home, store.loadInput(operation.id).sources);
+      const attempt = saved ? undefined : store.start(operation.id, settings, { prompt });
       const call = async (): Promise<Digest> => {
         let currentPrompt = prompt;
         for (let attempt = 0; attempt < 2; attempt++) {
+          const currentAttempt = store
+            .list()
+            .find((record) => record.id === operation?.id)
+            ?.attempts.at(-1);
+          if (operation && currentAttempt)
+            store.recordInvocation(operation.id, currentAttempt.id, {
+              prompt: currentPrompt,
+              schema: toJsonSchema(DigestResponseSchema),
+              model: opts.model ?? null,
+              timeoutMs: settings.timeoutMs,
+            });
           const response = await runner({
             prompt: currentPrompt,
             schema: DigestResponseSchema,
@@ -528,8 +636,13 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       };
       // A spinner is a single-line UI; with parallel calls in flight the lines
       // would fight over the cursor — plain progress lines instead.
-      const digest =
-        concurrency === 1 ? await withSpinner(out, `${label} — digesting`, call) : await call();
+      const digest = saved
+        ? DigestSchema.parse((saved.value as { digest: unknown }).digest)
+        : concurrency === 1
+          ? await withSpinner(out, `${label} — digesting`, call)
+          : await call();
+      if (!saved && attempt) store.saveResult(operation.id, attempt.id, { digest, lineage });
+      checkSourceGuards(opts.home, store.loadInput(operation.id).sources);
       // Mutation + save are synchronous (single JS tick), so concurrent
       // workers can never interleave a checkpoint write — saves stay serialized.
       checkpoint.digests[entry.export] = digest;
@@ -538,6 +651,11 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       checkpoint.invalidated = checkpoint.invalidated?.filter((id) => id !== entry.export);
       if (!checkpoint.invalidated?.length) delete checkpoint.invalidated;
       saveDigests(opts.home, checkpoint); // after each — Ctrl-C safe
+      store.commit(operation.id, {
+        kind: "digest",
+        exportName: entry.export,
+        hash: fingerprint({ digest, lineage }),
+      });
       completed++;
       // A success proves the environment works: the streak is not systemic.
       streakMessage = null;
@@ -546,6 +664,7 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
     } catch (err) {
       invalidate();
       const message = err instanceof Error ? err.message : String(err);
+      if (operation && !store.readResult(operation.id)) store.fail(operation.id, message);
       failed.push({ export: entry.export, error: message });
       write(`  ${label} ${fail(`failed: ${truncate(message, 120)}`)}`);
       // continue — one failure doesn't abort the rest (per-session containment).
@@ -628,6 +747,9 @@ export interface TasksCheckpoint {
   tasks: ClusterTask[];
   misc: string[];
   lineage?: StageLineage;
+  operation_ids?: string[];
+  fallback_merge_id?: string;
+  grouping_hash?: string;
 }
 
 function tasksPath(home: string): string {
@@ -659,9 +781,7 @@ export function loadTasks(home: string): TasksCheckpoint | null {
 export function saveTasks(home: string, checkpoint: TasksCheckpoint): void {
   const target = tasksPath(home);
   mkdirPrivate(path.dirname(target));
-  const tmp = `${target}.tmp`;
-  writeFilePrivate(tmp, `${JSON.stringify(checkpoint, null, 2)}\n`);
-  fs.renameSync(tmp, target);
+  atomicWriteFilePrivate(target, `${JSON.stringify(checkpoint, null, 2)}\n`);
 }
 
 /** Unique kebab slug of 2–5 words (1–4 dashes). */
@@ -989,6 +1109,10 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     write("  clustering inputs or settings changed; regenerating stale grouping");
   }
 
+  const store = new OperationStore(opts.home, opts.generation);
+  const runId = newGeneration();
+  const operationIds: string[] = [];
+  let fallbackMergeId: string | undefined;
   let cluster: Cluster;
   if (opts.noGroup) {
     cluster = synthesizeNoGroupTasks(opts.digests);
@@ -997,9 +1121,50 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     );
   } else {
     const windows = planClusterWindows(opts.digests, opts.origins, opts.budget);
+    // Persist the entire fixed partition before spending on its first window.
+    const windowOperations = windows.map((windowIds, index) => {
+      const digests = Object.fromEntries(windowIds.map((id) => [id, opts.digests[id]]));
+      const logicalInput = {
+        windowIds,
+        digests,
+        origins: opts.origins ?? {},
+        windows,
+        upstream: Object.fromEntries(
+          windowIds.map((id) => [id, upstream?.[id]?.fingerprint ?? null]),
+        ),
+      };
+      const settings = operationSettings(opts, windowIds.length);
+      const unitId = `window-${index + 1}`;
+      const operation =
+        reusableOperation(store, "cluster-window", unitId, logicalInput, settings) ??
+        store.queue({
+          kind: "cluster-window",
+          unitId,
+          generation: opts.generation,
+          runId,
+          promptVersion: CLUSTER_PROMPT_VERSION,
+          schema: toJsonSchema(ClusterSchema),
+          logicalInput,
+          sources: [],
+          settings,
+          request: {
+            prompt: buildClusterPrompt(digests as Record<string, Digest>, opts.origins),
+            timeoutUnits: windowIds.length,
+          },
+        });
+      operationIds.push(operation.id);
+      return operation;
+    });
     if (windows.length === 1) {
       write(`  clustering ${inputIds.length} digest(s)…`);
-      cluster = await clusterWindow(windows[0] as string[], opts, out, "");
+      cluster = await clusterWindow(
+        windows[0] as string[],
+        opts,
+        out,
+        "",
+        store,
+        windowOperations[0] as OperationRecord,
+      );
     } else {
       // Windowed clustering: the whole-corpus prompt exceeds the input budget,
       // so cluster each window independently, then unify cross-window
@@ -1013,7 +1178,14 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
       const usedSlugs = new Set<string>();
       for (const [i, windowIds] of windows.entries()) {
         const label = ` [window ${i + 1}/${windows.length}]`;
-        const windowCluster = await clusterWindow(windowIds, opts, out, label);
+        const windowCluster = await clusterWindow(
+          windowIds,
+          opts,
+          out,
+          label,
+          store,
+          windowOperations[i] as OperationRecord,
+        );
         for (const task of windowCluster.tasks) {
           // The same slug can legitimately appear in two windows; suffix the
           // later one so the merge call can still address both. The suffix keeps
@@ -1026,7 +1198,44 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
         misc.push(...windowCluster.misc);
       }
 
-      cluster = await mergeWindowTasks(combined, misc, opts, out);
+      if (combined.length < 2) {
+        cluster = { tasks: combined, misc: [...new Set(misc)] };
+      } else {
+        const logicalInput = {
+          combined,
+          misc: [...new Set(misc)],
+          digests: sortedDigests,
+          windowIds: inputIds,
+          upstream: Object.fromEntries(
+            inputIds.map((id) => [id, upstream?.[id]?.fingerprint ?? null]),
+          ),
+        };
+        const settings = operationSettings(opts, combined.length);
+        const operation =
+          reusableOperation(store, "cluster-merge", "merge", logicalInput, settings) ??
+          store.queue({
+            kind: "cluster-merge",
+            unitId: "merge",
+            generation: opts.generation,
+            runId,
+            promptVersion: CLUSTER_PROMPT_VERSION,
+            schema: toJsonSchema(ClusterMergeSchema),
+            logicalInput,
+            sources: [],
+            settings,
+            dependencyIds: windowOperations.map((op) => op.id),
+            request: { prompt: buildMergePrompt(combined), timeoutUnits: combined.length },
+          });
+        operationIds.push(operation.id);
+        cluster = await mergeWindowTasks(combined, misc, opts, out, store, operation);
+        if (
+          store
+            .list()
+            .find((op) => op.id === operation.id)
+            ?.state.match(/^(failed|blocked)$/)
+        )
+          fallbackMergeId = operation.id;
+      }
     }
   }
 
@@ -1036,8 +1245,28 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     tasks: cluster.tasks,
     misc: cluster.misc,
     lineage,
+    operation_ids: operationIds,
+    ...(fallbackMergeId ? { fallback_merge_id: fallbackMergeId } : {}),
+    grouping_hash: fingerprint({ tasks: cluster.tasks, misc: cluster.misc }),
   };
   saveTasks(opts.home, checkpoint);
+  // A completed normal grouping replaces the active task and clustering scope.
+  for (const previous of store.list()) {
+    if (previous.kind.startsWith("cluster-") && !operationIds.includes(previous.id)) {
+      store.setState(previous.id, "superseded");
+    } else if (previous.kind === "author") {
+      const oldTask = (store.loadInput(previous.id).logicalInput as AuthorLogicalInput).task;
+      if (
+        fingerprint(cluster.tasks.find((task) => task.slug === oldTask.slug)) !==
+        fingerprint(oldTask)
+      )
+        store.setState(previous.id, "superseded");
+    }
+  }
+  for (const id of operationIds) {
+    if (id === fallbackMergeId) store.setState(id, "resolved-by-fallback");
+    else store.commit(id, { kind: "cluster", groupingHash: fingerprint(checkpoint) });
+  }
 
   write(
     `      → ${cluster.tasks.length} task(s), ${cluster.misc.length} session(s) routed to misc`,
@@ -1055,6 +1284,8 @@ async function clusterWindow(
   opts: ClusterStageOptions,
   out: Writable,
   label: string,
+  store: OperationStore,
+  operation: OperationRecord,
 ): Promise<Cluster> {
   const runner: RunnerFn = opts.runner ?? runClaude;
   const write = (s: string) => out.write(`${s}\n`);
@@ -1067,43 +1298,56 @@ async function clusterWindow(
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * windowIds.length;
   const basePrompt = buildClusterPrompt(digests, opts.origins);
 
-  let cluster = canonicalizeClusterIds(
-    await withSpinner(out, `clustering ${windowIds.length} digest(s)${label}`, () =>
-      runner({
-        prompt: basePrompt,
-        schema: ClusterSchema,
-        model: opts.model,
-        timeoutMs,
-      }),
-    ),
-    windowIds,
-  );
-
-  let problems = validateCluster(cluster, windowIds);
-  if (problems.length > 0) {
-    write(`      response failed validation (${problems.length} problem(s)); retrying once…`);
-    const corrective =
-      `${basePrompt}\n\nYour previous grouping had these problems:\n` +
-      `${problems.map((p) => `- ${p}`).join("\n")}\n` +
-      "Produce a corrected grouping that fixes every problem. Remember: every id in at " +
-      "least one task or misc, unique 2-5-word kebab-case slugs, only the listed ids.";
-    cluster = canonicalizeClusterIds(
-      await withSpinner(out, `retrying with corrections${label}`, () =>
-        runner({
-          prompt: corrective,
-          schema: ClusterSchema,
-          model: opts.model,
-          timeoutMs,
-        }),
+  const saved = store.readResult(operation.id);
+  if (saved) return ClusterSchema.parse(saved.value);
+  if (opts.budget !== undefined && basePrompt.length > opts.budget) {
+    store.block(operation.id, `cluster prompt ${basePrompt.length} exceeds budget ${opts.budget}`);
+    throw new Error(
+      `cluster prompt exceeds the input budget (${opts.budget}); increase --input-budget`,
+    );
+  }
+  const attempt = store.start(operation.id);
+  const invoke = (prompt: string) => {
+    store.recordInvocation(operation.id, attempt.id, {
+      prompt,
+      schema: toJsonSchema(ClusterSchema),
+      model: opts.model ?? null,
+      timeoutMs,
+    });
+    return runner({ prompt, schema: ClusterSchema, model: opts.model, timeoutMs });
+  };
+  try {
+    let cluster = canonicalizeClusterIds(
+      await withSpinner(out, `clustering ${windowIds.length} digest(s)${label}`, () =>
+        invoke(basePrompt),
       ),
       windowIds,
     );
-    problems = validateCluster(cluster, windowIds);
+
+    let problems = validateCluster(cluster, windowIds);
     if (problems.length > 0) {
-      throw new Error(`clustering failed validation after one retry: ${problems.join("; ")}`);
+      write(`      response failed validation (${problems.length} problem(s)); retrying once…`);
+      const corrective =
+        `${basePrompt}\n\nYour previous grouping had these problems:\n` +
+        `${problems.map((p) => `- ${p}`).join("\n")}\n` +
+        "Produce a corrected grouping that fixes every problem. Remember: every id in at " +
+        "least one task or misc, unique 2-5-word kebab-case slugs, only the listed ids.";
+      cluster = canonicalizeClusterIds(
+        await withSpinner(out, `retrying with corrections${label}`, () => invoke(corrective)),
+        windowIds,
+      );
+      problems = validateCluster(cluster, windowIds);
+      if (problems.length > 0) {
+        throw new Error(`clustering failed validation after one retry: ${problems.join("; ")}`);
+      }
     }
+    store.saveResult(operation.id, attempt.id, cluster);
+    return cluster;
+  } catch (error) {
+    if (!store.readResult(operation.id))
+      store.fail(operation.id, error instanceof Error ? error.message : String(error));
+    throw error;
   }
-  return cluster;
 }
 
 /**
@@ -1118,6 +1362,8 @@ async function mergeWindowTasks(
   misc: string[],
   opts: ClusterStageOptions,
   out: Writable,
+  store: OperationStore,
+  operation: OperationRecord,
 ): Promise<Cluster> {
   const runner: RunnerFn = opts.runner ?? runClaude;
   const write = (s: string) => out.write(`${s}\n`);
@@ -1127,19 +1373,34 @@ async function mergeWindowTasks(
   const timeoutMs =
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CLUSTER_TIMEOUT_PER_DIGEST_MS * combined.length;
   let merge: ClusterMerge;
+  const saved = store.readResult(operation.id);
+  let attempt: ReturnType<OperationStore["start"]> | undefined;
   try {
-    merge = await withSpinner(
-      out,
-      `merging ${combined.length} window task(s) into a unified grouping`,
-      () =>
-        runner({
-          prompt: buildMergePrompt(combined),
-          schema: ClusterMergeSchema,
-          model: opts.model,
-          timeoutMs,
-        }),
-    );
+    const prompt = buildMergePrompt(combined);
+    if (!saved && opts.budget !== undefined && prompt.length > opts.budget) {
+      store.block(operation.id, `merge prompt ${prompt.length} exceeds budget ${opts.budget}`);
+      throw new Error(`merge prompt exceeds the input budget (${opts.budget})`);
+    }
+    if (!saved) attempt = store.start(operation.id);
+    merge = saved
+      ? ClusterMergeSchema.parse(saved.value)
+      : await withSpinner(
+          out,
+          `merging ${combined.length} window task(s) into a unified grouping`,
+          () => {
+            if (attempt)
+              store.recordInvocation(operation.id, attempt.id, {
+                prompt,
+                schema: toJsonSchema(ClusterMergeSchema),
+                model: opts.model ?? null,
+                timeoutMs,
+              });
+            return runner({ prompt, schema: ClusterMergeSchema, model: opts.model, timeoutMs });
+          },
+        );
   } catch (err) {
+    if (attempt && !store.readResult(operation.id))
+      store.fail(operation.id, err instanceof Error ? err.message : String(err));
     write(
       `      merge call failed (${err instanceof Error ? err.message : String(err)}); ` +
         "keeping the per-window tasks unmerged.",
@@ -1149,6 +1410,11 @@ async function mergeWindowTasks(
 
   const { tasks, notes } = applyClusterMerges(combined, merge.merges);
   for (const note of notes) write(`      ⚠ ${note}`);
+  if (!saved && attempt) {
+    if (notes.length)
+      store.fail(operation.id, `merge response had invalid entries: ${notes.join("; ")}`);
+    else store.saveResult(operation.id, attempt.id, merge);
+  }
   const applied = merge.merges.length - notes.length;
   if (applied > 0) write(`      merged ${combined.length} window task(s) → ${tasks.length}`);
   return { tasks, misc: uniqueMisc };
@@ -1268,6 +1534,8 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
   const originByExport = new Map(opts.entries.map((e) => [e.export, e.origin ?? "claude"]));
   const projectByExport = new Map(opts.entries.map((e) => [e.export, e.project]));
   const upstream = loadDigests(opts.home)?.lineage;
+  const store = new OperationStore(opts.home, opts.generation);
+  const runId = newGeneration();
 
   const result: AuthorStageResult = {
     generation: opts.generation,
@@ -1348,6 +1616,44 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       return;
     }
     const originalMembers = members.map((member) => ({ ...member }));
+    const logicalInput: AuthorLogicalInput = {
+      task,
+      members: originalMembers.map(({ content, ...member }) => ({
+        ...member,
+        contentHash: contentFingerprint(content),
+      })),
+      entries: opts.entries.filter((entry) => task.members.includes(entry.export)),
+      generation: opts.generation,
+      toolVersion: opts.toolVersion,
+      upstream: Object.fromEntries(
+        [...task.members].sort().map((id) => [id, upstream?.[id]?.fingerprint ?? null]),
+      ),
+    };
+    const settings = operationSettings(opts);
+    const publication = {
+      kind: "author",
+      slug: task.slug,
+      oneshotPath: `library/${task.slug}/${task.slug}.oneshot.md`,
+      sourcesPath: `library/${task.slug}/sources.json`,
+      expectedOneshotHash: currentContent === null ? null : contentFingerprint(currentContent),
+    };
+    let operation: OperationRecord | undefined;
+    const queueAuthor = (prompt: string) =>
+      store.queue({
+        kind: "author",
+        unitId: task.slug,
+        generation: opts.generation,
+        runId,
+        promptVersion: AUTHOR_PROMPT_VERSION,
+        schema: toJsonSchema(AuthorSchema),
+        logicalInput,
+        sources: originalMembers.map((member) =>
+          sourceReference(member.exportName, member.content),
+        ),
+        settings,
+        request: { prompt },
+        publication,
+      });
     for (const member of originalMembers) {
       const problems = validatePreferenceCandidates(
         member.digest?.preferences ?? [],
@@ -1371,6 +1677,8 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     const truncations: { export: string; block: number; dropped_chars: number }[] = [];
     if (totalChars > budget) {
       if (truncatePolicy === "never") {
+        operation = queueAuthor(buildAuthorPrompt({ task, members: originalMembers }));
+        store.block(operation.id, `task input ${totalChars} exceeds budget ${budget}`);
         result.failed.push({
           export: task.slug,
           error:
@@ -1451,20 +1759,36 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       );
     }
 
+    operation =
+      reusableOperation(store, "author", task.slug, logicalInput, settings) ?? queueAuthor(prompt);
     write(`  ${label} — authoring…`);
     try {
-      const call = () =>
-        runner({
+      const saved = store.readResult(operation.id);
+      checkSourceGuards(opts.home, store.loadInput(operation.id).sources);
+      const attempt = saved ? undefined : store.start(operation.id, settings, { prompt });
+      const call = () => {
+        if (attempt)
+          store.recordInvocation(operation.id, attempt.id, {
+            prompt,
+            schema: toJsonSchema(AuthorSchema),
+            model: opts.model ?? null,
+            timeoutMs: settings.timeoutMs,
+          });
+        return runner({
           prompt,
           schema: AuthorSchema,
           model: opts.model,
           timeoutMs: opts.timeoutMs,
         });
+      };
       // A spinner is a single-line UI; with parallel calls in flight the lines
       // would fight over the cursor — plain progress lines instead (mirrors the
       // digest stage).
-      const authored =
-        concurrency === 1 ? await withSpinner(out, `${label} — authoring`, call) : await call();
+      const authored = saved
+        ? AuthorSchema.parse((saved.value as AuthorResult).authored)
+        : concurrency === 1
+          ? await withSpinner(out, `${label} — authoring`, call)
+          : await call();
 
       // Our code writes the files; the TASK slug is authoritative for paths.
       const sources: SourcesJson = {
@@ -1507,8 +1831,13 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       // Hash of the exact bytes written — the anchor for detecting user edits
       // (overwrite protection). Recorded in sources.json, not the file.
       sources.oneshot_hash = oneshotHash(oneshot);
-      writeFilePrivate(oneshotPath, oneshot);
-      writeFilePrivate(sourcesPath, `${JSON.stringify(sources, null, 2)}\n`);
+      const value: AuthorResult = saved
+        ? (saved.value as AuthorResult)
+        : { authored, sources, oneshot };
+      if (!saved && attempt) store.saveResult(operation.id, attempt.id, value);
+      checkSourceGuards(opts.home, store.loadInput(operation.id).sources);
+      const receipt = publishAuthorResult(opts.home, value, store.loadInput(operation.id));
+      store.commit(operation.id, receipt);
 
       result.authored.push(task.slug);
       write(
@@ -1516,6 +1845,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      if (operation && !store.readResult(operation.id)) store.fail(operation.id, message);
       result.failed.push({ export: task.slug, error: message });
       write(`      ${fail(`failed: ${truncate(message, 120)}`)}`);
       // one task's failure doesn't abort the rest
@@ -1553,4 +1883,550 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
   result.failed.sort(byExport);
 
   return result;
+}
+
+interface AuthorLogicalInput {
+  task: ClusterTask;
+  members: (Omit<AuthorMemberInput, "content"> & { contentHash?: string })[];
+  entries: ManifestEntry[];
+  generation: string;
+  toolVersion: string;
+  upstream: Record<string, string | null>;
+}
+interface AuthorResult {
+  authored: z.infer<typeof AuthorSchema>;
+  sources: SourcesJson;
+  oneshot: string;
+}
+
+function readOptional(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+/** Publication can resume after either rename; a changed human prompt is never replaced. */
+function publishAuthorResult(home: string, value: AuthorResult, input: OperationInput) {
+  const slug = (input.logicalInput as AuthorLogicalInput).task.slug;
+  if (!SLUG_PATTERN.test(slug)) throw new Error("Unsafe author task slug");
+  const dir = guardedPath(home, `library/${slug}`);
+  const oneshotPath = path.join(dir, `${slug}.oneshot.md`);
+  const sourcesPath = path.join(dir, "sources.json");
+  const current = readOptional(oneshotPath);
+  const expected = input.publication?.expectedOneshotHash ?? null;
+  const hash = current === null ? null : contentFingerprint(current);
+  if (hash !== expected && hash !== contentFingerprint(value.oneshot)) {
+    throw new Error("Prompt changed while authoring; generated result saved, human edit kept");
+  }
+  let latest: Record<string, unknown> = {};
+  const raw = readOptional(sourcesPath);
+  if (raw !== null) {
+    const parsed: unknown = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+      throw new Error("Existing provenance cannot be read safely");
+    latest = parsed as Record<string, unknown>;
+  }
+  // Only generator-owned fields may replace the latest human metadata.
+  const generatedKeys = new Set([
+    "slug",
+    "title",
+    "members",
+    "sessionIds",
+    "preferences",
+    "outcome_summary",
+    "domains",
+    "confidence",
+    "authored_at",
+    "model",
+    "prompt_version",
+    "tool_version",
+    "generation",
+    "lineage",
+    "input_coverage",
+    "truncations",
+    "oneshot_hash",
+  ]);
+  const sources: Record<string, unknown> = { ...value.sources, ...latest };
+  for (const [key, generated] of Object.entries(value.sources)) {
+    if (generatedKeys.has(key)) sources[key] = generated;
+  }
+  mkdirPrivate(dir);
+  atomicWriteFilePrivate(oneshotPath, value.oneshot);
+  atomicWriteFilePrivate(sourcesPath, `${JSON.stringify(sources, null, 2)}\n`);
+  return {
+    kind: "author",
+    oneshotHash: contentFingerprint(value.oneshot),
+    sourcesHash: fingerprint(sources),
+  };
+}
+
+function prepareAuthorRequest(
+  home: string,
+  input: OperationInput,
+  settings: AttemptSettings,
+): PreparedRequest {
+  const logical = input.logicalInput as AuthorLogicalInput;
+  const members: AuthorMemberInput[] = logical.members.map(({ contentHash: _hash, ...member }) => ({
+    ...member,
+    content: fs.readFileSync(path.join(home, "exports", member.exportName), "utf8"),
+  }));
+  for (const member of members) {
+    const problems = validatePreferenceCandidates(
+      member.digest?.preferences ?? [],
+      exportMessages(member.exportName, member.content),
+    );
+    if (problems.length)
+      throw new Error(`Member preference evidence is stale: ${member.exportName}`);
+  }
+  const originals = members.map((member) => ({ ...member }));
+  const total = members.reduce((sum, member) => sum + member.content.length, 0);
+  let inputCoverage = 1;
+  const truncations: { export: string; block: number; dropped_chars: number }[] = [];
+  if (total > settings.budget) {
+    if (settings.truncate === "never")
+      throw new Error(`Task input ${total} exceeds input budget ${settings.budget}`);
+    const slice = Math.max(1, Math.floor(settings.budget / members.length));
+    let dropped = 0;
+    for (const member of members) {
+      const cut = middleCut(member.content, slice);
+      member.content = cut.text;
+      dropped += cut.dropped;
+      if (cut.dropped)
+        truncations.push({ export: member.exportName, block: 0, dropped_chars: cut.dropped });
+    }
+    inputCoverage = total ? (total - dropped) / total : 1;
+  }
+  members.sort((a, b) => a.exportName.localeCompare(b.exportName));
+  const prompt = buildAuthorPrompt({ task: logical.task, members });
+  const lineage = stageLineage({
+    stage: "author",
+    promptVersion: AUTHOR_PROMPT_VERSION,
+    schema: toJsonSchema(AuthorSchema),
+    model: settings.model ?? undefined,
+    runnerName: settings.runner,
+    inputs: {
+      prompt,
+      task: { ...logical.task, members: [...logical.task.members].sort() },
+      originalMembers: originals.sort((a, b) => a.exportName.localeCompare(b.exportName)),
+      upstream: logical.upstream,
+    },
+  });
+  return { prompt, inputCoverage, truncations, lineage };
+}
+
+function authorResult(
+  authored: z.infer<typeof AuthorSchema>,
+  request: PreparedRequest,
+  input: OperationInput,
+  settings: AttemptSettings,
+): AuthorResult {
+  const logical = input.logicalInput as AuthorLogicalInput;
+  const digests = Object.fromEntries(
+    logical.members.map((member) => [member.exportName, member.digest as Digest]),
+  ) as Record<string, Digest>;
+  const entries = new Map(logical.entries.map((entry) => [entry.export, entry]));
+  const sources: SourcesJson = {
+    slug: logical.task.slug,
+    title: authored.title,
+    members: logical.task.members,
+    sessionIds: logical.task.members.map((id) => entries.get(id)?.sessionId ?? "unknown"),
+    preferences: logical.members.flatMap((member) =>
+      (member.digest?.preferences ?? []).map((candidate) => ({
+        ...candidate,
+        ...(candidate.scope === "global"
+          ? {}
+          : { project: entries.get(member.exportName)?.project ?? "" }),
+      })),
+    ),
+    outcome_summary: summarizeOutcomes(logical.task.members, digests),
+    domains: [
+      ...new Set(
+        logical.task.members
+          .map((id) => digests[id]?.domain.trim().toLowerCase())
+          .filter((domain): domain is string => Boolean(domain)),
+      ),
+    ],
+    confidence: authored.confidence,
+    authored_at: new Date().toISOString(),
+    model: settings.model,
+    prompt_version: AUTHOR_PROMPT_VERSION,
+    tool_version: logical.toolVersion,
+    generation: logical.generation,
+    lineage: request.lineage as StageLineage,
+    input_coverage: request.inputCoverage as number,
+    truncations: request.truncations as SourcesJson["truncations"],
+  };
+  const oneshot = `${provenanceComment(sources)}\n\n# ${authored.title}\n\n${authored.oneshot_markdown.trim()}\n`;
+  sources.oneshot_hash = oneshotHash(oneshot);
+  return { authored, sources, oneshot };
+}
+
+/** Strict execution reuses stage validation but never invokes downstream stages. */
+export function createRetryHandlers(
+  home: string,
+): Partial<Record<OperationRecord["kind"], RetryHandler>> {
+  const digest: RetryHandler = {
+    guard(input) {
+      const logical = input.logicalInput as {
+        entry: ManifestEntry;
+        outcome: OutcomeEvidence | null;
+      };
+      if (
+        fingerprint(readOutcomes(home)[logical.entry.export] ?? null) !==
+        fingerprint(logical.outcome)
+      )
+        throw new Error("Outcome evidence changed; use normal distill to prepare new inputs");
+    },
+    prepare(input, settings) {
+      const logical = input.logicalInput as {
+        entry: ManifestEntry;
+        outcome: OutcomeEvidence | null;
+      };
+      const original = fs.readFileSync(path.join(home, "exports", logical.entry.export), "utf8");
+      if (original.length > settings.budget && settings.truncate === "never")
+        throw new Error(`Input ${original.length} exceeds input budget ${settings.budget}`);
+      const content =
+        original.length > settings.budget ? middleCut(original, settings.budget).text : original;
+      const prepared = prepareDigest(
+        logical.entry,
+        original,
+        content,
+        logical.outcome ?? undefined,
+        { model: settings.model ?? undefined, runnerName: settings.runner },
+      );
+      return { ...prepared, originalContent: original, content };
+    },
+    validate(value, input) {
+      const result = value as { digest: Digest; lineage: DigestLineage };
+      DigestSchema.parse(result.digest);
+      if (result.lineage?.version !== 1) throw new Error("Invalid saved digest lineage");
+      const logical = input.logicalInput as { entry: ManifestEntry };
+      const original = fs.readFileSync(path.join(home, "exports", logical.entry.export), "utf8");
+      const problems = validatePreferenceCandidates(
+        result.digest.preferences ?? [],
+        exportMessages(logical.entry.export, original),
+      );
+      if (problems.length)
+        throw new Error(`Saved digest evidence is invalid: ${problems.join("; ")}`);
+    },
+    async run(request, settings, input, invoke) {
+      const logical = input.logicalInput as { entry: ManifestEntry };
+      let prompt = request.prompt;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = DigestResponseSchema.parse(
+          await invoke({
+            prompt,
+            schema: DigestResponseSchema,
+            model: settings.model ?? undefined,
+            timeoutMs: settings.timeoutMs,
+          }),
+        );
+        const { digest: value, problems } = validateDigestEvidence(
+          response,
+          logical.entry.export,
+          request.content as string,
+          request.originalContent as string,
+        );
+        if (!problems.length) return { digest: value, lineage: request.lineage };
+        if (attempt === 1)
+          throw new Error(
+            `digest evidence failed validation after one retry: ${problems.join("; ")}`,
+          );
+        prompt = `${request.prompt}\n\nYour previous preference evidence had these problems:\n${problems.map((problem) => `- ${problem}`).join("\n")}\nCorrect every citation using the supplied human messages. Omit any unsupported suggestion.`;
+      }
+      throw new Error("Digest evidence could not be validated");
+    },
+    publish(value, input) {
+      const result = value as { digest: Digest; lineage: DigestLineage };
+      const checkpoint = loadDigests(home);
+      if (!checkpoint || checkpoint.generation !== input.generation)
+        throw new Error("Digest checkpoint generation changed");
+      const id = (input.logicalInput as { entry: ManifestEntry }).entry.export;
+      checkpoint.digests[id] = result.digest;
+      checkpoint.lineage ??= {};
+      checkpoint.lineage[id] = result.lineage;
+      checkpoint.invalidated = checkpoint.invalidated?.filter((key) => key !== id);
+      if (!checkpoint.invalidated?.length) delete checkpoint.invalidated;
+      saveDigests(home, checkpoint);
+      return { kind: "digest", exportName: id, hash: fingerprint(result) };
+    },
+  };
+  const author: RetryHandler = {
+    guard(input, operation) {
+      const logical = input.logicalInput as AuthorLogicalInput;
+      const currentTasks = loadTasks(home);
+      if (
+        !currentTasks ||
+        currentTasks.generation !== input.generation ||
+        fingerprint(currentTasks.tasks.find((task) => task.slug === logical.task.slug)) !==
+          fingerprint(logical.task)
+      )
+        throw new Error("Saved task definition changed; use normal distill to prepare new inputs");
+      const currentDigests = loadDigests(home);
+      const currentAnaphora = readAnaphora(home);
+      for (const member of logical.members) {
+        if (
+          fingerprint(currentDigests?.digests[member.exportName] ?? null) !==
+            fingerprint(member.digest ?? null) ||
+          (currentDigests?.lineage?.[member.exportName]?.fingerprint ?? null) !==
+            logical.upstream[member.exportName] ||
+          fingerprint(currentAnaphora[member.exportName] ?? null) !==
+            fingerprint(member.anaphora ?? null)
+        )
+          throw new Error(
+            `Author evidence changed for ${member.exportName}; use normal distill to prepare new inputs`,
+          );
+      }
+      const slug = (input.logicalInput as AuthorLogicalInput).task.slug;
+      const current = readOptional(guardedPath(home, `library/${slug}/${slug}.oneshot.md`));
+      if (current === null) {
+        if (readOptional(guardedPath(home, `library/${slug}/sources.json`)) !== null)
+          throw new Error(
+            "Previous author provenance is protected; use normal distill to repair the missing prompt",
+          );
+        return;
+      }
+      const store = new OperationStore(home);
+      const saved = store.list().some((record) => record.id === operation.id)
+        ? store.readResult(operation.id)
+        : null;
+      if (saved && (saved.value as AuthorResult).oneshot === current) return;
+      throw new Error("Existing prompt is protected; use normal distill to refresh it");
+    },
+    prepare(input, settings) {
+      const logical = input.logicalInput as AuthorLogicalInput;
+      if (!SLUG_PATTERN.test(logical.task.slug)) throw new Error("Unsafe author task slug");
+      const current = readOptional(
+        path.join(home, "library", logical.task.slug, `${logical.task.slug}.oneshot.md`),
+      );
+      // A strict retry cannot overwrite any previously committed prompt version.
+      if (current !== null)
+        throw new Error("Existing prompt is protected; use normal distill to refresh it");
+      return prepareAuthorRequest(home, input, settings);
+    },
+    validate(value, input) {
+      const result = value as AuthorResult;
+      AuthorSchema.parse(result.authored);
+      const sources = parseSourcesJson(result.sources);
+      if (
+        !sources ||
+        sources.slug !== (input.logicalInput as AuthorLogicalInput).task.slug ||
+        sources.oneshot_hash !== oneshotHash(result.oneshot)
+      )
+        throw new Error("Saved author publication is invalid");
+    },
+    async run(request, settings, input, invoke) {
+      const authored = AuthorSchema.parse(
+        await invoke({
+          prompt: request.prompt,
+          schema: AuthorSchema,
+          model: settings.model ?? undefined,
+          timeoutMs: settings.timeoutMs,
+        }),
+      );
+      return authorResult(authored, request, input, settings);
+    },
+    publish(value, input) {
+      return publishAuthorResult(home, value as AuthorResult, input);
+    },
+  };
+  const window: RetryHandler = {
+    guard(input) {
+      const logical = input.logicalInput as {
+        windowIds: string[];
+        digests: Record<string, Digest>;
+        upstream: Record<string, string | null>;
+      };
+      const current = loadDigests(home);
+      for (const id of logical.windowIds) {
+        if (
+          fingerprint(current?.digests[id] ?? null) !== fingerprint(logical.digests[id]) ||
+          (current?.lineage?.[id]?.fingerprint ?? null) !== logical.upstream[id]
+        )
+          throw new Error(
+            `Clustering input changed for ${id}; use normal distill to prepare new inputs`,
+          );
+      }
+    },
+    prepare(input, settings) {
+      if (input.request.prompt.length > settings.budget)
+        throw new Error(
+          `Cluster window prompt exceeds input budget ${settings.budget}; saved membership is fixed`,
+        );
+      return input.request;
+    },
+    validate(value, input) {
+      const cluster = ClusterSchema.parse(value);
+      const problems = validateCluster(
+        cluster,
+        (input.logicalInput as { windowIds: string[] }).windowIds,
+      );
+      if (problems.length) throw new Error(`Invalid saved cluster: ${problems.join("; ")}`);
+    },
+    async run(request, settings, input, invoke) {
+      const ids = (input.logicalInput as { windowIds: string[] }).windowIds;
+      let prompt = request.prompt;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const value = canonicalizeClusterIds(
+          ClusterSchema.parse(
+            await invoke({
+              prompt,
+              schema: ClusterSchema,
+              model: settings.model ?? undefined,
+              timeoutMs: settings.timeoutMs,
+            }),
+          ),
+          ids,
+        );
+        const problems = validateCluster(value, ids);
+        if (!problems.length) return value;
+        if (attempt === 1)
+          throw new Error(`clustering failed validation after one retry: ${problems.join("; ")}`);
+        prompt = `${request.prompt}\n\nYour previous grouping had these problems:\n${problems.map((problem) => `- ${problem}`).join("\n")}\nProduce a corrected grouping that fixes every problem. Remember: every id in at least one task or misc, unique 2-5-word kebab-case slugs, only the listed ids.`;
+      }
+      throw new Error("Cluster validation failed");
+    },
+    publish() {
+      throw new Error("Strict cluster retry cannot publish grouping");
+    },
+  };
+  const merge: RetryHandler = {
+    guard: window.guard,
+    prepare: window.prepare,
+    validate(value, input) {
+      const result = ClusterMergeSchema.parse(value);
+      const { notes } = applyClusterMerges(
+        (input.logicalInput as { combined: ClusterTask[] }).combined,
+        result.merges,
+      );
+      if (notes.length) throw new Error(`Invalid merge: ${notes.join("; ")}`);
+    },
+    async run(request, settings, input, invoke) {
+      const result = ClusterMergeSchema.parse(
+        await invoke({
+          prompt: request.prompt,
+          schema: ClusterMergeSchema,
+          model: settings.model ?? undefined,
+          timeoutMs: settings.timeoutMs,
+        }),
+      );
+      merge.validate(result, input);
+      return result;
+    },
+    publish: window.publish,
+  };
+  return { digest, author, "cluster-window": window, "cluster-merge": merge };
+}
+
+/** Provenance is also evidence of previous success when the prompt was deleted. */
+function protectedRecoveryOutput(home: string, slug: string): boolean {
+  if (readOptional(guardedPath(home, `library/${slug}/${slug}.oneshot.md`)) !== null) return true;
+  const raw = readOptional(guardedPath(home, `library/${slug}/sources.json`));
+  if (raw === null) return false;
+  const sources = parseSourcesJson(JSON.parse(raw));
+  if (!sources || sources.slug !== slug)
+    throw new Error(`Existing provenance cannot be verified safely: ${slug}`);
+  return true;
+}
+
+/** Exact named legacy author recovery; this preparation is entirely read-only. */
+export function prepareTaskRecoveryInputs(
+  home: string,
+  slugs: string[],
+  overrides: Partial<AttemptSettings> = {},
+): QueueOperation[] {
+  const tasks = loadTasks(home);
+  const digests = loadDigests(home);
+  if (!tasks || !digests || tasks.generation !== digests.generation)
+    throw new Error("Named recovery requires matching saved tasks and digests");
+  if (
+    !slugs.length ||
+    slugs.some((slug) => !SLUG_PATTERN.test(slug)) ||
+    new Set(slugs).size !== slugs.length
+  )
+    throw new Error("Recovery task list is empty, malformed, or contains duplicates");
+  const missing = slugs.filter((slug) => !tasks.tasks.some((task) => task.slug === slug));
+  if (missing.length) throw new Error(`Unknown recovery task(s): ${missing.join(", ")}`);
+  const eligibleSlugs = slugs.filter((slug) => !protectedRecoveryOutput(home, slug));
+  if (!eligibleSlugs.length) return [];
+  const raw = JSON.parse(fs.readFileSync(path.join(home, "exports", "manifest.json"), "utf8")) as
+    | { entries?: ManifestEntry[] }
+    | ManifestEntry[];
+  const entries = Array.isArray(raw) ? raw : (raw.entries ?? []);
+  const anaphora = readAnaphora(home);
+  const runId = newGeneration();
+  const recordedRunner = tasks.lineage?.runner;
+  if (!overrides.runner && !recordedRunner)
+    throw new Error(
+      "Saved tasks do not record a runner; supply --runner for explicit named recovery",
+    );
+  return eligibleSlugs.map((slug) => {
+    const task = tasks.tasks.find((task) => task.slug === slug) as ClusterTask;
+    if (readOptional(path.join(home, "library", slug, `${slug}.oneshot.md`)) !== null)
+      throw new Error(`Existing prompt is protected: ${slug}`);
+    if (
+      !task.members.some((id) =>
+        ["completed", "partial"].includes(digests.digests[id]?.outcome ?? ""),
+      )
+    )
+      throw new Error(`Task has no completed/partial member: ${slug}`);
+    const settings: AttemptSettings = {
+      runner: recordedRunner ?? "claude",
+      model: tasks.lineage?.model ?? null,
+      timeoutMs: DEFAULT_TIMEOUT_MS,
+      timeoutExplicit: false,
+      budget: DEFAULT_INPUT_BUDGET,
+      truncate: "never",
+      ...overrides,
+    };
+    const logicalInput: AuthorLogicalInput = {
+      task,
+      generation: tasks.generation,
+      toolVersion: "1.8.4",
+      entries: entries.filter((entry) => task.members.includes(entry.export)),
+      members: task.members.map((id) => ({
+        contentHash: contentFingerprint(fs.readFileSync(path.join(home, "exports", id), "utf8")),
+        exportName: id,
+        digest: digests.digests[id],
+        anaphora: anaphora[id],
+        origin: entries.find((entry) => entry.export === id)?.origin,
+      })),
+      upstream: Object.fromEntries(
+        [...task.members].sort().map((id) => [id, digests.lineage?.[id]?.fingerprint ?? null]),
+      ),
+    };
+    return {
+      kind: "author",
+      unitId: slug,
+      generation: tasks.generation,
+      runId,
+      source: "explicit-task-recovery",
+      promptVersion: AUTHOR_PROMPT_VERSION,
+      schema: toJsonSchema(AuthorSchema),
+      logicalInput,
+      settings,
+      sources: task.members.map((id) =>
+        sourceReference(id, fs.readFileSync(path.join(home, "exports", id), "utf8")),
+      ),
+      request: { prompt: "" },
+      publication: {
+        kind: "author",
+        slug,
+        expectedOneshotHash: null,
+        oneshotPath: `library/${slug}/${slug}.oneshot.md`,
+        sourcesPath: `library/${slug}/sources.json`,
+      },
+    };
+  });
+}
+
+export function createRecoveryOperations(options: {
+  home: string;
+  slugs: string[];
+  overrides?: Partial<AttemptSettings>;
+}): QueueOperation[] {
+  return prepareTaskRecoveryInputs(options.home, options.slugs, options.overrides);
 }

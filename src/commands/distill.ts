@@ -13,6 +13,7 @@ import {
 import type { Digest } from "../claude/schemas.js";
 import { resolveInputBudget, resolveTimeoutMs, resolveTruncatePolicy } from "../core/budget.js";
 import { readLibrary } from "../core/library.js";
+import { acquireWriterLock } from "../distill/operations.js";
 import {
   clearCheckpoints,
   countReusableDigests,
@@ -32,6 +33,7 @@ import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
 import { flowArgs, nextCommandText, offerNext } from "./next.js";
+import { runStrictRetry, validateRetryArguments } from "./retry.js";
 
 // One entry of `exports/manifest.json` — defined next to the code that writes
 // it; re-exported here because the distill plan is computed from it.
@@ -70,6 +72,9 @@ export interface DistillArgs {
   timeout?: string;
   concurrency?: string;
   force?: boolean;
+  "retry-failed"?: boolean;
+  "retry-stage"?: string;
+  "recover-tasks"?: string;
 }
 
 /** The count math derived from the manifest, before consent. */
@@ -170,6 +175,14 @@ export interface DistillDeps {
  * assert without exiting.
  */
 export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Promise<number> {
+  try {
+    validateRetryArguments(args);
+  } catch (error) {
+    (deps.output ?? process.stdout).write(`error: ${(error as Error).message}\n`);
+    return 1;
+  }
+  if (args["retry-failed"] || args["recover-tasks"] !== undefined)
+    return runStrictRetry(args, deps);
   args = flowArgs(args);
   const confirm = deps.confirm ?? defaultConfirm;
   const out = deps.output ?? process.stdout;
@@ -417,117 +430,27 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     return 2;
   }
 
-  // Both gates passed — only now is it safe to clear checkpoints.
-  if (freshConfirmed) {
-    clearCheckpoints(home);
-    write("checkpoints cleared.");
-  }
-
-  // proceed — stage 1: digest
-  write();
-  write(`${banner("digest", `${plan.digests} session(s)`)}:`);
-  const digestResult = await runDigestStage({
-    home,
-    entries: plan.eligible,
-    model: args.model,
-    runner,
-    runnerName,
-    output: deps.output,
-    budget,
-    truncate,
-    timeoutMs,
-    concurrency: parseClampedInt(args.concurrency, { fallback: 3, min: 1 }),
-    // citty maps `--no-breaker` to breaker: false; on by default.
-    breaker: args.breaker !== false,
-  });
-
-  const doneTotal = digestResult.completed + digestResult.skipped;
-  const digestSummary =
-    `digest stage: ${doneTotal}/${plan.digests} done` +
-    (digestResult.skipped ? ` (${digestResult.skipped} resumed from checkpoint)` : "") +
-    (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : "") +
-    // Say the count is short BECAUSE the stage stopped early, so "0/92 done"
-    // is never mistaken for "92 sessions were each tried and failed".
-    (digestResult.aborted ? `, ${digestResult.notAttempted.length} not attempted (stopped)` : "");
-  write(digestResult.failed.length ? digestSummary : green(digestSummary));
-
-  if (digestResult.failed.length > 0) {
-    write();
-    write("failed sessions (progress is checkpointed; re-run to retry):");
-    for (const f of digestResult.failed) {
-      write(`  ${fail(`${f.export}: ${f.error}`)}`);
-    }
-    // Do NOT abort here. A reproducibly-failing session must not block the
-    // whole pipeline forever — proceed to cluster/author with the digests that
-    // DID succeed (the cluster input already tolerates absent digests), and
-    // exit non-zero at the very end, after the useful work is done.
-  }
-
-  if (digestResult.blocked.length > 0) {
-    write();
-    write(
-      `blocked ${digestResult.blocked.length} session(s) exceeding the input budget (${budget} chars):`,
-    );
-    for (const b of digestResult.blocked) {
-      write(`  ${skip(`${b.export}: ${b.chars} chars`)}`);
-    }
-    write(dim("  re-run with --truncate=extreme to cut them, or raise --input-budget."));
-  }
-
-  // stage 2: cluster — input is the checkpointed digests for the CURRENT
-  // eligible set (sessions whose digest failed are simply absent).
-  const digestCheckpoint = loadDigests(home);
-  const digestsForCluster: Record<string, Digest> = {};
-  for (const e of plan.eligible) {
-    const digest = digestCheckpoint?.digests[e.export];
-    if (digest) digestsForCluster[e.export] = digest;
-  }
-
-  if (Object.keys(digestsForCluster).length === 0) {
-    write();
-    write("no sessions were successfully digested; nothing to cluster.");
+  // All writers share this lock; preview and declined consent never create it.
+  let writer: ReturnType<typeof acquireWriterLock>;
+  try {
+    writer = acquireWriterLock(home);
+  } catch (error) {
+    write(`error: ${(error as Error).message}`);
     return finishRun(1);
   }
-
-  // Track whether ANY failure occurred so the command exits non-zero after
-  // completing the reachable work. Blocked-by-budget sessions count too.
-  let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
-
-  write();
-  write(`${banner("cluster", noGroup ? "--no-group" : "1 call")}:`);
-
   try {
-    // Backend per export (absent ⇒ claude): names the corpus in the cluster
-    // prompt (named single-source, neutral for merged corpora).
-    const clusterOrigins: Record<string, SourceName> = {};
-    for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
-    const clusterResult = await runClusterStage({
-      home,
-      digests: digestsForCluster,
-      origins: clusterOrigins,
-      generation: digestResult.generation,
-      noGroup,
-      model: args.model,
-      runner,
-      runnerName,
-      output: deps.output,
-      budget,
-      timeoutMs,
-    });
-    for (const t of clusterResult.tasks) {
-      write(`      ${t.slug} (${t.members.length} session${t.members.length === 1 ? "" : "s"})`);
+    // Both gates passed — only now is it safe to clear checkpoints.
+    if (freshConfirmed) {
+      clearCheckpoints(home);
+      write("checkpoints cleared.");
     }
 
-    // stage 3: author (one call per viable task; the library IS the checkpoint)
+    // proceed — stage 1: digest
     write();
-    write(`${banner("author", `${clusterResult.tasks.length} task(s)`)}:`);
-    const authorResult = await runAuthorStage({
+    write(`${banner("digest", `${plan.digests} session(s)`)}:`);
+    const digestResult = await runDigestStage({
       home,
-      tasks: clusterResult.tasks,
-      digests: digestsForCluster,
       entries: plan.eligible,
-      generation: digestResult.generation,
-      toolVersion: pkg.version,
       model: args.model,
       runner,
       runnerName,
@@ -535,51 +458,161 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       budget,
       truncate,
       timeoutMs,
-      force: args.force === true,
       concurrency: parseClampedInt(args.concurrency, { fallback: 3, min: 1 }),
+      // citty maps `--no-breaker` to breaker: false; on by default.
+      breaker: args.breaker !== false,
     });
 
-    write();
-    const authoredTotal = authorResult.authored.length + authorResult.resumed.length;
-    const librarySummary =
-      `library: ${authoredTotal} entr${authoredTotal === 1 ? "y" : "ies"} authored` +
-      (authorResult.resumed.length ? ` (${authorResult.resumed.length} resumed)` : "") +
-      (authorResult.skipped.length
-        ? `, ${authorResult.skipped.length} task(s) skipped (no completed/partial outcomes)`
-        : "") +
-      (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in misc` : "");
-    write(authoredTotal > 0 ? green(librarySummary) : librarySummary);
-    for (const s of authorResult.skipped) {
-      write(`  · skipped ${s.slug}: ${s.reason}`);
-    }
-    if (authorResult.skipped.some((task) => task.reason.includes("unclear"))) {
-      write(dim("  unclear = outcome unverified. Supported preferences remain available."));
-    }
+    const doneTotal = digestResult.completed + digestResult.skipped;
+    const digestSummary =
+      `digest stage: ${doneTotal}/${plan.digests} done` +
+      (digestResult.skipped ? ` (${digestResult.skipped} resumed from checkpoint)` : "") +
+      (digestResult.failed.length ? `, ${digestResult.failed.length} failed` : "") +
+      // Say the count is short BECAUSE the stage stopped early, so "0/92 done"
+      // is never mistaken for "92 sessions were each tried and failed".
+      (digestResult.aborted ? `, ${digestResult.notAttempted.length} not attempted (stopped)` : "");
+    write(digestResult.failed.length ? digestSummary : green(digestSummary));
 
-    if (authorResult.failed.length > 0) {
+    if (digestResult.failed.length > 0) {
       write();
-      write("failed tasks (authored entries are kept; re-run to retry):");
-      for (const f of authorResult.failed) {
+      write("failed sessions (progress is checkpointed):");
+      for (const f of digestResult.failed) {
         write(`  ${fail(`${f.export}: ${f.error}`)}`);
       }
-      hadFailure = true;
+      write(
+        `Retry only recorded failures: ${nextCommandText("distill", { home: args.home })} --retry-failed --retry-stage=digest`,
+      );
+      // Do NOT abort here. A reproducibly-failing session must not block the
+      // whole pipeline forever — proceed to cluster/author with the digests that
+      // DID succeed (the cluster input already tolerates absent digests), and
+      // exit non-zero at the very end, after the useful work is done.
     }
 
-    // Best-effort cost visibility (kiro prints a Credits footer per call).
-    const costLine = resolvedRunner?.costSummary?.();
-    if (costLine) {
-      write(dim(costLine));
+    if (digestResult.blocked.length > 0) {
+      write();
+      write(
+        `blocked ${digestResult.blocked.length} session(s) exceeding the input budget (${budget} chars):`,
+      );
+      for (const b of digestResult.blocked) {
+        write(`  ${skip(`${b.export}: ${b.chars} chars`)}`);
+      }
+      write(dim("  re-run with --truncate=extreme to cut them, or raise --input-budget."));
     }
-  } catch (err) {
-    write(`  ${fail((err as Error).message)}`);
-    write("  digest progress is checkpointed; re-run to retry clustering.");
-    return finishRun(1);
+
+    // stage 2: cluster — input is the checkpointed digests for the CURRENT
+    // eligible set (sessions whose digest failed are simply absent).
+    const digestCheckpoint = loadDigests(home);
+    const digestsForCluster: Record<string, Digest> = {};
+    for (const e of plan.eligible) {
+      const digest = digestCheckpoint?.digests[e.export];
+      if (digest) digestsForCluster[e.export] = digest;
+    }
+
+    if (Object.keys(digestsForCluster).length === 0) {
+      write();
+      write("no sessions were successfully digested; nothing to cluster.");
+      return finishRun(1);
+    }
+
+    // Track whether ANY failure occurred so the command exits non-zero after
+    // completing the reachable work. Blocked-by-budget sessions count too.
+    let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
+
+    write();
+    write(`${banner("cluster", noGroup ? "--no-group" : "1 call")}:`);
+
+    try {
+      // Backend per export (absent ⇒ claude): names the corpus in the cluster
+      // prompt (named single-source, neutral for merged corpora).
+      const clusterOrigins: Record<string, SourceName> = {};
+      for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
+      const clusterResult = await runClusterStage({
+        home,
+        digests: digestsForCluster,
+        origins: clusterOrigins,
+        generation: digestResult.generation,
+        noGroup,
+        model: args.model,
+        runner,
+        runnerName,
+        output: deps.output,
+        budget,
+        timeoutMs,
+      });
+      for (const t of clusterResult.tasks) {
+        write(`      ${t.slug} (${t.members.length} session${t.members.length === 1 ? "" : "s"})`);
+      }
+
+      // stage 3: author (one call per viable task; the library IS the checkpoint)
+      write();
+      write(`${banner("author", `${clusterResult.tasks.length} task(s)`)}:`);
+      const authorResult = await runAuthorStage({
+        home,
+        tasks: clusterResult.tasks,
+        digests: digestsForCluster,
+        entries: plan.eligible,
+        generation: digestResult.generation,
+        toolVersion: pkg.version,
+        model: args.model,
+        runner,
+        runnerName,
+        output: deps.output,
+        budget,
+        truncate,
+        timeoutMs,
+        force: args.force === true,
+        concurrency: parseClampedInt(args.concurrency, { fallback: 3, min: 1 }),
+      });
+
+      write();
+      const authoredTotal = authorResult.authored.length + authorResult.resumed.length;
+      const librarySummary =
+        `library: ${authoredTotal} entr${authoredTotal === 1 ? "y" : "ies"} authored` +
+        (authorResult.resumed.length ? ` (${authorResult.resumed.length} resumed)` : "") +
+        (authorResult.skipped.length
+          ? `, ${authorResult.skipped.length} task(s) skipped (no completed/partial outcomes)`
+          : "") +
+        (clusterResult.misc.length ? `, ${clusterResult.misc.length} session(s) in misc` : "");
+      write(authoredTotal > 0 ? green(librarySummary) : librarySummary);
+      for (const s of authorResult.skipped) {
+        write(`  · skipped ${s.slug}: ${s.reason}`);
+      }
+      if (authorResult.skipped.some((task) => task.reason.includes("unclear"))) {
+        write(dim("  unclear = outcome unverified. Supported preferences remain available."));
+      }
+
+      if (authorResult.failed.length > 0) {
+        write();
+        write("failed tasks (authored entries are kept):");
+        for (const f of authorResult.failed) {
+          write(`  ${fail(`${f.export}: ${f.error}`)}`);
+        }
+        write(
+          `Retry only recorded author failures: ${nextCommandText("distill", { home: args.home })} --retry-failed --retry-stage=author`,
+        );
+        hadFailure = true;
+      }
+
+      // Best-effort cost visibility (kiro prints a Credits footer per call).
+      const costLine = resolvedRunner?.costSummary?.();
+      if (costLine) {
+        write(dim(costLine));
+      }
+    } catch (err) {
+      write(`  ${fail((err as Error).message)}`);
+      write(
+        `  digest progress is checkpointed; retry saved clustering operations: ${nextCommandText("distill", { home: args.home })} --retry-failed --retry-stage=cluster`,
+      );
+      return finishRun(1);
+    }
+
+    write(hint(nextCommandText("gui", args)));
+    // Exit non-zero if anything failed (digest or author), but only AFTER the
+    // reachable work completed and checkpointed.
+    return finishRun(hadFailure ? 1 : 0);
+  } finally {
+    writer.release();
   }
-
-  write(hint(nextCommandText("gui", args)));
-  // Exit non-zero if anything failed (digest or author), but only AFTER the
-  // reachable work completed and checkpointed.
-  return finishRun(hadFailure ? 1 : 0);
 }
 
 export default defineCommand({
@@ -592,7 +625,6 @@ export default defineCommand({
     project: { type: "string", description: "Only distill sessions from this project" },
     group: {
       type: "boolean",
-      default: true,
       description: "Group sessions into tasks (use --no-group for 1 session = 1 task)",
     },
     breaker: {
@@ -603,7 +635,6 @@ export default defineCommand({
     },
     "min-substance": {
       type: "string",
-      default: "2",
       description: "Minimum human messages for a session to be eligible",
     },
     model: { type: "string", description: "Model passed through to the runner's --model" },
@@ -626,7 +657,7 @@ export default defineCommand({
     },
     timeout: {
       type: "string",
-      description: "Per-runner-call timeout in seconds (default 300)",
+      description: "Per-runner-call timeout in seconds (default 900; aggregate calls scale)",
     },
     concurrency: {
       type: "string",
@@ -635,6 +666,19 @@ export default defineCommand({
     force: {
       type: "boolean",
       description: "Re-author over oneshots you edited by hand (default: keep your edits)",
+    },
+    "retry-failed": {
+      type: "boolean",
+      description:
+        "Retry only recorded unsuccessful operations; preserve saved grouping and successes",
+    },
+    "retry-stage": {
+      type: "string",
+      description: "Narrow strict retry to all (default), digest, cluster, or author",
+    },
+    "recover-tasks": {
+      type: "string",
+      description: "Explicitly recover named saved tasks from older runs (comma-separated slugs)",
     },
   },
   async run({ args }) {

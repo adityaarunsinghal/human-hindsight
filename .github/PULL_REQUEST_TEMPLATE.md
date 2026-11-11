@@ -24,8 +24,8 @@ npm run lint && npm run typecheck && npm test && npm run build
 - [ ] `lint`, `typecheck`, `test`, and `build` all pass locally.
 - [ ] Tests run against synthetic fixtures only; nothing reads a real
       `~/.claude` or writes outside a temp dir.
-- [ ] No new runtime dependency (the tree stays at three). If one is genuinely
-      needed, the PR explains the reason.
+- [ ] The staged package remains self-contained, with no runtime npm
+      dependencies or installation scripts.
 - [ ] If this touches extraction (`src/core/extract.ts`) or dedupe, it adds a
       regression fixture for the transcript shape, per CONTRIBUTING.md.
 - [ ] If this changes a distill prompt, the `*_PROMPT_VERSION` constant is

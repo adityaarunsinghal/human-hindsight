@@ -58,6 +58,7 @@ jobs:
       - run: npm ci
       - name: Pack and install both release candidates
         run: |
+          npm run build
           npm run stage:release
           node scripts/pack-release.mjs "$RUNNER_TEMP/packages"
           npm install --prefix "$RUNNER_TEMP/installed" --ignore-scripts --no-audit --no-fund "$RUNNER_TEMP/packages/"*.tgz
