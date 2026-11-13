@@ -471,6 +471,60 @@ describe("planClusterWindows", () => {
     expect(windows.flat().sort()).toEqual(["big-a1.md", "small-b2.md"]);
     for (const w of windows) expect(w.length).toBe(1);
   });
+
+  it("splits 300 small digests by the requested batch size even when they fit the input budget", () => {
+    const digests = Object.fromEntries(
+      Array.from({ length: 300 }, (_, i) => [
+        `session-${String(i).padStart(3, "0")}.md`,
+        digest("g"),
+      ]),
+    );
+    expect(planClusterWindows(digests, undefined, 400_000)).toHaveLength(1);
+    const windows = planClusterWindows(digests, undefined, 400_000, 100);
+    expect(windows.map((window) => window.length)).toEqual([100, 100, 100]);
+    expect(windows.flat()).toEqual(Object.keys(digests).sort());
+  });
+
+  it("honors both the session limit and the input budget", () => {
+    const budget = buildClusterPrompt(DIGESTS).length - 1;
+    const windows = planClusterWindows(DIGESTS, undefined, budget, 2);
+    expect(windows.flat()).toEqual(IDS);
+    for (const ids of windows) {
+      expect(ids.length).toBeLessThanOrEqual(2);
+      const subset = Object.fromEntries(ids.map((id) => [id, DIGESTS[id] as Digest]));
+      expect(buildClusterPrompt(subset).length).toBeLessThanOrEqual(budget);
+    }
+    expect(planClusterWindows(DIGESTS, undefined, undefined, 1)).toEqual(IDS.map((id) => [id]));
+  });
+
+  it("includes the changing digest-count header in the window budget", () => {
+    const digests = Object.fromEntries(
+      Array.from({ length: 12 }, (_, i) => [
+        `session-${String(i).padStart(2, "0")}.md`,
+        digest("g"),
+      ]),
+    );
+    const firstTen = Object.fromEntries(Object.entries(digests).slice(0, 10));
+    const budget = buildClusterPrompt(firstTen).length - 1;
+    const windows = planClusterWindows(digests, undefined, budget);
+    expect(windows.flat()).toEqual(Object.keys(digests));
+    for (const ids of windows)
+      expect(
+        buildClusterPrompt(Object.fromEntries(ids.map((id) => [id, digests[id] as Digest]))).length,
+      ).toBeLessThanOrEqual(budget);
+  });
+
+  it.each([
+    0,
+    -1,
+    1.5,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+  ])("rejects invalid batch size %s before planning", (batchSize) => {
+    expect(() => planClusterWindows(DIGESTS, undefined, undefined, batchSize)).toThrow(
+      "positive integer",
+    );
+  });
 });
 
 describe("applyClusterMerges", () => {
@@ -564,6 +618,84 @@ describe("applyClusterMerges", () => {
 });
 
 describe("runClusterStage — windowed", () => {
+  it("clusters 300 digests in three batches, merges with the selected model, and resumes", async () => {
+    const home = tmpHome();
+    const digests = Object.fromEntries(
+      Array.from({ length: 300 }, (_, i) => [
+        `session-${String(i).padStart(3, "0")}.md`,
+        digest("g"),
+      ]),
+    );
+    const calls: RunClaudeOptions<unknown>[] = [];
+    const runner: RunnerFn = (async (options: RunClaudeOptions<unknown>) => {
+      calls.push(options);
+      if (options.prompt.includes("=== TASKS"))
+        return {
+          merges: [
+            {
+              slugs: ["batch-work-1", "batch-work-2", "batch-work-3"],
+              slug: "combined-batch-work",
+              title: "Combined work",
+              rationale: "same goal across all windows",
+            },
+          ],
+        };
+      return {
+        tasks: [
+          {
+            slug: `batch-work-${calls.length}`,
+            title: "Batch work",
+            rationale: "same goal",
+            members: [...options.prompt.matchAll(/^- id: (.+)$/gm)].map((match) => match[1]),
+          },
+        ],
+        misc: [],
+      };
+    }) as RunnerFn;
+    const options = {
+      home,
+      digests,
+      generation: "large-corpus",
+      batchSize: 100,
+      budget: 400_000,
+      model: "cluster-model",
+      runner,
+      output: sink(),
+    };
+    const result = await runClusterStage(options);
+    expect(calls).toHaveLength(4);
+    expect(calls.every((call) => call.model === "cluster-model")).toBe(true);
+    expect(calls.slice(0, 3).map((call) => [...call.prompt.matchAll(/^- id: /gm)].length)).toEqual([
+      100, 100, 100,
+    ]);
+    expect(result.tasks).toHaveLength(1);
+    expect(result.tasks[0]?.members).toHaveLength(300);
+    expect(validateCluster(result, Object.keys(digests))).toEqual([]);
+    expect((await runClusterStage(options)).resumed).toBe(true);
+    expect(calls).toHaveLength(4);
+  });
+
+  it("replans grouping when the batch size changes", async () => {
+    const home = tmpHome();
+    const counts: number[] = [];
+    const runner: RunnerFn = (async (options: RunClaudeOptions<unknown>) => {
+      if (options.prompt.includes("=== TASKS")) return { merges: [] };
+      const ids = [...options.prompt.matchAll(/^- id: (.+)$/gm)].map((match) => match[1] as string);
+      counts.push(ids.length);
+      return {
+        tasks: [{ slug: "batch-work", title: "Work", rationale: "r", members: ids }],
+        misc: [],
+      };
+    }) as RunnerFn;
+    const options = { home, digests: DIGESTS, generation: "batches", runner, output: sink() };
+    await runClusterStage({ ...options, batchSize: 2 });
+    const changed = await runClusterStage({ ...options, batchSize: 1 });
+    expect(changed.resumed).toBe(false);
+    expect(counts).toEqual([2, 1, 1, 1, 1]);
+    expect(validateCluster(changed, IDS)).toEqual([]);
+    expect((await runClusterStage({ ...options, batchSize: 1 })).resumed).toBe(true);
+  });
+
   it("clusters per window then unifies with one merge call", async () => {
     const home = tmpHome();
     const budget = buildClusterPrompt(DIGESTS).length - 1; // forces windowing

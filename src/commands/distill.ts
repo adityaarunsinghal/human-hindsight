@@ -32,7 +32,7 @@ import { withSpinner } from "../ui/progress.js";
 import { banner, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
 import { parseClampedInt, resolvePaths, sharedArgs } from "./_shared.js";
 import { type ExportArgs, runExport } from "./export.js";
-import { flowArgs, nextCommandText, offerNext } from "./next.js";
+import { flowArgs, nextCommandText, offerNext, retryCommandText } from "./next.js";
 import { runStrictRetry, validateRetryArguments } from "./retry.js";
 
 // One entry of `exports/manifest.json` — defined next to the code that writes
@@ -64,6 +64,8 @@ export interface DistillArgs {
   breaker?: boolean;
   "min-substance"?: string;
   model?: string;
+  "cluster-model"?: string;
+  "cluster-batch-size"?: string;
   fresh?: boolean;
   "dry-run"?: boolean;
   yes?: boolean;
@@ -81,7 +83,9 @@ export interface DistillArgs {
 export interface ComputedPlan {
   eligible: ManifestEntry[];
   digests: number;
-  cluster: 0 | 1;
+  cluster: number;
+  clusterWindowsEstimate?: number;
+  clusterMergeEstimate?: number;
   authorEstimate: number;
 }
 
@@ -98,6 +102,7 @@ export function computePlan(
     project?: string;
     minSubstance: number;
     noGroup: boolean;
+    clusterBatchSize?: number;
     /** Origins to include; entries from other backends are filtered out. Absent ⇒ all. */
     activeOrigins?: Set<string>;
   },
@@ -115,13 +120,27 @@ export function computePlan(
   eligible = eligible.filter((e) => (e.messages ?? 0) >= inputs.minSubstance);
 
   const digests = eligible.length;
-  const cluster: 0 | 1 = !inputs.noGroup && digests > 0 ? 1 : 0;
+  const grouping = !inputs.noGroup && digests > 0;
+  const clusterWindowsEstimate =
+    grouping && inputs.clusterBatchSize !== undefined
+      ? Math.ceil(digests / inputs.clusterBatchSize)
+      : undefined;
+  const clusterMergeEstimate =
+    clusterWindowsEstimate === undefined ? undefined : clusterWindowsEstimate > 1 ? 1 : 0;
+  const cluster = grouping ? (clusterWindowsEstimate ?? 1) + (clusterMergeEstimate ?? 0) : 0;
   let authorEstimate: number;
   if (digests === 0) authorEstimate = 0;
   else if (inputs.noGroup) authorEstimate = digests;
   else authorEstimate = Math.max(1, Math.round(digests / 3));
 
-  return { eligible, digests, cluster, authorEstimate };
+  return {
+    eligible,
+    digests,
+    cluster,
+    clusterWindowsEstimate,
+    clusterMergeEstimate,
+    authorEstimate,
+  };
 }
 
 /**
@@ -175,15 +194,25 @@ export interface DistillDeps {
  * assert without exiting.
  */
 export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Promise<number> {
+  let clusterBatchSize: number | undefined;
   try {
     validateRetryArguments(args);
+    if (args.group !== false && args["cluster-batch-size"] !== undefined) {
+      const raw = args["cluster-batch-size"].trim();
+      clusterBatchSize = Number(raw);
+      if (!/^\d+$/.test(raw) || !Number.isSafeInteger(clusterBatchSize) || clusterBatchSize < 1) {
+        throw new Error("--cluster-batch-size must be a positive integer");
+      }
+    }
   } catch (error) {
     (deps.output ?? process.stdout).write(`error: ${(error as Error).message}\n`);
     return 1;
   }
   if (args["retry-failed"] || args["recover-tasks"] !== undefined)
     return runStrictRetry(args, deps);
+  const explicitArgs = args;
   args = flowArgs(args);
+  const clusterModel = args["cluster-model"] ?? args.model;
   const confirm = deps.confirm ?? defaultConfirm;
   const out = deps.output ?? process.stdout;
   const write = (s = "") => out.write(`${s}\n`);
@@ -285,6 +314,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     project: args.project,
     minSubstance,
     noGroup,
+    clusterBatchSize,
     activeOrigins,
   });
 
@@ -382,8 +412,12 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   const distillPlan: DistillPlan = {
     digests: plan.digests - reusableDigests,
     cluster: plan.cluster,
+    clusterWindowsEstimate: plan.clusterWindowsEstimate,
+    clusterMergeEstimate: plan.clusterMergeEstimate,
     authorEstimate: plan.authorEstimate,
     runnerName,
+    model: args.model,
+    clusterModel: noGroup ? undefined : clusterModel,
     resumeNote: computeResumeNote(plan, reusableDigests),
     budget,
     truncate,
@@ -404,7 +438,14 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       write(`  ${dim("•")} ${cyan(e.export)} ${dim(`(${e.messages} msgs)`)}`);
     }
     write(
-      `${banner("cluster", `${plan.cluster} call${noGroup ? " (skipped: --no-group)" : ""}`)}.`,
+      `${banner(
+        "cluster",
+        noGroup
+          ? "0 calls (skipped: --no-group)"
+          : plan.clusterWindowsEstimate !== undefined
+            ? `~${plan.cluster} calls (${plan.clusterWindowsEstimate} windows + ${plan.clusterMergeEstimate} merge, estimated)`
+            : `~${plan.cluster} call (estimated; the input budget may require windows and a merge)`,
+      )}.`,
     );
     write(
       `${banner("author", `~${plan.authorEstimate} task(s)`)} ${dim("(exact count known after clustering)")}.`,
@@ -480,7 +521,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
         write(`  ${fail(`${f.export}: ${f.error}`)}`);
       }
       write(
-        `Retry only recorded failures: ${nextCommandText("distill", { home: args.home })} --retry-failed --retry-stage=digest`,
+        `Retry only recorded failures: ${retryCommandText("digest", { ...explicitArgs, home })}`,
       );
       // Do NOT abort here. A reproducibly-failing session must not block the
       // whole pipeline forever — proceed to cluster/author with the digests that
@@ -519,7 +560,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
 
     write();
-    write(`${banner("cluster", noGroup ? "--no-group" : "1 call")}:`);
+    write(`${banner("cluster", noGroup ? "--no-group" : "grouping digests")}:`);
 
     try {
       // Backend per export (absent ⇒ claude): names the corpus in the cluster
@@ -532,7 +573,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
         origins: clusterOrigins,
         generation: digestResult.generation,
         noGroup,
-        model: args.model,
+        model: noGroup ? args.model : clusterModel,
+        batchSize: clusterBatchSize,
         runner,
         runnerName,
         output: deps.output,
@@ -588,7 +630,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
           write(`  ${fail(`${f.export}: ${f.error}`)}`);
         }
         write(
-          `Retry only recorded author failures: ${nextCommandText("distill", { home: args.home })} --retry-failed --retry-stage=author`,
+          `Retry only recorded author failures: ${retryCommandText("author", { ...explicitArgs, home })}`,
         );
         hadFailure = true;
       }
@@ -601,7 +643,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     } catch (err) {
       write(`  ${fail((err as Error).message)}`);
       write(
-        `  digest progress is checkpointed; retry saved clustering operations: ${nextCommandText("distill", { home: args.home })} --retry-failed --retry-stage=cluster`,
+        `  digest progress is checkpointed; retry saved clustering operations: ${retryCommandText("cluster", { ...explicitArgs, home })}`,
       );
       return finishRun(1);
     }
@@ -638,6 +680,14 @@ export default defineCommand({
       description: "Minimum human messages for a session to be eligible",
     },
     model: { type: "string", description: "Model passed through to the runner's --model" },
+    "cluster-model": {
+      type: "string",
+      description: "Model for clustering windows and merge only (defaults to --model)",
+    },
+    "cluster-batch-size": {
+      type: "string",
+      description: "Maximum digests per clustering window (positive integer; normal distill only)",
+    },
     runner: {
       type: "string",
       description:

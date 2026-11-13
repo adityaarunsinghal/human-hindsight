@@ -918,41 +918,46 @@ export interface ClusterStageResult {
 export const CLUSTER_TIMEOUT_PER_DIGEST_MS = 5_000;
 
 /**
- * Split the corpus into clustering windows whose prompts each fit the input
- * budget. Returns one window (all ids, sorted) when the whole prompt fits or
- * no budget is known; otherwise greedily packs sorted ids so every window's
- * prompt stays within budget (a single oversized digest still gets its own
- * window rather than being dropped). Sorted, deterministic, order-preserving:
- * re-running the same corpus plans the same windows.
+ * Split the corpus into windows bounded by prompt size and, when requested,
+ * digest count. A single oversized digest gets its own window rather than
+ * being dropped. Sorted, deterministic, order-preserving: re-running the same
+ * corpus plans the same windows.
  */
 export function planClusterWindows(
   digests: Record<string, Digest>,
   origins: Record<string, SourceName> | undefined,
   budget: number | undefined,
+  batchSize?: number,
 ): string[][] {
+  if (batchSize !== undefined && (!Number.isSafeInteger(batchSize) || batchSize < 1))
+    throw new Error("Cluster batch size must be a positive integer");
   const ids = Object.keys(digests).sort();
-  if (budget === undefined || buildClusterPrompt(digests, origins).length <= budget) return [ids];
-
-  // Fixed prompt scaffolding cost, measured with zero digests.
-  const overhead = buildClusterPrompt({}, origins).length;
-  const cost = (id: string): number => {
-    const d = digests[id];
-    const one = d ? { [id]: d } : {};
-    return buildClusterPrompt(one, origins).length - overhead;
-  };
+  if (
+    (batchSize === undefined || ids.length <= batchSize) &&
+    (budget === undefined || buildClusterPrompt(digests, origins).length <= budget)
+  )
+    return [ids];
 
   const windows: string[][] = [];
   let current: string[] = [];
-  let used = overhead;
   for (const id of ids) {
-    const c = cost(id);
-    if (current.length > 0 && used + c > budget) {
+    // Measure the actual candidate prompt: its count and source label can
+    // change as a window grows, so summing singleton sizes can exceed budget.
+    const candidate = [...current, id];
+    const overBudget =
+      budget !== undefined &&
+      buildClusterPrompt(
+        Object.fromEntries(candidate.map((key) => [key, digests[key] as Digest])),
+        origins,
+      ).length > budget;
+    if (
+      current.length > 0 &&
+      (overBudget || (batchSize !== undefined && current.length >= batchSize))
+    ) {
       windows.push(current);
       current = [];
-      used = overhead;
     }
     current.push(id);
-    used += c;
   }
   if (current.length > 0) windows.push(current);
   return windows;
@@ -1047,16 +1052,18 @@ export interface ClusterStageOptions {
   runnerName?: SourceName;
   runner?: RunnerFn;
   output?: Writable;
-  /** Input budget (chars) — used only to warn when the digest set is very large. */
+  /** Maximum prompt characters per clustering window or merge call. */
   budget?: number;
+  /** Maximum number of digests per clustering window, in addition to the input budget. */
+  batchSize?: number;
   /** Per-call timeout (ms) passed through to the runner. */
   timeoutMs?: number;
 }
 
 /**
  * Stage 2 — cluster all digests into semantic tasks. One call when the corpus
- * prompt fits the input budget; otherwise windowed: one call per window plus
- * one best-effort merge call that unifies cross-window duplicates.
+ * fits the input budget and optional batch size; otherwise one call per window
+ * plus one best-effort merge call that unifies cross-window duplicates.
  *
  * Resumable: a tasks.json from the same generation covering the same input set
  * is reused without a call. Semantic validation failures (duplicate slugs,
@@ -1082,7 +1089,9 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
       origins: Object.fromEntries(inputIds.map((id) => [id, opts.origins?.[id] ?? "claude"])),
       upstream: Object.fromEntries(inputIds.map((id) => [id, upstream?.[id]?.fingerprint ?? null])),
       mode: opts.noGroup ? "one-session-per-task" : "grouped",
-      windows: opts.noGroup ? [] : planClusterWindows(opts.digests, opts.origins, opts.budget),
+      windows: opts.noGroup
+        ? []
+        : planClusterWindows(opts.digests, opts.origins, opts.budget, opts.batchSize),
       prompt: buildClusterPrompt(sortedDigests, opts.origins),
       mergePrompt: buildMergePrompt([]),
     },
@@ -1098,6 +1107,8 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
       sameLineage(existing.lineage, lineage) &&
       validateCluster(existing, inputIds).length === 0
     ) {
+      if (existing.operation_ids)
+        reconcileGroupingOperations(new OperationStore(opts.home, opts.generation), existing);
       write("  clustering already done (checkpoint reused)");
       return {
         generation: existing.generation,
@@ -1120,7 +1131,7 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
       `  --no-group: synthesized ${cluster.tasks.length} task(s) deterministically (no claude call)`,
     );
   } else {
-    const windows = planClusterWindows(opts.digests, opts.origins, opts.budget);
+    const windows = planClusterWindows(opts.digests, opts.origins, opts.budget, opts.batchSize);
     // Persist the entire fixed partition before spending on its first window.
     const windowOperations = windows.map((windowIds, index) => {
       const digests = Object.fromEntries(windowIds.map((id) => [id, opts.digests[id]]));
@@ -1166,12 +1177,15 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
         windowOperations[0] as OperationRecord,
       );
     } else {
-      // Windowed clustering: the whole-corpus prompt exceeds the input budget,
-      // so cluster each window independently, then unify cross-window
+      // Cluster each bounded window independently, then unify cross-window
       // duplicates with one merge call over the task identities.
+      const limits = [
+        ...(opts.batchSize === undefined ? [] : [`up to ${opts.batchSize} digests per window`]),
+        ...(opts.budget === undefined ? [] : [`input budget ${opts.budget} chars`]),
+      ];
       write(
         `  clustering ${inputIds.length} digest(s) in ${windows.length} windows ` +
-          `(corpus exceeds the input budget of ${opts.budget} chars)…`,
+          `(${limits.join("; ")})…`,
       );
       const combined: ClusterTask[] = [];
       const misc: string[] = [];
@@ -1250,28 +1264,37 @@ export async function runClusterStage(opts: ClusterStageOptions): Promise<Cluste
     grouping_hash: fingerprint({ tasks: cluster.tasks, misc: cluster.misc }),
   };
   saveTasks(opts.home, checkpoint);
-  // A completed normal grouping replaces the active task and clustering scope.
-  for (const previous of store.list()) {
-    if (previous.kind.startsWith("cluster-") && !operationIds.includes(previous.id)) {
-      store.setState(previous.id, "superseded");
-    } else if (previous.kind === "author") {
-      const oldTask = (store.loadInput(previous.id).logicalInput as AuthorLogicalInput).task;
-      if (
-        fingerprint(cluster.tasks.find((task) => task.slug === oldTask.slug)) !==
-        fingerprint(oldTask)
-      )
-        store.setState(previous.id, "superseded");
-    }
-  }
-  for (const id of operationIds) {
-    if (id === fallbackMergeId) store.setState(id, "resolved-by-fallback");
-    else store.commit(id, { kind: "cluster", groupingHash: fingerprint(checkpoint) });
-  }
+  reconcileGroupingOperations(store, checkpoint);
 
   write(
     `      → ${cluster.tasks.length} task(s), ${cluster.misc.length} session(s) routed to misc`,
   );
   return { generation: opts.generation, tasks: cluster.tasks, misc: cluster.misc, resumed: false };
+}
+
+/** Finish publication after the grouping is durable, including an interrupted prior run. */
+function reconcileGroupingOperations(store: OperationStore, checkpoint: TasksCheckpoint): void {
+  const operationIds = checkpoint.operation_ids ?? [];
+  // A completed normal grouping replaces the active task and clustering scope.
+  for (const previous of store.list()) {
+    if (previous.state === "superseded") continue;
+    if (previous.kind.startsWith("cluster-") && !operationIds.includes(previous.id)) {
+      store.setState(previous.id, "superseded");
+    } else if (previous.kind === "author") {
+      const oldTask = (store.loadInput(previous.id).logicalInput as AuthorLogicalInput).task;
+      const currentTask = checkpoint.tasks.find((task) => task.slug === oldTask.slug);
+      if (!currentTask || fingerprint(currentTask) !== fingerprint(oldTask))
+        store.setState(previous.id, "superseded");
+    }
+  }
+  const states = new Map(store.list().map((operation) => [operation.id, operation.state]));
+  for (const id of operationIds) {
+    if (id === checkpoint.fallback_merge_id) {
+      if (states.get(id) !== "resolved-by-fallback") store.setState(id, "resolved-by-fallback");
+    } else if (states.get(id) !== "committed") {
+      store.commit(id, { kind: "cluster", groupingHash: fingerprint(checkpoint) });
+    }
+  }
 }
 
 /**
@@ -2158,11 +2181,12 @@ export function createRetryHandlers(
     guard(input, operation) {
       const logical = input.logicalInput as AuthorLogicalInput;
       const currentTasks = loadTasks(home);
+      const currentTask = currentTasks?.tasks.find((task) => task.slug === logical.task.slug);
       if (
         !currentTasks ||
         currentTasks.generation !== input.generation ||
-        fingerprint(currentTasks.tasks.find((task) => task.slug === logical.task.slug)) !==
-          fingerprint(logical.task)
+        !currentTask ||
+        fingerprint(currentTask) !== fingerprint(logical.task)
       )
         throw new Error("Saved task definition changed; use normal distill to prepare new inputs");
       const currentDigests = loadDigests(home);

@@ -10,6 +10,7 @@ import { OperationStore } from "../src/distill/operations.js";
 import {
   createRetryHandlers,
   loadDigests,
+  loadTasks,
   planClusterWindows,
   prepareTaskRecoveryInputs,
   type RunnerFn,
@@ -68,12 +69,133 @@ function execution(home: string, value: unknown) {
     }),
   };
 }
+async function seedAuthoredGrouping(dir: string, fail = false) {
+  const generation = "regroup-test";
+  const digests = { "a.md": digest };
+  saveDigests(dir, { generation, prompt_version: 1, digests });
+  await runClusterStage({
+    home: dir,
+    generation,
+    digests,
+    runner: runner({ tasks: [task], misc: [] }),
+    output,
+  });
+  await runAuthorStage({
+    home: dir,
+    generation,
+    digests,
+    tasks: [task],
+    entries: [entry("a.md")],
+    toolVersion: "1.8.4",
+    runner: fail
+      ? ((async () => {
+          throw new Error("author unavailable");
+        }) as RunnerFn)
+      : runner({
+          slug: task.slug,
+          title: task.title,
+          oneshot_markdown:
+            "Build the requested feature with clear implementation, meaningful tests, and a complete explanation of the result for future maintainers.",
+          confidence: "high",
+          preferences: [],
+        }),
+    output,
+  });
+  return { generation, digests };
+}
 afterEach(() => {
   vi.restoreAllMocks();
   for (const dir of homes.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
 describe("durable pipeline operations", () => {
+  it.each([
+    "renamed",
+    "misc",
+  ] as const)("finishes corrected regrouping when an authored task is %s and preserves its files", async (destination) => {
+    const dir = home();
+    const { generation, digests } = await seedAuthoredGrouping(dir);
+    const library = path.join(dir, "library", task.slug);
+    const files = fs.readdirSync(library);
+    const before = files.map((file) => fs.readFileSync(path.join(library, file)));
+    const regrouped =
+      destination === "misc"
+        ? { tasks: [], misc: ["a.md"] }
+        : { tasks: [{ ...task, slug: "regrouped-feature" }], misc: [] };
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ tasks: [], misc: [] })
+      .mockResolvedValueOnce(regrouped);
+
+    const result = await runClusterStage({
+      home: dir,
+      generation,
+      digests,
+      model: "cluster-upgrade",
+      runner: run as RunnerFn,
+      output,
+    });
+
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(result.tasks).toEqual(regrouped.tasks);
+    expect(result.misc).toEqual(regrouped.misc);
+    expect(new OperationStore(dir).list().map((operation) => operation.state)).toEqual([
+      "superseded",
+      "superseded",
+      "committed",
+    ]);
+    expect(files.map((file) => fs.readFileSync(path.join(library, file)))).toEqual(before);
+    expect(prepareRetry({ home: dir, handlers: createRetryHandlers(dir) }).modelOperations).toEqual(
+      [],
+    );
+  });
+
+  it("repairs grouping bookkeeping after publication without repeating a model call", async () => {
+    const dir = home();
+    const { generation, digests } = await seedAuthoredGrouping(dir);
+    const regrouped = { tasks: [{ ...task, slug: "regrouped-feature" }], misc: [] };
+    const options = {
+      home: dir,
+      generation,
+      digests,
+      model: "cluster-upgrade",
+      output,
+    };
+    const fault = vi.spyOn(OperationStore.prototype, "setState").mockImplementationOnce(() => {
+      throw new Error("interrupted after grouping was saved");
+    });
+    await expect(runClusterStage({ ...options, runner: runner(regrouped) })).rejects.toThrow(
+      "interrupted after grouping was saved",
+    );
+    fault.mockRestore();
+    expect(loadTasks(dir)?.tasks).toEqual(regrouped.tasks);
+
+    const run = vi.fn(runner(regrouped));
+    const result = await runClusterStage({ ...options, runner: run as RunnerFn });
+    expect(result.resumed).toBe(true);
+    expect(run).not.toHaveBeenCalled();
+    expect(new OperationStore(dir).list().map((operation) => operation.state)).toEqual([
+      "superseded",
+      "superseded",
+      "committed",
+    ]);
+  });
+
+  it("reports a removed task clearly when previewing a saved author failure", async () => {
+    const dir = home();
+    const { generation } = await seedAuthoredGrouping(dir, true);
+    saveTasks(dir, {
+      generation,
+      prompt_version: 1,
+      tasks: [{ ...task, slug: "regrouped-feature" }],
+      misc: [],
+    });
+    const plan = prepareRetry({ home: dir, stage: "author", handlers: createRetryHandlers(dir) });
+    expect(plan.modelOperations).toEqual([]);
+    expect(plan.blocked).toHaveLength(1);
+    expect(plan.blocked[0]?.reason).toContain("Saved task definition changed");
+  });
+
   it("records actual failure and strict digest repair never touches the grouping", async () => {
     const dir = home();
     await runDigestStage({

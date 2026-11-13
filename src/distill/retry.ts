@@ -99,12 +99,19 @@ function settingsFor(
   operation: OperationRecord,
   input: OperationInput,
   overrides: Partial<AttemptSettings>,
+  clusterModel?: string,
 ): AttemptSettings {
   const previous = operation.attempts.at(-1)?.settings ?? input.settings;
   const definedOverrides = Object.fromEntries(
     Object.entries(overrides).filter(([, value]) => value !== undefined),
   );
   const settings = { ...previous, ...definedOverrides };
+  if (
+    clusterModel !== undefined &&
+    (operation.kind === "cluster-window" || operation.kind === "cluster-merge")
+  ) {
+    settings.model = clusterModel;
+  }
   if (overrides.timeoutMs !== undefined)
     settings.timeoutExplicit = overrides.timeoutExplicit ?? true;
   if (!settings.timeoutExplicit) {
@@ -187,6 +194,8 @@ export interface PrepareRetryOptions {
   home: string;
   stage?: RetryStage;
   overrides?: Partial<AttemptSettings>;
+  /** Applies only to clustering operations, taking precedence over overrides.model. */
+  clusterModel?: string;
   handlers: RetryHandlers;
 }
 
@@ -249,7 +258,7 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
       const handler = options.handlers[operation.kind];
       if (!handler) throw new Error(`No handler for ${operation.kind}`);
       handler.guard?.(input, operation);
-      const settings = settingsFor(operation, input, options.overrides ?? {});
+      const settings = settingsFor(operation, input, options.overrides ?? {}, options.clusterModel);
       // Results are checked before request preparation: a saved result never
       // needs another model call because the new budget would block preparation.
       const result = store.readResult(operation.id);

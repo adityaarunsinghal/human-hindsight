@@ -26,7 +26,15 @@ export function validateRetryArguments(args: DistillArgs): void {
   if (!retry && !recovery) return;
   if (retry && recovery)
     throw new Error("--retry-failed and --recover-tasks are mutually exclusive");
-  for (const key of ["fresh", "force", "group", "project", "source", "min-substance"] as const) {
+  for (const key of [
+    "fresh",
+    "force",
+    "group",
+    "project",
+    "source",
+    "min-substance",
+    "cluster-batch-size",
+  ] as const) {
     if (args[key] !== undefined && args[key] !== false)
       throw new Error(`--${key} cannot be combined with strict retry or recovery`);
     if (key === "group" && args[key] === false)
@@ -88,6 +96,7 @@ export async function runStrictRetry(args: DistillArgs, deps: DistillDeps): Prom
         home,
         stage: (args["retry-stage"] ?? "all") as RetryStage,
         overrides,
+        clusterModel: args["cluster-model"],
         handlers,
       });
     }

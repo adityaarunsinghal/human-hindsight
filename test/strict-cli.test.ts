@@ -4,12 +4,18 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderPlan } from "../src/claude/consent.js";
+import { ClusterSchema, type Digest } from "../src/claude/schemas.js";
 import { type DistillArgs, type ManifestEntry, runDistill } from "../src/commands/distill.js";
 import { OperationStore } from "../src/distill/operations.js";
-import { loadDigests, type RunnerFn, runDigestStage } from "../src/distill/pipeline.js";
+import {
+  loadDigests,
+  type RunnerFn,
+  runClusterStage,
+  runDigestStage,
+} from "../src/distill/pipeline.js";
 
 const homes: string[] = [];
-const digest = {
+const digest: Digest = {
   goal: "Improve the build",
   deliverable: "Tested build",
   domain: "tooling",
@@ -57,6 +63,31 @@ async function failedDigest() {
   });
   return f;
 }
+async function failedCluster() {
+  const f = fixture();
+  const result = await runDigestStage({
+    home: f.home,
+    entries: [f.entry],
+    output: f.output,
+    runnerName: "claude",
+    model: "recorded-digest-model",
+    runner: (async () => digest) as RunnerFn,
+  });
+  await expect(
+    runClusterStage({
+      home: f.home,
+      digests: { [f.entry.export]: digest },
+      generation: result.generation,
+      output: f.output,
+      runnerName: "claude",
+      model: "recorded-cluster-model",
+      runner: async () => {
+        throw new Error("network disconnected");
+      },
+    }),
+  ).rejects.toThrow("network disconnected");
+  return f;
+}
 afterEach(() => {
   vi.unstubAllEnvs();
   for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
@@ -71,6 +102,8 @@ describe("strict retry command contract", () => {
     { "retry-failed": true, source: "claude" },
     { "retry-failed": true, project: "tooling" },
     { "retry-failed": true, "min-substance": "3" },
+    { "retry-failed": true, "cluster-batch-size": "50" },
+    { "recover-tasks": "build-work", "cluster-batch-size": "50" },
     { "retry-failed": true, "retry-stage": "typo" },
     { "retry-stage": "author" },
     { "retry-failed": true, "recover-tasks": "build-work" },
@@ -125,6 +158,7 @@ describe("strict retry command contract", () => {
   it("ignores ambient workflow defaults, repairs only the digest, and repeats with zero calls", async () => {
     const f = await failedDigest();
     vi.stubEnv("HUMAN_HINDSIGHT_MODEL", "unexpected-model");
+    vi.stubEnv("HUMAN_HINDSIGHT_CLUSTER_MODEL", "unexpected-cluster-model");
     vi.stubEnv("HUMAN_HINDSIGHT_RUNNER", "missing-runner");
     vi.stubEnv("HUMAN_HINDSIGHT_PROJECT", "different-project");
     const runner = vi.fn(async () => digest);
@@ -153,6 +187,66 @@ describe("strict retry command contract", () => {
       ),
     ).toBe(0);
     expect(runner).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores ambient cluster model defaults and inherits the recorded cluster model", async () => {
+    const f = await failedCluster();
+    vi.stubEnv("HUMAN_HINDSIGHT_MODEL", "unexpected-model");
+    vi.stubEnv("HUMAN_HINDSIGHT_CLUSTER_MODEL", "unexpected-cluster-model");
+    const runner: RunnerFn = vi.fn(async (opts) => {
+      expect(opts.schema).toBe(ClusterSchema);
+      expect(opts.model).toBe("recorded-cluster-model");
+      return {
+        tasks: [
+          {
+            slug: "build-work",
+            title: "Build work",
+            rationale: "One task",
+            members: [f.entry.export],
+          },
+        ],
+        misc: [],
+      } as never;
+    });
+    expect(
+      await runDistill(
+        { home: f.home, "retry-failed": true, "retry-stage": "cluster", yes: true },
+        { runner, output: f.output },
+      ),
+    ).toBe(0);
+    expect(runner).toHaveBeenCalledOnce();
+    expect(f.text()).toContain("recorded-cluster-model");
+    expect(fs.existsSync(path.join(f.home, "distill/tasks.json"))).toBe(false);
+  });
+
+  it("previews the explicit cluster model ahead of a generic override without changing history", async () => {
+    const f = await failedCluster();
+    const ledger = path.join(f.home, "distill/operations.json");
+    const before = fs.readFileSync(ledger, "utf8");
+    const runner = vi.fn();
+    const confirm = vi.fn(async (plan) => {
+      expect(plan.retry.operations).toHaveLength(1);
+      expect(plan.retry.operations[0]).toMatchObject({
+        kind: "cluster-window",
+        model: "new-cluster-model",
+      });
+      return "dry-run" as const;
+    });
+    expect(
+      await runDistill(
+        {
+          home: f.home,
+          "retry-failed": true,
+          model: "new-general-model",
+          "cluster-model": "new-cluster-model",
+          "dry-run": true,
+        },
+        { runner: runner as RunnerFn, output: f.output, confirm },
+      ),
+    ).toBe(0);
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(runner).not.toHaveBeenCalled();
+    expect(fs.readFileSync(ledger, "utf8")).toBe(before);
   });
 
   it("honors stage selection without starting a missing stage", async () => {

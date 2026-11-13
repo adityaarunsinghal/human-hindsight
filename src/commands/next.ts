@@ -37,13 +37,20 @@ const environments: Record<string, string> = {
   "opencode-db": "HUMAN_HINDSIGHT_OPENCODE_DB",
   runner: "HUMAN_HINDSIGHT_RUNNER",
   model: "HUMAN_HINDSIGHT_MODEL",
+  "cluster-model": "HUMAN_HINDSIGHT_CLUSTER_MODEL",
   project: "HUMAN_HINDSIGHT_PROJECT",
 };
-type FlowOptions = { runner?: string; model?: string; project?: string; "follow-up"?: boolean };
+type FlowOptions = {
+  runner?: string;
+  model?: string;
+  "cluster-model"?: string;
+  project?: string;
+  "follow-up"?: boolean;
+};
 
 export function flowArgs<T extends object>(input: T): T & FlowOptions {
   const args = { ...input } as Record<string, unknown>;
-  for (const key of ["runner", "model", "project"])
+  for (const key of ["runner", "model", "cluster-model", "project"])
     args[key] ??= process.env[environments[key] ?? ""];
   if (args["follow-up"] === undefined && process.env.HUMAN_HINDSIGHT_FOLLOW_UP === "0")
     args["follow-up"] = false;
@@ -67,7 +74,15 @@ export function nextArguments(command: NextCommand, input: object): string[] {
   }
   if (["export", "distill", "preferences"].includes(command)) keys.push("runner", "model");
   if (["distill", "preferences"].includes(command)) keys.push("timeout");
-  if (command === "distill") keys.push("min-substance", "input-budget", "truncate", "concurrency");
+  if (command === "distill")
+    keys.push(
+      "min-substance",
+      "input-budget",
+      "truncate",
+      "concurrency",
+      "cluster-model",
+      "cluster-batch-size",
+    );
   const result: string[] = [];
   for (const key of keys) {
     const value = args[key] ?? process.env[environments[key] ?? ""];
@@ -89,6 +104,36 @@ const quote = (value: string) =>
   /^[\w./:=+-]+$/.test(value) ? value : `'${value.replaceAll("'", "'\\''")}'`;
 export function nextCommandText(command: NextCommand, args: object): string {
   return ["human-hindsight", command, ...nextArguments(command, args).map(quote)].join(" ");
+}
+
+/** Strict retry hints retain explicit overrides without adding workflow defaults. */
+export function retryCommandText(
+  stage: "digest" | "cluster" | "author",
+  input: {
+    home?: string;
+    runner?: string;
+    model?: string;
+    "cluster-model"?: string;
+    timeout?: string;
+    "input-budget"?: string;
+    truncate?: string;
+    concurrency?: string;
+  },
+): string {
+  const args: string[] = [];
+  const keys = ["home", "runner", "model", "timeout", "input-budget", "truncate", "concurrency"];
+  if (stage === "cluster") keys.push("cluster-model");
+  for (const key of keys) {
+    const value = input[key as keyof typeof input];
+    if (value && !(key === "runner" && value === "auto")) args.push(`--${key}=${value}`);
+  }
+  return [
+    "human-hindsight",
+    "distill",
+    ...args.map(quote),
+    "--retry-failed",
+    `--retry-stage=${stage}`,
+  ].join(" ");
 }
 
 export async function offerNext(

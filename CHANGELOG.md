@@ -4,6 +4,35 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.8.5] - 2026-11-13
+
+### Fixed
+
+- Regrouping no longer crashes with a `data` argument error when an old task
+  disappears or is renamed. Existing prompt files and edits are preserved;
+  obsolete author operations are excluded from later retries.
+- Resuming a saved grouping finishes interrupted operation bookkeeping without
+  repeating successful model calls. Retry previews now explain when a saved
+  task definition has changed.
+- Clustering windows account for the complete prompt size, including changing
+  count headers, so planned windows stay within the input budget.
+
+### Added
+
+- `distill --cluster-model=<model>` selects a model for clustering and merging
+  independently of the digest and author model. It defaults to `--model`, can
+  also be set with `HUMAN_HINDSIGHT_CLUSTER_MODEL`, and supports explicit
+  cluster-only overrides during strict retries.
+- `distill --cluster-batch-size=<n>` limits the number of digests per clustering
+  call even when the full corpus fits the character budget. Window results are
+  checkpointed and merged across batches. Omitting the flag keeps the existing
+  grouping behavior.
+- Consent previews show the selected stage models and estimated clustering
+  window and merge calls. Suggested strict-retry commands retain relevant
+  explicit model settings.
+- Installed-command checks cover batching, separate stage models, regrouping,
+  and cluster retries through both package names.
+
 ## [1.8.4] - 2026-11-11
 
 ### Added
@@ -556,7 +585,8 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.4...HEAD
+[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.5...HEAD
+[1.8.5]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.2...v1.8.3
 [1.8.2]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.1...v1.8.2

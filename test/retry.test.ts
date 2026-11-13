@@ -7,6 +7,7 @@ import { CLUSTER_PROMPT_VERSION } from "../src/claude/prompts/cluster.js";
 import { DIGEST_PROMPT_VERSION } from "../src/claude/prompts/digest.js";
 import {
   AuthorSchema,
+  ClusterMergeSchema,
   ClusterSchema,
   DigestResponseSchema,
   toJsonSchema,
@@ -37,8 +38,21 @@ function fixture() {
       unitId,
       generation: "g1",
       runId: "r1",
-      promptVersion: kind === "digest" ? DIGEST_PROMPT_VERSION : CLUSTER_PROMPT_VERSION,
-      schema: toJsonSchema(kind === "digest" ? DigestResponseSchema : ClusterSchema),
+      promptVersion:
+        kind === "digest"
+          ? DIGEST_PROMPT_VERSION
+          : kind === "author"
+            ? AUTHOR_PROMPT_VERSION
+            : CLUSTER_PROMPT_VERSION,
+      schema: toJsonSchema(
+        kind === "digest"
+          ? DigestResponseSchema
+          : kind === "author"
+            ? AuthorSchema
+            : kind === "cluster-merge"
+              ? ClusterMergeSchema
+              : ClusterSchema,
+      ),
       logicalInput: { unitId },
       sources: [{ path: "exports/a.md", hash: contentFingerprint("source"), length: 6 }],
       settings: {
@@ -61,7 +75,12 @@ function fixture() {
       invoke({ prompt: "saved request", schema: DigestResponseSchema }),
     publish,
   };
-  const handlers = { digest: handler, "cluster-window": handler };
+  const handlers = {
+    digest: handler,
+    author: handler,
+    "cluster-window": handler,
+    "cluster-merge": handler,
+  };
   const getRunner = vi.fn(() => ({
     name: "claude" as const,
     installHint: "",
@@ -74,6 +93,68 @@ afterEach(() => {
   for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
 });
 describe("strict retry selection and execution", () => {
+  it("applies a cluster model after generic overrides only to clustering operations", async () => {
+    const f = fixture();
+    const kinds = ["digest", "cluster-window", "cluster-merge", "author"] as const;
+    for (const kind of kinds) {
+      const operation = f.queue(kind, kind);
+      f.store.start(operation.id);
+      f.store.fail(operation.id, "timeout");
+    }
+    const plan = prepareRetry({
+      home: f.home,
+      handlers: f.handlers,
+      overrides: { model: "general-model" },
+      clusterModel: "grouping-model",
+    });
+    expect(
+      plan.modelOperations.map(({ operation, settings }) => [operation.kind, settings.model]),
+    ).toEqual([
+      ["digest", "general-model"],
+      ["cluster-window", "grouping-model"],
+      ["cluster-merge", "grouping-model"],
+      ["author", "general-model"],
+    ]);
+    f.run.mockRejectedValue(new Error("retry still interrupted"));
+    await executeRetry(plan, { handlers: f.handlers, getRunner: f.getRunner });
+    const inherited = prepareRetry({ home: f.home, handlers: f.handlers });
+    expect(
+      inherited.modelOperations.map(({ operation, settings }) => [operation.kind, settings.model]),
+    ).toEqual(
+      plan.modelOperations.map(({ operation, settings }) => [operation.kind, settings.model]),
+    );
+    for (const { operation, settings } of inherited.modelOperations) {
+      expect(
+        new OperationStore(f.home)
+          .list()
+          .find((item) => item.id === operation.id)
+          ?.attempts.at(-1)?.settings.model,
+      ).toBe(settings.model);
+    }
+  });
+
+  it("keeps recorded non-cluster models when only the cluster model is overridden", () => {
+    const f = fixture();
+    for (const kind of ["digest", "cluster-window", "cluster-merge", "author"] as const) {
+      const operation = f.queue(kind, kind);
+      f.store.start(operation.id);
+      f.store.fail(operation.id, "timeout");
+    }
+    const plan = prepareRetry({
+      home: f.home,
+      handlers: f.handlers,
+      clusterModel: "grouping-model",
+    });
+    expect(
+      plan.modelOperations.map(({ operation, settings }) => [operation.kind, settings.model]),
+    ).toEqual([
+      ["digest", "old"],
+      ["cluster-window", "grouping-model"],
+      ["cluster-merge", "grouping-model"],
+      ["author", "old"],
+    ]);
+  });
+
   it("retries failures only, preserving committed and queued operations under overrides", async () => {
     const f = fixture();
     const success = f.queue("success");

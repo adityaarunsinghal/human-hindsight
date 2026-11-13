@@ -163,6 +163,16 @@ try {
     ],
     { stdio: "inherit", timeout: 180_000 },
   );
+  execFileSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./smoke-cluster.mjs", import.meta.url)),
+      ...["human-hindsight", "cc-hindsight"].map((name) =>
+        path.resolve(prefix, "node_modules/.bin", name),
+      ),
+    ],
+    { stdio: "inherit", timeout: 180_000 },
+  );
 } finally {
   gui?.kill("SIGKILL");
   fs.rmSync(root, { recursive: true, force: true });
