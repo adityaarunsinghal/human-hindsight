@@ -146,6 +146,7 @@ describe("root-level path flags reach the subcommand", () => {
       "CLAUDE_CONFIG_DIR",
       "CODEX_HOME",
       "KIRO_CONFIG_DIR",
+      "HUMAN_HINDSIGHT_CLUSTER_MODEL",
     ]) {
       delete process.env[k];
     }
@@ -160,6 +161,7 @@ describe("root-level path flags reach the subcommand", () => {
       "CLAUDE_CONFIG_DIR",
       "CODEX_HOME",
       "KIRO_CONFIG_DIR",
+      "HUMAN_HINDSIGHT_CLUSTER_MODEL",
     ]) {
       if (savedEnv[k] === undefined) delete process.env[k];
       else process.env[k] = savedEnv[k];
@@ -203,6 +205,25 @@ describe("root-level path flags reach the subcommand", () => {
     expect(process.env.CODEX_HOME).toBe(codexDir);
     // An empty claude dir has no sessions to discover.
     expect(logs.join("\n")).toContain("discovered  0 session(s)");
+  });
+
+  it("preserves a clustering model selected before the subcommand", async () => {
+    const home = mkdir("cluster-model");
+    const claudeDir = mkdir("cluster-model-claude");
+    await runMain(main, {
+      rawArgs: [
+        "--home",
+        home,
+        "--claude-dir",
+        claudeDir,
+        "--cluster-model",
+        "selected-grouping-model",
+        "status",
+        "--source",
+        "claude",
+      ],
+    });
+    expect(process.env.HUMAN_HINDSIGHT_CLUSTER_MODEL).toBe("selected-grouping-model");
   });
 
   it("lets a subcommand-level flag win over the root-level one", async () => {

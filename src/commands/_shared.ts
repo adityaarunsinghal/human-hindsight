@@ -11,6 +11,10 @@ export const sharedArgs = {
   },
   runner: { type: "string", description: "Distillation engine, including optional next steps" },
   model: { type: "string", description: "Model for distillation, including optional next steps" },
+  "cluster-model": {
+    type: "string",
+    description: "Model for distillation clustering only (default: --model)",
+  },
   project: { type: "string", description: "Project filter to keep through the workflow" },
   home: {
     type: "string",

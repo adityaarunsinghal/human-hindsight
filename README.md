@@ -52,9 +52,10 @@ stay out of standing instruction files. Reviews are saved in your library and
 survive browser restarts.
 
 Re-running `distill` refreshes results whose source content, prompt version,
-runner/model selection, or grouping mode changed. Older checkpoints are refreshed
+runner/model selection, grouping mode, or clustering batch size changed. Older checkpoints are refreshed
 once because they have no input fingerprints. Hand-edited prompts are preserved;
-`--force` explicitly allows replacing them.
+`--force` explicitly allows replacing them. Changing only `--cluster-model` or
+`--cluster-batch-size` reuses unchanged session digests.
 
 Updating the old npm package installs the small compatibility wrapper, so
 `npx cc-hindsight@latest gui` also works. Both global commands can coexist:
@@ -79,6 +80,10 @@ npx human-hindsight@latest distill --retry-failed
 
 # Narrow the retry to recorded authoring failures:
 npx human-hindsight@latest distill --retry-failed --retry-stage=author
+
+# Retry recorded clustering failures with a different model:
+npx human-hindsight@latest distill --retry-failed --retry-stage=cluster \
+  --cluster-model=opus --dry-run
 ```
 
 `--retry-stage` accepts `all` (the default), `digest`, `cluster`, or `author`.
@@ -86,6 +91,28 @@ A recovered digest does not trigger clustering or authoring. A recovered cluster
 result is saved for adoption by a later normal `distill`; retry never replaces
 the saved task grouping. Successful operations and work never attempted are
 excluded, even when you override the model or input budget.
+
+`--model` overrides the model for every selected retry operation.
+`--cluster-model` overrides only clustering windows and their merge, taking
+precedence over `--model` for those operations. With no explicit override, retry
+keeps each operation's saved model and ignores normal workflow environment
+defaults, including `HUMAN_HINDSIGHT_CLUSTER_MODEL`.
+
+A clustering retry saves its result without changing grouping. Repeat the
+preview command without `--dry-run` to retry, then run normal distillation with
+the same clustering settings to adopt the result and continue:
+
+```bash
+npx human-hindsight@latest distill --retry-failed --retry-stage=cluster \
+  --cluster-model=opus
+npx human-hindsight@latest distill --cluster-model=opus
+```
+
+If the failed run used `--cluster-batch-size`, pass that same size to the normal
+adoption command. Keep the original `--model` (when one was selected), runner,
+input budget, and source filters as well so the normal run can reuse its
+digests and grouping inputs. Strict retry uses the recorded windows and rejects
+`--cluster-batch-size`; use normal `distill` to choose a different partition.
 
 Older runs have no recorded failure history. Select their saved task slugs
 explicitly instead of inferring failures from missing files:
@@ -102,7 +129,8 @@ Both recovery modes show selected work, local repairs, exclusions, and blockers.
 Strict retry requires unchanged recorded inputs and compatible operation
 records; legacy recovery requires the saved task and its source evidence.
 A changed or missing input can require a normal refresh. Neither mode combines with
-`--fresh`, `--force`, or explicit grouping, project, source, or substance filters.
+`--fresh`, `--force`, `--cluster-batch-size`, or explicit grouping, project, source,
+or substance filters.
 
 The default input budget remains **400,000 content characters**; `600000` is an
 explicit override, not a guarantee that a provider accepts the request. Digest
@@ -314,6 +342,34 @@ store), preferring the v3 copy when a session was migrated into both.
 independently of `--source`. `auto` prefers the CLI matching an explicit source,
 then falls back in the order Claude → Codex → Kiro → OpenCode. Models are passed through
 with `--model`; without it, the chosen CLI uses its configured default.
+
+Use `--cluster-model` to choose a different model just for grouping sessions and
+merging groups across windows. Digesting sessions and writing prompts still use
+`--model` or the runner's default. For example, with the Claude runner:
+
+```bash
+npx human-hindsight@latest distill --runner=claude --model=sonnet --cluster-model=opus
+```
+
+`HUMAN_HINDSIGHT_CLUSTER_MODEL` supplies the normal workflow default, and an
+explicit `--cluster-model` takes precedence. The selection stays with optional
+handoffs into `distill`. `--no-group` skips clustering and ignores its model and
+batch options.
+
+By default, clustering uses one call when all digests fit the input budget,
+splitting into windows only when needed. For a large library, limit the digests
+per window explicitly:
+
+```bash
+npx human-hindsight@latest distill --cluster-model=opus --cluster-batch-size=50 --dry-run
+```
+
+For 300 eligible sessions, that previews about six clustering windows plus one
+merge. The input budget may require smaller windows; failed digests or groups
+with nothing to merge may reduce the work. The plan is an estimate until
+digestion finishes. Smaller batches make more calls, and merge failures retain
+the usable window groups. Changing the batch size refreshes
+grouping while keeping reusable digest checkpoints.
 
 ```bash
 npx human-hindsight@latest export --source codex

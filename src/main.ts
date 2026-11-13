@@ -47,6 +47,7 @@ function publishRootPaths(args: Record<string, unknown>): void {
     "opencode-db": "HUMAN_HINDSIGHT_OPENCODE_DB",
     runner: "HUMAN_HINDSIGHT_RUNNER",
     model: "HUMAN_HINDSIGHT_MODEL",
+    "cluster-model": "HUMAN_HINDSIGHT_CLUSTER_MODEL",
     project: "HUMAN_HINDSIGHT_PROJECT",
   } as const;
   for (const [flag, envVar] of Object.entries(envForFlag)) {

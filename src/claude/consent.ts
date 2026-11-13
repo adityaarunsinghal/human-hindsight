@@ -6,7 +6,7 @@ import { bold, cyan, dim, yellow } from "../ui/style.js";
 /**
  * The consent & cost gate.
  *
- * Before distill invokes the local `claude` CLI it discloses the exact
+ * Before distill invokes the local `claude` CLI it discloses the estimated
  * invocation count and asks for confirmation. Nothing runs implicitly:
  *   - `--dry-run` prints the plan and never prompts.
  *   - `--yes` skips the prompt (for scripting) and never reads stdin.
@@ -17,8 +17,11 @@ import { bold, cyan, dim, yellow } from "../ui/style.js";
 export interface DistillPlan {
   /** Number of per-session digest calls. */
   digests: number;
-  /** Whether a clustering call runs (0 with `--no-group`, else 1). */
-  cluster: 0 | 1;
+  /** Estimated clustering calls, including a merge when multiple windows are expected. */
+  cluster: number;
+  /** Count-based estimates when the user explicitly limits clustering batch size. */
+  clusterWindowsEstimate?: number;
+  clusterMergeEstimate?: number;
   /** Estimated authoring calls (one per task; exact count known post-cluster). */
   authorEstimate: number;
   /**
@@ -27,6 +30,10 @@ export interface DistillPlan {
    * is claude; a kiro runner names kiro (and its credits) instead.
    */
   runnerName?: SourceName;
+  /** Normal model selection for digest and author; clustering uses it as the fallback. */
+  model?: string;
+  /** Optional override for clustering windows and their merge. */
+  clusterModel?: string;
   /** Optional resume line shown when checkpoints already exist. */
   resumeNote?: string;
   /** Input budget in chars — when set, a coverage disclosure line is shown. */
@@ -110,7 +117,7 @@ export function renderPlan(plan: DistillPlan): string {
     return lines.join("\n");
   }
   const digestStr = String(plan.digests);
-  const clusterStr = String(plan.cluster);
+  const clusterStr = `${plan.cluster > 0 ? "~" : ""}${plan.cluster}`;
   const authorStr = `~${plan.authorEstimate}`;
   const width = Math.max(digestStr.length, clusterStr.length, authorStr.length);
 
@@ -121,10 +128,25 @@ export function renderPlan(plan: DistillPlan): string {
   const lines = [
     `  distill will invoke your local \`${cli}\` CLI (${cost}):`,
     `    ${dim("•")} ${count(digestStr)} session digests`,
-    `    ${dim("•")} ${count(clusterStr)} clustering call`,
+    `    ${dim("•")} ${count(clusterStr)} clustering call${plan.cluster > 1 ? "s" : ""}${
+      plan.clusterWindowsEstimate !== undefined
+        ? ` (estimated ${plan.clusterWindowsEstimate} window(s) + ${plan.clusterMergeEstimate ?? 0} merge; the input budget may require more windows)`
+        : plan.cluster > 0
+          ? " (estimated; the input budget may require windows and a merge)"
+          : ""
+    }`,
     `    ${dim("•")} ${count(authorStr)} oneshot authoring calls (one per task; exact count known after clustering)`,
     `  ≈ ${bold(cyan(String(total)))} invocations total.${dim(` Nothing is sent anywhere except through your own ${cli} CLI.`)}`,
   ];
+  if (plan.model !== undefined || (plan.cluster > 0 && plan.clusterModel !== undefined)) {
+    lines.push(
+      `  Models: digest and author — ${plan.model ?? "harness default"}${
+        plan.cluster > 0
+          ? `; clustering windows and merge — ${plan.clusterModel ?? plan.model ?? "harness default"}`
+          : ""
+      }.`,
+    );
+  }
   // Coverage disclosure: only shown when a budget context is supplied.
   // never-mode overflow is refused BEFORE consent (pre-spend), so the only case
   // reaching here with oversized sessions is extreme mode, which cuts + reports.

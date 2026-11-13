@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable, Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   askYesNo,
   type ConsentResult,
@@ -12,7 +12,12 @@ import {
   renderPlan,
 } from "../src/claude/consent.js";
 import type { RunClaudeOptions } from "../src/claude/runner.js";
-import { AuthorSchema, ClusterSchema, ConsolidateSchema } from "../src/claude/schemas.js";
+import {
+  AuthorSchema,
+  ClusterMergeSchema,
+  ClusterSchema,
+  ConsolidateSchema,
+} from "../src/claude/schemas.js";
 import { parseClampedInt } from "../src/commands/_shared.js";
 import {
   computePlan,
@@ -77,7 +82,7 @@ describe("renderPlan", () => {
     const expected = [
       "  distill will invoke your local `claude` CLI (your subscription/credits):",
       "    • 14 session digests",
-      "    •  1 clustering call",
+      "    • ~1 clustering call (estimated; the input budget may require windows and a merge)",
       "    • ~5 oneshot authoring calls (one per task; exact count known after clustering)",
       "  ≈ 20 invocations total. Nothing is sent anywhere except through your own claude CLI.",
     ].join("\n");
@@ -120,7 +125,9 @@ describe("renderPlan", () => {
     const out = strip(renderPlan({ digests: 5, cluster: 1, authorEstimate: 5 }));
     const lines = out.split("\n");
     expect(lines[1]).toBe("    •  5 session digests");
-    expect(lines[2]).toBe("    •  1 clustering call");
+    expect(lines[2]).toBe(
+      "    • ~1 clustering call (estimated; the input budget may require windows and a merge)",
+    );
     expect(lines[3]).toContain("    • ~5 oneshot authoring calls");
   });
 
@@ -154,8 +161,37 @@ describe("renderPlan", () => {
 
   it("omits the coverage line entirely when no budget context is provided (existing callers)", () => {
     const out = strip(renderPlan({ digests: 5, cluster: 1, authorEstimate: 5 }));
-    expect(out).not.toContain("budget");
+    expect(out).not.toContain("Every exported byte");
+    expect(out).not.toContain("chars");
     expect(out).not.toContain("reach the model");
+  });
+
+  it("discloses the estimated window count, merge, and stage-specific models", () => {
+    const out = strip(
+      renderPlan({
+        digests: 300,
+        cluster: 7,
+        clusterWindowsEstimate: 6,
+        clusterMergeEstimate: 1,
+        authorEstimate: 100,
+        model: "session-model",
+        clusterModel: "grouping-model",
+      }),
+    );
+    expect(out).toContain("~7 clustering calls");
+    expect(out).toContain("estimated 6 window(s) + 1 merge");
+    expect(out).toContain("input budget may require more windows");
+    expect(out).toContain("digest and author — session-model");
+    expect(out).toContain("clustering windows and merge — grouping-model");
+    expect(out).toContain("≈ 407 invocations total");
+  });
+
+  it("shows the harness default for digest and author when only clustering is overridden", () => {
+    const out = strip(
+      renderPlan({ digests: 3, cluster: 1, authorEstimate: 1, clusterModel: "grouping-model" }),
+    );
+    expect(out).toContain("digest and author — harness default");
+    expect(out).toContain("clustering windows and merge — grouping-model");
   });
 });
 
@@ -326,6 +362,7 @@ function tmpHome(entries: ManifestEntry[] | null): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   while (tmpDirs.length) {
     const d = tmpDirs.pop();
     if (d) fs.rmSync(d, { recursive: true, force: true });
@@ -384,6 +421,34 @@ describe("computePlan (count math)", () => {
     expect(plan).toMatchObject({ digests: 0, cluster: 0, authorEstimate: 0 });
   });
 
+  it("estimates count-limited clustering windows plus a merge after filtering", () => {
+    const entries = Array.from({ length: 301 }, (_, i) => entry(`session-${i}`, "x", i ? 3 : 1));
+    expect(
+      computePlan(entries, { minSubstance: 2, noGroup: false, clusterBatchSize: 50 }),
+    ).toMatchObject({
+      digests: 300,
+      cluster: 7,
+      clusterWindowsEstimate: 6,
+      clusterMergeEstimate: 1,
+      authorEstimate: 100,
+    });
+    expect(
+      computePlan(entries, { minSubstance: 2, noGroup: true, clusterBatchSize: 50 }),
+    ).toMatchObject({
+      digests: 300,
+      cluster: 0,
+      clusterWindowsEstimate: undefined,
+      clusterMergeEstimate: undefined,
+    });
+    expect(
+      computePlan([entry("a", "x", 3)], {
+        minSubstance: 2,
+        noGroup: false,
+        clusterBatchSize: 50,
+      }),
+    ).toMatchObject({ cluster: 1, clusterWindowsEstimate: 1, clusterMergeEstimate: 0 });
+  });
+
   it("filters by activeOrigins, treating a missing origin as claude", () => {
     const c = entry("c1", "x", 5); // no origin ⇒ claude (old-manifest rule)
     const k = { ...entry("k1", "y", 5), origin: "kiro" as const };
@@ -406,6 +471,135 @@ describe("computePlan (count math)", () => {
 });
 
 describe("runDistill", () => {
+  it.each([
+    "0",
+    "-1",
+    "1.5",
+    "abc",
+    "",
+    "1e2",
+    "9007199254740992",
+  ])("rejects invalid cluster batch size %j before exporting, prompting, or spending", async (batchSize) => {
+    const cap = captureOutput();
+    const home = tmpHome(null);
+    const confirm = vi.fn();
+    const runner = vi.fn();
+    const code = await runDistill(
+      {
+        home,
+        source: "claude",
+        "claude-dir": path.join(import.meta.dirname, "fixtures", "export-home"),
+        "cluster-batch-size": batchSize,
+        yes: true,
+      },
+      { confirm, runner: runner as RunnerFn, output: cap.out, input: forbiddenInput() },
+    );
+    expect(code).toBe(1);
+    expect(cap.text()).toContain("--cluster-batch-size must be a positive integer");
+    expect(confirm).not.toHaveBeenCalled();
+    expect(runner).not.toHaveBeenCalled();
+    expect(fs.readdirSync(home)).toEqual([]);
+  });
+
+  it("previews a batch limit and environment cluster model without writes or calls", async () => {
+    const cap = captureOutput();
+    const home = tmpHome(Array.from({ length: 5 }, (_, i) => entry(`session-${i}`, "x", 3)));
+    vi.stubEnv("HUMAN_HINDSIGHT_MODEL", "session-model");
+    vi.stubEnv("HUMAN_HINDSIGHT_CLUSTER_MODEL", "grouping-model");
+    expect(
+      await runDistill(
+        { home, "cluster-batch-size": "2", "dry-run": true },
+        { output: cap.out, input: forbiddenInput() },
+      ),
+    ).toBe(0);
+    expect(cap.text()).toContain("estimated 3 window(s) + 1 merge");
+    expect(cap.text()).toContain("digest and author — session-model");
+    expect(cap.text()).toContain("clustering windows and merge — grouping-model");
+    expect(fs.existsSync(path.join(home, "distill"))).toBe(false);
+  });
+
+  it("routes cluster windows and merge separately and reuses digests after a cluster-only model change", async () => {
+    const cap = captureOutput();
+    const home = tmpHome(["a", "b", "c"].map((name) => entry(name, "x", 3)));
+    for (const name of ["a", "b", "c"]) {
+      fs.writeFileSync(path.join(home, "exports", name), `Build the ${name} feature.`);
+    }
+    const calls: { stage: string; model: string | undefined }[] = [];
+    const plans: DistillPlan[] = [];
+    const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      const stage =
+        opts.schema === ClusterSchema
+          ? "window"
+          : opts.schema === ClusterMergeSchema
+            ? "merge"
+            : opts.schema === AuthorSchema
+              ? "author"
+              : "digest";
+      calls.push({ stage, model: opts.model });
+      if (stage === "window") {
+        const members = [...opts.prompt.matchAll(/^- id: (.+)$/gm)].map((match) => match[1]);
+        return {
+          tasks: [{ slug: `build-${members[0]}`, title: "Build", rationale: "r", members }],
+          misc: [],
+        };
+      }
+      if (stage === "merge") return { merges: [] };
+      if (stage === "author") {
+        return {
+          slug: "ignored-task",
+          title: "Build",
+          oneshot_markdown:
+            "Build the requested feature and verify the resulting behavior. ".repeat(3),
+          confidence: "high",
+          preferences: [],
+        };
+      }
+      return { goal: "g", deliverable: "d", domain: "dom", keywords: ["k"], outcome: "completed" };
+    }) as RunnerFn;
+    const deps = {
+      output: cap.out,
+      runner,
+      confirm: async (plan: DistillPlan): Promise<ConsentResult> => {
+        plans.push(plan);
+        return "proceed";
+      },
+    };
+    vi.stubEnv("HUMAN_HINDSIGHT_CLUSTER_MODEL", "ambient-grouping");
+    const args = {
+      home,
+      model: "session-model",
+      "cluster-model": "grouping-model",
+      "cluster-batch-size": "1",
+    };
+    expect(await runDistill(args, deps)).toBe(0);
+    expect(calls.filter(({ stage }) => stage === "digest")).toEqual(
+      Array.from({ length: 3 }, () => ({ stage: "digest", model: "session-model" })),
+    );
+    expect(calls.filter(({ stage }) => stage === "window")).toEqual(
+      Array.from({ length: 3 }, () => ({ stage: "window", model: "grouping-model" })),
+    );
+    expect(calls.filter(({ stage }) => stage === "merge")).toEqual([
+      { stage: "merge", model: "grouping-model" },
+    ]);
+    expect(calls.filter(({ stage }) => stage === "author")).toEqual(
+      Array.from({ length: 3 }, () => ({ stage: "author", model: "session-model" })),
+    );
+    const callCount = calls.length;
+    expect(await runDistill({ ...args, "cluster-model": "new-grouping-model" }, deps)).toBe(0);
+    expect(plans[1]?.digests).toBe(0);
+    expect(plans[1]?.resumeNote).toContain("3 of 3 digests have unchanged inputs");
+    expect(calls.slice(callCount).filter(({ stage }) => stage === "digest")).toEqual([]);
+    expect(calls.slice(callCount).filter(({ stage }) => stage === "window")).toEqual(
+      Array.from({ length: 3 }, () => ({ stage: "window", model: "new-grouping-model" })),
+    );
+    expect(calls.slice(callCount).filter(({ stage }) => stage === "merge")).toEqual([
+      { stage: "merge", model: "new-grouping-model" },
+    ]);
+    expect(
+      JSON.parse(fs.readFileSync(path.join(home, "distill/tasks.json"), "utf8")).lineage.model,
+    ).toBe("new-grouping-model");
+  }, 15_000);
+
   it("exits 1 with a hint when the manifest is missing", async () => {
     const cap = captureOutput();
     const code = await runDistill({ home: tmpHome(null) }, { output: cap.out });
@@ -457,7 +651,7 @@ describe("runDistill", () => {
     expect(cap.text()).toContain("declined");
   });
 
-  it("runs the digest stage on proceed and writes the checkpoint", async () => {
+  it("runs all stages with the generic model fallback and writes the checkpoint", async () => {
     const cap = captureOutput();
     const home = tmpHome([entry("a", "x", 5), entry("b", "x", 4)]);
     fs.writeFileSync(path.join(home, "exports", "a"), "### 2026-01-01\n\nbuild the thing\n");
@@ -482,11 +676,15 @@ describe("runDistill", () => {
       preferences: [],
     };
     const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      expect(opts.model).toBe("shared-model");
       if (opts.schema === ClusterSchema) return cluster;
       if (opts.schema === AuthorSchema) return authored;
       return digest;
     }) as RunnerFn;
-    const code = await runDistill({ home }, { confirm: confirmSpy, output: cap.out, runner });
+    const code = await runDistill(
+      { home, model: "shared-model" },
+      { confirm: confirmSpy, output: cap.out, runner },
+    );
     expect(code).toBe(0);
     expect(cap.text()).toContain("digest stage: 2/2 done");
     expect(cap.text()).toContain("the-whole-task (2 sessions)");
@@ -631,6 +829,7 @@ describe("runDistill", () => {
     };
     let clusterCalls = 0;
     const runner = (async (opts: RunClaudeOptions<unknown>) => {
+      expect(opts.model).toBe("session-model");
       if (opts.schema === ClusterSchema) {
         clusterCalls++;
         throw new Error("cluster must not be called under --no-group");
@@ -639,7 +838,13 @@ describe("runDistill", () => {
       return digest;
     }) as RunnerFn;
     const code = await runDistill(
-      { home, group: false },
+      {
+        home,
+        group: false,
+        model: "session-model",
+        "cluster-model": "ignored-grouping-model",
+        "cluster-batch-size": "invalid-and-ignored",
+      },
       { confirm: confirmSpy, output: cap.out, runner },
     );
     expect(code).toBe(0);
