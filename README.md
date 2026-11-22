@@ -1,5 +1,9 @@
 # Human Hindsight
 
+<p align="center">
+  <img src=".github/assets/human-hindsight-banner.jpg" alt="Human Hindsight — Turn past sessions into better first prompts" width="1280">
+</p>
+
 > **The prompt you'd write if you knew then what you know now.**
 
 [![npm](https://img.shields.io/npm/v/human-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/human-hindsight)
