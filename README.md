@@ -13,7 +13,7 @@
 [![local-first](https://img.shields.io/badge/data-local--only-brightgreen)](#privacy--trust)
 
 <p align="center">
-  <img src=".github/assets/demo.gif?v=2" alt="Animated CLI walkthrough of the earlier cc-hindsight release" width="800">
+  <img src="https://raw.githubusercontent.com/adityaarunsinghal/human-hindsight/49c073d6a84dd936eca2b7b37098d361a144fb41/.github/assets/demo.gif" alt="Animated CLI walkthrough of the earlier cc-hindsight release" width="800">
   <br><sub>CLI walkthrough recorded before the rename to Human Hindsight.</sub>
 </p>
 
