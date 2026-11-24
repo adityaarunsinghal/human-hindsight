@@ -1139,15 +1139,16 @@ async function runGenerate(
           });
         }
         if (!lessons.some((lesson) => lesson.disposition === "generalized")) {
-          return stop(
-            "generalize",
-            {
-              error: "There are no reusable preferences to group into roles.",
-              problems: ["no generalized lesson"],
-              raw: null,
-            },
-            { lessons, set_aside: setAside },
-          );
+          // Nothing failed: every summary so far belongs to one project or one
+          // occasion, and a role is built from what holds across them.
+          write();
+          for (const line of wrapText(
+            `None of your ${counted(lessons.length, "preference summary", "preference summaries")} applies beyond one project or one occasion yet, so there is nothing general to build roles from. Reflect on more of your history, then suggest subagents again.`,
+            screenWidth(out),
+          ))
+            write(line);
+          write(hint(hintCommand("reflect", args)));
+          return 0;
         }
         if (!(await ready(["propose", "roles"]))) return 1;
         phase = "choose";
