@@ -22,6 +22,7 @@ afterAll(() => home.remove());
 const PAGE_ROUTES = ["/", "/app.css", "/app.js"];
 const API_GET_ROUTES = [
   "/api/library",
+  "/api/library/revision",
   "/api/highlights",
   "/api/preferences/generalized",
   "/api/subagents",

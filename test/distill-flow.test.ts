@@ -1041,6 +1041,54 @@ describe("the run", () => {
     expect(text).not.toMatch(/earlier prompt|prune/);
   });
 
+  it.each([
+    "available",
+    "no-color",
+    "failed",
+    "disabled",
+    "plain",
+  ] as const)("serves saved prompts before preference summaries in the %s library case", async (mode) => {
+    vi.stubEnv("TERM", "xterm");
+    vi.stubEnv("FORCE_COLOR", undefined);
+    vi.stubEnv("NO_COLOR", mode === "no-color" ? "1" : undefined);
+    const output = fakeOutput();
+    vi.stubEnv("HUMAN_HINDSIGHT_PLAIN", mode === "plain" ? "1" : "0");
+    const home = tmpHome(sessions(1));
+    const calls: string[] = [];
+    const runner = fakeCli("claude", ALIASES, (opts) => {
+      calls.push(stageOf(opts));
+      return answer(opts, { preferences: true });
+    });
+    const startLibrary = vi.fn(async () => {
+      calls.push("library");
+      expect(fs.existsSync(path.join(home, "library", "task-s00", "task-s00.oneshot.md"))).toBe(
+        true,
+      );
+      if (mode === "failed") throw new Error("could not bind");
+      return { address: "http://127.0.0.1:1111/#prompts&token=test", update: vi.fn() };
+    });
+    const { code, text } = await run(
+      { home, yes: true, library: mode !== "disabled" },
+      {
+        input: fakeInput(),
+        output,
+        runners: [runner],
+        startLibrary,
+      },
+    );
+    expect(code).toBe(0);
+    if (mode === "available" || mode === "no-color" || mode === "failed") {
+      if (mode === "no-color") expect(output.raw()).not.toContain("\x1b]8;;http://127.0.0.1");
+      expect(calls.indexOf("library")).toBeGreaterThan(calls.indexOf("author"));
+      expect(calls.indexOf("generalize")).toBeGreaterThan(calls.indexOf("library"));
+      expect(text).toContain(
+        mode === "failed" ? "To browse your saved library" : "http://127.0.0.1:1111/",
+      );
+    } else {
+      expect(startLibrary).not.toHaveBeenCalled();
+    }
+  });
+
   it("runs every stage without a terminal: plain progress lines and a summary (golden)", async () => {
     const home = tmpHome(sessions(3));
     const claude = fakeCli("claude", ALIASES);

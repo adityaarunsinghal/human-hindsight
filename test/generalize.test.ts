@@ -19,7 +19,9 @@ import {
   runGeneralizeStage,
 } from "../src/distill/generalize.js";
 import type { RunnerFn } from "../src/distill/pipeline.js";
+import { LiveBatches } from "../src/gui/live-batches.js";
 import type { ResolvedCall } from "../src/runners/types.js";
+import { guiHarness, request } from "./gui-harness.js";
 
 const NOW = new Date("2026-11-21T12:00:00.000Z");
 const tmpDirs: string[] = [];
@@ -193,6 +195,108 @@ async function generalize(
   return { plan, result };
 }
 
+describe("default preference batches", () => {
+  it.each([
+    [94, [94]],
+    [205, [100, 100, 5]],
+  ] as const)("summarizes %i signals", async (count, sizes) => {
+    const home = agreementsHome(
+      Array.from({ length: count }, (_, i) => ({
+        text: `Working preference ${i}: document the outcome.`,
+      })),
+    );
+    const plan = planGeneralize({ home, budget: 400_000 });
+    if (!plan) throw new Error("expected a plan");
+    expect(plan.windows.map((window) => window.length)).toEqual(sizes);
+    const fake = fakeGeneralize();
+    const result = await runGeneralizeStage({ home, plan, runner: fake.runner, output: sink() });
+    expect(result.status).toBe("done");
+    expect(fake.calls).toHaveLength(sizes.length);
+    expect(result.lessonList.flatMap((lesson) => lesson.source_ids).sort()).toEqual(
+      plan.inputs.map((input) => input.id).sort(),
+    );
+    expect(planGeneralize({ home, budget: 400_000 })?.reusable).toBe(sizes.length);
+  });
+
+  it("packs across interleaved checkpoints and reuses the exact completed work on retry", async () => {
+    const home = agreementsHome(
+      Array.from({ length: 160 }, (_, i) => ({
+        text: `${String.fromCharCode(65 + Math.floor(i / 20))} preference ${String(i).padStart(3, "0")}: document the outcome.`,
+      })),
+    );
+    const legacy = fakeGeneralize({ failing: new Set(["A", "C", "E", "F", "G", "H"]) });
+    await generalize(home, legacy.runner, { windowSize: 20, concurrency: 8 });
+    const plan = planGeneralize({ home, budget: 400_000 });
+    if (!plan) throw new Error("expected a plan");
+    expect(
+      plan.windows.filter((_, i) => !plan.saved[plan.keys[i] as string]).map((w) => w.length),
+    ).toEqual([100, 20]);
+    expect(plan.reusable).toBe(2);
+    const interrupted = fakeGeneralize({ failing: new Set(["H"]) });
+    await runGeneralizeStage({
+      home,
+      plan,
+      runner: interrupted.runner,
+      concurrency: 1,
+      output: sink(),
+    });
+    expect(interrupted.calls).toEqual(["A", "H"]);
+    const retry = planGeneralize({ home, budget: 400_000 });
+    if (!retry) throw new Error("expected a retry");
+    expect(retry.reusable).toBe(3);
+    const final = fakeGeneralize();
+    const result = await runGeneralizeStage({
+      home,
+      plan: retry,
+      runner: final.runner,
+      output: sink(),
+    });
+    expect(final.calls).toEqual(["H"]);
+    expect(result.lessonList.flatMap((l) => l.source_ids).sort()).toEqual(
+      plan.inputs.map((row) => row.id).sort(),
+    );
+    const unchanged = planGeneralize({ home, budget: 400_000 });
+    if (!unchanged) throw new Error("expected a plan");
+    expect(unchanged.keys).toEqual(retry.keys);
+    expect(unchanged.reusable).toBe(4);
+    const noOp = await runGeneralizeStage({
+      home,
+      plan: unchanged,
+      runner: final.runner,
+      output: sink(),
+    });
+    expect(noOp.artifact).toEqual(result.artifact);
+    expect(final.calls).toEqual(["H"]);
+    const edited = readObservedPreferences(home).find((row) => row.text.startsWith("E"));
+    if (!edited) throw new Error("expected source candidate");
+    const wording = "Updated preference: explain the outcome in plain English.";
+    savePreferenceReview(home, edited, { status: "accepted", text: wording });
+    const updated = planGeneralize({ home, budget: 400_000 });
+    if (!updated) throw new Error("expected a changed plan");
+    expect(updated.reusable).toBe(3);
+    expect(
+      updated.windows
+        .filter((_, i) => !updated.saved[updated.keys[i] as string])
+        .flat()
+        .map((row) => row.text),
+    ).toContain(wording);
+  });
+
+  it("keeps completed smaller windows when resuming with the larger default", async () => {
+    const home = agreementsHome();
+    const first = fakeGeneralize({ failing: new Set(["C"]) });
+    await generalize(home, first.runner, { windowSize: 2, concurrency: 1 });
+    const plan = planGeneralize({ home, budget: 400_000 });
+    if (!plan) throw new Error("expected a plan");
+    expect(plan.reusable).toBe(1);
+    const next = fakeGeneralize();
+    const result = await runGeneralizeStage({ home, plan, runner: next.runner, output: sink() });
+    expect(result.status).toBe("done");
+    expect(next.calls).toEqual(["C"]);
+    expect(result.lessonList).toHaveLength(4);
+  });
+});
+
 describe("working agreements stage, many calls in flight", () => {
   it("a failed window starts nothing new, lets running windows finish and checkpoints them; a rerun calls only the failed window", async () => {
     const home = agreementsHome();
@@ -261,6 +365,61 @@ describe("working agreements stage, many calls in flight", () => {
     expect(complete.state === "ok" && complete.artifact.lessons.length).toBe(4);
     expect(complete.state === "ok" && "incomplete" in complete).toBe(false);
     expect(complete.state === "ok" && complete.artifact.incomplete).toBeUndefined();
+  });
+
+  it("the live API exposes only completed windows in this run while keeping a previous complete set", async () => {
+    const home = agreementsHome();
+    await generalize(home, fakeGeneralize().runner);
+    const oldSet = fs.readFileSync(path.join(home, GENERALIZED_PATH));
+    review(home, "Charlie", "dismissed");
+    const plan = planGeneralize({
+      home,
+      budget: 400_000,
+      windowSize: 1,
+      selection: "all-candidates",
+      fresh: true,
+    });
+    if (!plan) throw new Error("expected plan");
+    const liveBatches = new LiveBatches();
+    const server = guiHarness(home, undefined, liveBatches);
+    const fetchView = async () =>
+      JSON.parse((await request(server, "/api/preferences/generalized")).text);
+    const untouched = await fetchView();
+    const pending = deferred();
+    liveBatches.update({ kind: "begin", total: plan.windows.length });
+    const running = runGeneralizeStage({
+      home,
+      plan,
+      concurrency: 1,
+      output: sink(),
+      runner: fakeGeneralize({
+        gate: (letter) => (letter === "B" ? pending.promise : undefined),
+        failing: new Set(["B"]),
+      }).runner,
+      onBatch: (index, lessons) => liveBatches.update({ kind: "batch", index, lessons }),
+    });
+    await flush();
+    const midway = await fetchView();
+    expect(midway.lessons).toEqual(untouched.lessons);
+    expect(midway.live).toMatchObject({
+      status: "running",
+      completedBatches: 1,
+      totalBatches: 3,
+      lessons: [
+        { instruction: expect.stringContaining("Alpha"), source_ids: [plan.windows[0]?.[0]?.id] },
+      ],
+    });
+    expect((await request(server, "/api/preferences/generalized", { token: false })).status).toBe(
+      403,
+    );
+    pending.resolve();
+    expect((await running).status).toBe("partial");
+    liveBatches.update({ kind: "interrupted" });
+    expect((await fetchView()).live.status).toBe("interrupted");
+    expect(fs.readFileSync(path.join(home, GENERALIZED_PATH))).toEqual(oldSet);
+    expect((await request(guiHarness(home), "/api/preferences/generalized")).text).not.toContain(
+      '"live":',
+    );
   });
 
   it("a failed window never replaces a complete saved set; a run with no window finished saves nothing", async () => {

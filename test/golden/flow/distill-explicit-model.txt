@@ -8,8 +8,8 @@ Checking available coding CLIs…
   Runs on  Claude Code (claude 9.9.9)
            This run stays on this CLI.
   Calls    3 session reads, about 1 grouping call, and about 1 writing call.
-           Then the working preference summaries. Their count is known after
-           reading sessions.
+           Then summarize preferences across your saved library, up to 100
+           observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
   Models   model-x for every step.
   Sending  The selected session text and your working preferences go to your

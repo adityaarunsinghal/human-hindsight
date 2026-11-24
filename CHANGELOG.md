@@ -4,6 +4,12 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.1] - 2026-11-24
+
+- Interactive reflections print a private localhost link as soon as the prompts are saved. Open it to read your prompts while each finished batch adds its guidance and sources to **Preferences**. The link stays available for 30 minutes after the command exits. Use `npx human-hindsight gui` to reopen your library later.
+- Preference summaries now group up to 100 observations per model call, within the input budget. The plan explains that this step uses preferences across your saved library. The terminal shows both observations and batches, and resuming a 2.1.0 run reuses matching completed batches.
+- The runner and **Balanced / Best** choices have rounded, keyboard-selectable pills. Each stage’s result has a blank line separating it from the progress display.
+
 ## [2.1.0] - 2026-11-24
 
 **Understand how you work. Codify your taste.**
@@ -839,6 +845,7 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
+[2.1.1]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.5...v2.0.0
 [1.8.5]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.4...v1.8.5

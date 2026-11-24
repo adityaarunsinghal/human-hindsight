@@ -16,8 +16,18 @@ import {
 } from "../ui/mode.js";
 import { readLine } from "../ui/prompt.js";
 import { askStart, START_HINT, type StartQuestion, startTakesKeys } from "../ui/start.js";
-import { bold, counted, cyan, dim, palette, visibleWidth, yellow } from "../ui/style.js";
+import {
+  bold,
+  choicePill,
+  counted,
+  cyan,
+  dim,
+  palette,
+  visibleWidth,
+  yellow,
+} from "../ui/style.js";
 import { sayThenRun, wrapText } from "../ui/wrap.js";
+import { DEFAULT_WINDOW_SIZE } from "./generalize.js";
 
 /** Model operations are disclosed before any provider call, including the readiness check. */
 /** The invocation plan disclosed to the user. */
@@ -444,7 +454,10 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
         }`;
   row("Calls", `${reads}, ${grouping}, and about ${counted(plan.authorEstimate, "writing call")}.`);
   if (plan.generalize)
-    row("", "Then the working preference summaries. Their count is known after reading sessions.");
+    row(
+      "",
+      `Then summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
+    );
   row(
     "",
     `${pace(plan.concurrency ?? DEFAULT_CONCURRENCY, session)}. Grouping runs one call at a time.`,
@@ -1036,17 +1049,23 @@ async function confirmReflection(
         ...wrapText(`${scope}${projects}${eligible}`, width),
         "",
       ];
-      const choice = (active: boolean, key: string, label: string) =>
-        `${active ? s.green(glyph("›", ">")) : s.dim(glyph("•", "-"))} ${s.bold(s.yellow(key))} ${active ? s.bold(label) : label}`;
+      const runnerInk = {
+        claude: "255;186;142",
+        codex: "137;185;255",
+        kiro: "141;227;228",
+        opencode: "207;173;255",
+      };
       if (runners.length) {
         lines.push(
           s.bold("Which coding CLI should run this reflection?"),
           ...optionRows(
             runners.map(({ name }) =>
-              choice(
+              choicePill(
                 ready && name === plan.runnerName,
                 RUNNER_KEY[name],
-                s[RUNNER_INK[name]](RUNNER_INFO[name].displayName),
+                RUNNER_INFO[name].displayName,
+                runnerInk[name],
+                color,
               ),
             ),
             width,
@@ -1068,8 +1087,8 @@ async function confirmReflection(
           s.bold("Quality"),
           ...optionRows(
             [
-              choice(quality === "balanced", "1", s.cyan("Balanced")),
-              choice(quality === "best", "2", s.magenta("Best")),
+              choicePill(quality === "balanced", "1", "Balanced", "141;227;228", color),
+              choicePill(quality === "best", "2", "Best", "246;161;199", color),
             ],
             width,
           ),

@@ -16,6 +16,7 @@ import { renderMarkdown } from "./markdown.js";
 import {
   type AgreementFacts,
   agreementDetail,
+  agreementFacts,
   agreementGroups,
   agreementPlace,
   agreementSummary,
@@ -195,6 +196,7 @@ let promptItems: BrowseItem[] = [];
 let preferenceItems: BrowseItem[] = [];
 let preferences: GuiPreference[] = [];
 let agreementItems: BrowseItem[] = [];
+let liveItems: BrowseItem[] = [];
 let reflectionItem: BrowseItem | undefined;
 let agreements: GuiAgreements | null = null;
 let organized: OrganizedAgreements = organizeAgreements([]);
@@ -252,7 +254,8 @@ function browsingAgreements() {
   return (
     !states.preferences.selected ||
     states.preferences.selected === REFLECTION ||
-    states.preferences.selected.startsWith("agreement/")
+    states.preferences.selected.startsWith("agreement/") ||
+    states.preferences.selected.startsWith("live/")
   );
 }
 function items() {
@@ -260,7 +263,7 @@ function items() {
   if (tab === "subagents") return subagentItems;
   if (!browsingAgreements()) return preferenceItems;
   const catalogue = agreementItems.length ? agreementItems : preferenceItems;
-  return reflectionItem ? [reflectionItem, ...catalogue] : catalogue;
+  return [...(reflectionItem ? [reflectionItem] : []), ...liveItems, ...catalogue];
 }
 function currentItem(): BrowseItem | undefined {
   if (tab === "preferences" && states[tab].selected === ACCEPTED) {
@@ -715,6 +718,34 @@ function agreementsNotice() {
   }
   return undefined;
 }
+function liveSummary() {
+  const live = agreements?.live;
+  if (!live) return undefined;
+  const section = document.createElement("section");
+  section.append(textElement("h2", "From this reflection"));
+  const progress = `${live.completedBatches} of ${live.totalBatches} ${live.totalBatches === 1 ? "batch" : "batches"} complete`;
+  section.append(
+    textElement(
+      "p",
+      live.status === "interrupted" ? `Reflection interrupted · ${progress}.` : `${progress}.`,
+      "muted",
+    ),
+  );
+  if (liveItems.length) {
+    const list = document.createElement("ul");
+    list.className = "highlights";
+    for (const item of liveItems) {
+      const row = document.createElement("li");
+      row.append(
+        relatedLink("preferences", item.id, item.title),
+        textElement("span", item.agreement?.instruction ?? ""),
+      );
+      list.append(row);
+    }
+    section.append(list);
+  }
+  return section;
+}
 /** The overview's notices: an unfinished set, then out of date or damaged. */
 function agreementsMessages(): HTMLElement[] {
   const unfinished = incompleteNotice(agreements?.incomplete);
@@ -899,6 +930,8 @@ function reflectionOverview(reflection: Reflection, showCatalogue: boolean): HTM
     ),
   );
   if (showCatalogue) {
+    const live = liveSummary();
+    if (live) root.prepend(live);
     root.append(...agreementsMessages());
     if (agreementItems.length) root.append(preferencesCatalogue());
   }
@@ -906,19 +939,21 @@ function reflectionOverview(reflection: Reflection, showCatalogue: boolean): HTM
 }
 function preferencesOverview() {
   if (reflectionItem?.reflection) return reflectionOverview(reflectionItem.reflection, true);
+  const live = liveSummary();
   return overview({
     label: "Preferences guide",
-    description:
-      preferences.length || agreementItems.length
+    description: live
+      ? "Read the summaries as each batch finishes, or open a preference to see its evidence."
+      : preferences.length || agreementItems.length
         ? "There are no current observations to feature in a reflection. You can browse saved preferences and their sources."
         : "Your reflection will appear here when your sessions have been read.",
     link: () => undefined,
     guidance: "",
     message:
-      preferences.length || agreementItems.length
+      live || preferences.length || agreementItems.length
         ? agreementsMessages()
         : startHere("Read your sessions in the terminal, then choose Refresh."),
-    sections: agreementItems.length ? [preferencesCatalogue()] : [],
+    sections: [...(live ? [live] : []), ...(agreementItems.length ? [preferencesCatalogue()] : [])],
   });
 }
 /**
@@ -1032,7 +1067,8 @@ function renderDetail() {
   guide.hidden = isSubagents || Boolean(item && !item.agreement && !item.reflection);
   if (!guide.hidden) {
     if (item?.agreement) {
-      const message = agreements?.stale ? agreementsNotice() : undefined;
+      const message =
+        !item.id.startsWith("live/") && agreements?.stale ? agreementsNotice() : undefined;
       const detail = agreementDetail(
         item.agreement,
         new Map(preferences.map((pref) => [pref.id, pref])),
@@ -1242,18 +1278,17 @@ function subagentItemsFrom(data: GuiSubagents | undefined): BrowseItem[] {
   ];
 }
 const readJson = <T>(path: string): Promise<T> => api.json<T>(path);
+async function readSubagents(): Promise<GuiSubagents> {
+  const data = await readJson<GuiSubagents>("/api/subagents");
+  if (typeof data.command !== "string" || !data.files || typeof data.files !== "object")
+    throw new Error("Invalid suggested subagents response");
+  return data;
+}
 function loadSubagents(): Promise<GuiSubagents | undefined> {
   if (subagentsRequest) return subagentsRequest;
   const generation = subagentsGeneration;
   subagentsRequest = (async () => {
-    let data: GuiSubagents | undefined;
-    try {
-      data = await readJson<GuiSubagents>("/api/subagents");
-      if (typeof data.command !== "string" || !data.files || typeof data.files !== "object")
-        throw new Error("Invalid suggested subagents response");
-    } catch {
-      data = undefined;
-    }
+    const data = await readSubagents().catch(() => undefined);
     if (generation === subagentsGeneration) {
       subagents = data;
       subagentsFailed = !data;
@@ -1351,7 +1386,10 @@ function agreementList(
   filtering: boolean,
 ): HTMLElement[] {
   const buttons = new Map(entries.map((entry) => [entry.dataset.id ?? "", entry]));
-  const shown = organizeAgreements(visible.flatMap((item) => item.facts ?? []));
+  const live = visible.filter((item) => item.id.startsWith("live/"));
+  const shown = organizeAgreements(
+    visible.flatMap((item) => (item.id.startsWith("live/") ? [] : (item.facts ?? []))),
+  );
   const order = (items: AgreementFacts[]) =>
     states.preferences.sort === "title"
       ? [...items].sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id))
@@ -1378,7 +1416,14 @@ function agreementList(
   };
   const reflection = buttons.get(REFLECTION);
   const nodes: HTMLElement[] = [
+    ...(live.length
+      ? [
+          textElement("p", "From this reflection", "list-section"),
+          ...live.flatMap((item) => buttons.get(item.id) ?? []),
+        ]
+      : []),
     ...(reflection ? [reflection] : []),
+    ...visible.filter((item) => item.preference).flatMap((item) => buttons.get(item.id) ?? []),
     ...section("General", shown.general),
     ...section("For specific projects", shown.projects),
   ];
@@ -1516,7 +1561,11 @@ function render(historyMode: "push" | "replace" = "replace", selectMatch = false
     state.selected = selectMatch ? (visible[0]?.id ?? emptyView) : "";
   }
   const entries = visible.map((item) => entryButton(item, state.selected));
-  if (tab === "preferences" && browsingAgreements() && agreementItems.length) {
+  if (
+    tab === "preferences" &&
+    browsingAgreements() &&
+    (agreementItems.length || liveItems.length)
+  ) {
     list.replaceChildren(...agreementList(visible, entries, terms.length > 0 || !!state.domain));
   } else if (tab === "prompts" && entries.some((_, index) => visible[index]?.prompt?.earlier)) {
     // Current prompts first; the earlier ones wait behind one closed disclosure.
@@ -1543,25 +1592,64 @@ function render(historyMode: "push" | "replace" = "replace", selectMatch = false
   renderDetail();
   updateHash(historyMode);
 }
-async function load(snapshot?: GuiSnapshot): Promise<boolean> {
-  byId("notice").hidden = true;
-  // Reviews change the accepted set, so the suggestion's stale flag is re-read.
-  subagentsGeneration++;
-  subagentsRequest = undefined;
-  subagents = undefined;
-  subagentItems = [];
-  subagentsFailed = false;
+let loadGeneration = 0;
+let foregroundLoads = 0;
+let lastRevision: string | undefined;
+function canUpdateInBackground() {
+  const focus = document.activeElement;
+  // Dynamic links and disclosures are rebuilt by render. Let keyboard users finish
+  // interacting with them, and leave a reader's selected passage available to copy.
+  return (
+    !document.hidden &&
+    !reviewBusy &&
+    !foregroundLoads &&
+    (!focus || focus === document.body || !!focus.id) &&
+    !document.querySelector(".entry-details[open], .domain-context-more[open]") &&
+    !window.getSelection()?.toString() &&
+    focus !== source
+  );
+}
+async function load(snapshot?: GuiSnapshot, background = false): Promise<boolean> {
+  const generation = ++loadGeneration;
+  if (!background) foregroundLoads++;
   try {
     if (!sessionToken) throw new SessionError(403);
+    if (!libraryLoaded) {
+      // Take the baseline before the snapshot, so a write during the read is
+      // still detected on the next poll. Older servers can still load the page.
+      lastRevision = (
+        await readJson<{ revision: string }>("/api/library/revision").catch(() => null)
+      )?.revision;
+    }
     const chooseDefault = !libraryLoaded && !location.hash;
-    const [data, ranked, savedAgreements] = await Promise.all([
+    const readRoles = tab === "subagents";
+    const [data, ranked, savedAgreements, roles] = await Promise.all([
       snapshot ?? readJson<GuiSnapshot>("/api/library"),
       readJson<GuiHighlights>("/api/highlights").catch(() => null),
       readJson<GuiAgreements>("/api/preferences/generalized").catch(() => null),
-      tab === "subagents" ? loadSubagents() : undefined,
+      readRoles ? readSubagents().catch(() => undefined) : undefined,
     ]);
     if (!Array.isArray(data.entries) || !Array.isArray(data.preferences))
       throw new Error("Invalid library response");
+    if (generation !== loadGeneration || (background && !canUpdateInBackground())) return false;
+    // Capture the live place after the requests finish: navigation and typing remain
+    // available while the terminal is writing and the library is being read.
+    if (libraryLoaded) rememberControls();
+    const place = {
+      hash: location.hash,
+      list: list.scrollTop,
+      reader: readerScroll(),
+      related: byId<HTMLDetailsElement>("related").open,
+      focus: document.activeElement,
+      editing: !byId("preference-editor").hidden,
+      reviewStatus: byId("review-status").textContent,
+    };
+    byId("notice").hidden = true;
+    subagentsGeneration++;
+    subagentsRequest = undefined;
+    subagents = roles;
+    subagentItems = subagentItemsFrom(roles);
+    subagentsFailed = readRoles && !roles;
     promptItems = data.entries.map((entry) => ({
       id: entry.slug,
       title: entry.title,
@@ -1590,8 +1678,25 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
         .filter((facts) => facts.kind === "project" && facts.group !== NO_PROJECT)
         .map((facts) => [facts.id, facts.group]),
     );
-    agreementItems = (agreements?.lessons ?? []).map((lesson) => {
-      const facts: AgreementFacts = factsById.get(lesson.id) ?? {
+    const previousLive = liveItems.find(
+      (item) => item.id === states.preferences.selected,
+    )?.agreement;
+    const sources = new Map(
+      preferences.map((pref) => [
+        pref.id,
+        {
+          domains: pref.domains,
+          projects: pref.project ? [pref.project] : [],
+          sessions: pref.occurrences.flatMap((occurrence) =>
+            occurrence.quote && occurrence.exportName ? [occurrence.exportName] : [],
+          ),
+        },
+      ]),
+    );
+    const makeAgreementItem = (lesson: Lesson, live = false): BrowseItem => {
+      const facts: AgreementFacts = (live
+        ? agreementFacts(lesson, sources)
+        : factsById.get(lesson.id)) ?? {
         id: lesson.id,
         title: lesson.title,
         kind: "general",
@@ -1603,9 +1708,12 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
         ...new Set(lesson.source_ids.flatMap((id) => candidates.get(id)?.domains ?? [])),
       ];
       return {
-        id: `agreement/${lesson.id}`,
+        id: `${live ? "live" : "agreement"}/${lesson.id}`,
         title: lesson.title,
-        body: lessonMarkdown(lesson, projectGroups.get(lesson.id)),
+        body: lessonMarkdown(
+          lesson,
+          facts.kind === "project" && facts.group !== NO_PROJECT ? facts.group : undefined,
+        ),
         domains,
         authoredAt: savedAgreements?.generatedAt ?? "",
         searchText: [
@@ -1621,7 +1729,34 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
         agreement: lesson,
         facts,
       };
+    };
+    const lessonKey = (lesson: Lesson) =>
+      JSON.stringify([
+        lesson.title,
+        lesson.instruction,
+        lesson.applies_when,
+        lesson.exceptions,
+        lesson.disposition,
+        [...lesson.source_ids].sort(),
+      ]);
+    agreementItems = (agreements?.lessons ?? []).map((lesson) => makeAgreementItem(lesson));
+    const savedByKey = new Map(
+      (agreements?.lessons ?? []).map((lesson) => [lessonKey(lesson), `agreement/${lesson.id}`]),
+    );
+    const listed = new Set(savedByKey.keys());
+    liveItems = (agreements?.live?.lessons ?? []).flatMap((lesson) => {
+      const key = lessonKey(lesson);
+      if (listed.has(key)) return [];
+      listed.add(key);
+      return [makeAgreementItem(lesson, true)];
     });
+    if (previousLive && !liveItems.some((item) => item.id === states.preferences.selected)) {
+      const savedId = savedByKey.get(lessonKey(previousLive));
+      if (savedId) {
+        states.preferences.selected = savedId;
+        if (tab === "preferences") place.hash = route(tab, savedId);
+      }
+    }
     organized = organizeAgreements(agreementItems.flatMap((item) => item.facts ?? []));
     preferencesMarkdown = data.preferencesMarkdown;
     acceptedMarkdown = data.acceptedMarkdown;
@@ -1701,6 +1836,7 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
     if (chooseDefault && !location.hash) {
       const hasPreferences = preferences.length > 0 || agreementItems.length > 0;
       const suggestion = hasPreferences ? undefined : await loadSubagents();
+      if (generation !== loadGeneration) return false;
       tab =
         landingTab(location.hash, {
           preferences: hasPreferences,
@@ -1715,8 +1851,32 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
     byId("skipped").textContent =
       `${countLabel(data.skipped, "prompt file")} could not be read. Run this for details: ${data.commands.status}`;
     render();
+    if (!snapshot && place.hash === location.hash) {
+      byId<HTMLDetailsElement>("related").open = place.related;
+      if (place.editing && currentItem()?.preference) {
+        byId("preference-editor").hidden = false;
+        byId("review-status").textContent =
+          draftRevision !== currentItem()?.preference?.review.revision
+            ? "The evidence changed. Check the sources before saving your edits."
+            : place.reviewStatus;
+      } else if (background && place.reviewStatus)
+        byId("review-status").textContent = place.reviewStatus;
+      if (
+        place.focus instanceof HTMLElement &&
+        place.focus.isConnected &&
+        document.activeElement === document.body
+      )
+        place.focus.focus({ preventScroll: true });
+      list.scrollTop = place.list;
+      restoreReaderScroll(place.reader);
+    }
     return true;
   } catch (error) {
+    if (
+      generation !== loadGeneration ||
+      (background && !(error instanceof SessionError && error.refused))
+    )
+      return false;
     byId("notice").replaceChildren(
       ...(error instanceof SessionError && error.refused
         ? recoveryNotice()
@@ -1730,6 +1890,8 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
     byId("notice").hidden = false;
     if (!items().length) byId("count").textContent = "Library unavailable";
     return false;
+  } finally {
+    if (!background) foregroundLoads--;
   }
 }
 copy.addEventListener("click", async () => {
@@ -1846,35 +2008,9 @@ function filterChanged() {
 // Reads the library again in place, for example after a new run in the terminal.
 byId("refresh").addEventListener("click", async () => {
   rememberControls();
-  const routeBefore = location.hash;
-  const scroll = { viewer: readerScroll(), list: list.scrollTop };
-  const relatedOpen = byId<HTMLDetailsElement>("related").open;
-  const draft = !byId("preference-editor").hidden
-    ? {
-        text: preferenceText.value,
-        scope: preferenceScope.value,
-        project: preferenceProject.value,
-        revision: currentItem()?.preference?.review.revision,
-      }
-    : undefined;
   const status = byId("refresh-status");
   status.replaceChildren("Reading…");
   const read = await load();
-  if (read && routeBefore === location.hash) {
-    byId<HTMLDetailsElement>("related").open = relatedOpen;
-    if (draft && currentItem()?.preference) {
-      preferenceText.value = draft.text;
-      preferenceScope.value = draft.scope;
-      preferenceProject.value = draft.project;
-      updateProjectField();
-      byId("preference-editor").hidden = false;
-      if (draft.revision !== currentItem()?.preference?.review.revision)
-        byId("review-status").textContent =
-          "The evidence changed. Check the sources before saving your edits.";
-    }
-    list.scrollTop = scroll.list;
-    restoreReaderScroll(scroll.viewer);
-  }
   // On a narrow screen only the time shows; the words stay for screen readers.
   status.replaceChildren(
     textElement(
@@ -1920,9 +2056,11 @@ function updateProjectField() {
   byId("preference-project-field").hidden = preferenceScope.value !== "project";
   preferenceScope.title = preferenceScope.selectedOptions[0]?.textContent ?? "";
 }
+let draftRevision = "";
 function editPreference() {
   const preference = currentItem()?.preference;
   if (!preference || reviewBusy) return;
+  draftRevision = preference.review.revision;
   preferenceText.value = preference.review.text;
   preferenceScope.value = preference.review.scope;
   preferenceProject.value = preference.review.project ?? "";
@@ -1959,7 +2097,7 @@ async function reviewPreference(status: GuiPreference["review"]["status"], edite
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: preference.id,
-        revision: preference.review.revision,
+        revision: edited ? draftRevision : preference.review.revision,
         status,
         text,
         scope,
@@ -2074,3 +2212,30 @@ document.addEventListener("pointerdown", (event) => {
 });
 readRoute();
 void load();
+
+// Poll only a small change token while a tab is visible. A failed read leaves
+// the prior revision in place so the next tick retries the same change.
+let checkingRevision = false;
+async function checkRevision() {
+  if (checkingRevision || !sessionToken || !libraryLoaded || !canUpdateInBackground()) return;
+  checkingRevision = true;
+  try {
+    const { revision } = await readJson<{ revision: string }>("/api/library/revision");
+    if (
+      typeof revision === "string" &&
+      revision !== lastRevision &&
+      canUpdateInBackground() &&
+      (await load(undefined, true))
+    )
+      lastRevision = revision;
+  } catch (error) {
+    if (error instanceof SessionError && error.refused) {
+      byId("notice").replaceChildren(...recoveryNotice());
+      byId("notice").hidden = false;
+    }
+  } finally {
+    checkingRevision = false;
+  }
+}
+window.setInterval(() => void checkRevision(), 2500);
+document.addEventListener("visibilitychange", () => void checkRevision());

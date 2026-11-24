@@ -39,8 +39,9 @@ describe("the built page script", () => {
     expect(GUI_JS).toContain("could not be read. Run this for details: ");
   });
 
-  it("has no timer-driven rotation", () => {
-    expect(GUI_JS).not.toMatch(/setInterval/);
+  it("uses one interval to refresh saved results", () => {
+    expect(GUI_JS).toContain("/api/library/revision");
+    expect(GUI_JS.match(/setInterval\(/g) ?? []).toHaveLength(1);
     expect(GUI_JS).not.toMatch(/requestAnimationFrame/);
     // Two one-shot timers: the copy button label reset and the export URL cleanup.
     expect(GUI_JS.match(/setTimeout\(/g) ?? []).toHaveLength(2);

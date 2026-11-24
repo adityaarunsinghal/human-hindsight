@@ -25,7 +25,7 @@ npx human-hindsight
 
 Choose **Reflect on my history**. If you have more than 25 eligible sessions, you can start with the latest 25 or use them all. If several coding tools are ready, choose which one will run the reflection. The plan names the tool, the models, the expected calls and the text your provider will receive. Press `s` to start.
 
-Human Hindsight does the reading and writing automatically. As each session is read, the terminal names the project, what you were trying to do, how it ended and any preference the tool picked up. Choose **Open my reflections** to see the results in your local browser.
+As each session is read, the terminal names the project, what you were trying to do, how it ended and any preference the tool picked up. Once your prompts are saved, open the local link in the terminal. The **Preferences** tab fills in as the remaining batches finish.
 
 - **Preferences** opens with an observation, where it applies, and the words behind it. Copy the guidance straight away, or edit or dismiss a preference.
 - **Prompts** holds starting prompts for work you do again.

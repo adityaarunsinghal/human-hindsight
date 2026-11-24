@@ -55,6 +55,22 @@ function start(): Harness {
 }
 
 describe("local GUI server", () => {
+  it("changes the revision when a prompt is published or edited or preferences arrive", async () => {
+    const server = start();
+    const revision = async () =>
+      JSON.parse((await request(server, "/api/library/revision")).text).revision;
+    const empty = await revision();
+    const file = prompt("test", "Initial body");
+    const published = await revision();
+    expect(published).not.toBe(empty);
+    expect(await revision()).toBe(published);
+    fs.appendFileSync(file, " More.");
+    const edited = await revision();
+    expect(edited).not.toBe(published);
+    fs.writeFileSync(path.join(home, "library", "preferences.generalized.json"), "{}");
+    expect(await revision()).not.toBe(edited);
+  });
+
   it("serves only the small built-in UI assets, with restrictive browser headers", async () => {
     const server = start();
     for (const [route, type] of [

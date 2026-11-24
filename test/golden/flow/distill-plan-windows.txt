@@ -9,8 +9,9 @@
   Calls    5 session reads, about 4 grouping calls
            (estimated 3 batches and 1 merge), and about 2
            writing calls.
-           Then the working preference summaries. Their
-           count is known after reading sessions.
+           Then summarize preferences across your saved
+           library, up to 100 observations per call.
+           Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a
            time.
   Models   1 Balanced (selected): fast-model for session

@@ -47,7 +47,7 @@ export {
 } from "./generalize-checkpoints.js";
 
 /** Bound both prompt size and the number of source ids a response must reproduce. */
-export const DEFAULT_WINDOW_SIZE = 20;
+export const DEFAULT_WINDOW_SIZE = 100;
 export const SUGGEST_TIMEOUT_PER_ITEM_MS = 5_000;
 
 export const WINDOW_SIZE_RULE = wholeNumber(1, "a whole number of preferences, 1 or more");
@@ -183,12 +183,6 @@ export function planGeneralize(opts: {
       a.text.localeCompare(b.text) ||
       a.id.localeCompare(b.id),
   );
-  const windows = planWindows(
-    ordered,
-    (input) => renderGeneralizeInput(input).length,
-    opts.budget,
-    opts.windowSize ?? DEFAULT_WINDOW_SIZE,
-  );
   const identityRunner = opts.identityRunner ?? null;
   const keys: string[] = [];
   const saved: Record<string, SavedWindow> = {};
@@ -199,13 +193,52 @@ export function planGeneralize(opts: {
   const checkpoints: ReturnType<typeof readGeneralizeCheckpoints> = opts.fresh
     ? {}
     : readGeneralizeCheckpoints(opts.home);
+  const keyFor = (window: SuggestionInput[]) =>
+    generalizeWindowKey(window, opts.model, referencedProjects(window, byInput), identityRunner);
+  const size = (input: SuggestionInput) => renderGeneralizeInput(input).length;
+  const limit = opts.windowSize ?? DEFAULT_WINDOW_SIZE;
+  const split = (rows: SuggestionInput[]) => planWindows(rows, size, opts.budget, limit);
+  let windows = split(ordered);
+  // Resuming after the default grew must retain already completed batches. Match
+  // their exact contents and configuration, then batch the remaining candidates.
+  if (limit === DEFAULT_WINDOW_SIZE && (artifact || Object.keys(checkpoints).length)) {
+    const position = new Map(ordered.map((row, index) => [row.id, index]));
+    const covered = new Set<string>();
+    const reused: SuggestionInput[][] = [];
+    const consider = (key: string, ids: string[], value: GeneralizeOutput) => {
+      if (!ids.length || ids.length > limit || new Set(ids).size !== ids.length) return;
+      // Checkpoints record IDs in lesson order. Reconstruct the original prompt
+      // order even when this batch crossed gaps left by earlier saved work.
+      const indices: number[] = [];
+      for (const id of ids) {
+        const index = position.get(id);
+        if (index === undefined || covered.has(id)) return;
+        indices.push(index);
+      }
+      const rows = indices.sort((a, b) => a - b).map((index) => ordered[index] as SuggestionInput);
+      if (
+        keyFor(rows) !== key ||
+        split(rows).length !== 1 ||
+        generalizeProblems(value, rows, projects).length
+      )
+        return;
+      reused.push(rows);
+      for (const id of ids) covered.add(id);
+    };
+    for (const [key, prior] of Object.entries(artifact?.windows ?? {}))
+      consider(key, prior.input_ids, prior.result);
+    for (const [key, entry] of Object.entries(checkpoints))
+      consider(
+        key,
+        [...entry.result.lessons, ...entry.result.set_aside].flatMap((group) => group.source_ids),
+        entry.result,
+      );
+    const pending = split(ordered.filter((row) => !covered.has(row.id)));
+    const firstIndex = (rows: SuggestionInput[]) => position.get(rows[0]?.id ?? "") ?? Infinity;
+    windows = [...reused, ...pending].sort((a, b) => firstIndex(a) - firstIndex(b));
+  }
   for (const window of windows) {
-    const key = generalizeWindowKey(
-      window,
-      opts.model,
-      referencedProjects(window, byInput),
-      identityRunner,
-    );
+    const key = keyFor(window);
     keys.push(key);
     const checkpoint = checkpoints[key];
     const prior = artifact?.windows[key];
@@ -285,6 +318,8 @@ interface GeneralizeStageOptions {
   timeoutMs?: number;
   output?: Writable;
   progress?: StageProgressSink;
+  /** Current plan windows only, after reuse validation or a successful checkpoint write. */
+  onBatch?: (index: number, lessons: GeneralizeOutput["lessons"]) => void;
   now?: () => Date;
 }
 
@@ -322,6 +357,7 @@ async function processWindows(opts: GeneralizeStageOptions): Promise<WindowOutco
         cached.source === "checkpoint"
           ? "resumed from checkpoint"
           : "reused saved preference summaries";
+      opts.onBatch?.(index, cached.window.result.lessons);
       item(key, "skipped", `${label}: ${counts(cached.window.result)} (${why})`);
       return { kind: "success", key, window: cached.window, source: cached.source };
     }
@@ -375,6 +411,7 @@ async function processWindows(opts: GeneralizeStageOptions): Promise<WindowOutco
         result,
         resolved,
       });
+      opts.onBatch?.(index, result.lessons);
       // Corrections and local repairs are not printed: only the outcome is.
       item(key, "done", `${label}: ${counts(result)}`);
       return {
