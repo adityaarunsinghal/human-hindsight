@@ -4,6 +4,12 @@
   <img src="https://raw.githubusercontent.com/adityaarunsinghal/human-hindsight/v2.1.0/.github/assets/human-hindsight-banner.jpg" alt="Human Hindsight terminal with colorful session counts and arcs leading to the words “Codify your taste”" width="1280">
 </p>
 
+[![npm](https://img.shields.io/npm/v/human-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/human-hindsight)
+[![CI](https://github.com/adityaarunsinghal/human-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/adityaarunsinghal/human-hindsight/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/node/v/human-hindsight?logo=node.js&color=339933)](https://nodejs.org)
+[![MIT license](https://img.shields.io/github/license/adityaarunsinghal/human-hindsight?color=blue)](https://github.com/adityaarunsinghal/human-hindsight/blob/main/LICENSE)
+[![Local-first](https://img.shields.io/badge/local--first-privacy-brightgreen)](#privacy-and-setup)
+
 **Understand how you work. Codify your taste.**
 
 > We’ve used a lot of different technologies over months and years. Claude Code, Codex, Kiro CLI, Kiro Crew, OpenCode, Pi… the list goes on.
