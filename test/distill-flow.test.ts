@@ -2009,6 +2009,57 @@ describe("after the run", () => {
     expect(printed).not.toMatch(/--no-follow-up|--yes|--kirocrew-dir|--opencode-dir/);
   });
 
+  it("Ctrl-C while groups are made and the summaries run beside them: one line, both calls told to stop, nothing after it", async () => {
+    const home = tmpHome(sessions(2));
+    const host = fakeHost();
+    let exitCode: number | undefined;
+    const stopped: AbortSignal[] = [];
+    const inFlight = new Set<string>();
+    const exited = new Promise<void>((resolve) => {
+      const claude = fakeCli("claude", ALIASES, (opts) => {
+        const stage = stageOf(opts);
+        if (stage === "window" || stage === "generalize") {
+          if (opts.signal) stopped.push(opts.signal);
+          inFlight.add(stage);
+          // Both steps have a call in flight: now the person presses Ctrl-C.
+          if (inFlight.size === 2) host.emit("SIGINT");
+          return new Promise(() => {});
+        }
+        return answer(opts, { preferences: true });
+      });
+      const output = capture();
+      void runDistill(
+        { home, yes: true, concurrency: "1" },
+        {
+          runners: [claude],
+          host,
+          output,
+          now: FIXED_NOW,
+          sleep: (ms) => (ms < 3_000 ? Promise.resolve() : new Promise(() => {})),
+          exit: (code) => {
+            exitCode = code;
+            outputs.push(goldenText(output.text(), { roots: { [home]: "<HOME>" } }));
+            resolve();
+          },
+        },
+      );
+    });
+    await exited;
+    expect(exitCode).toBe(130);
+    expect([...inFlight].sort()).toEqual(["generalize", "window"]);
+    expect(stopped).toHaveLength(2);
+    expect(stopped.every((signal) => signal.aborted)).toBe(true);
+    const text = outputs.at(-1) ?? "";
+    expect(text.match(/Interrupted\./g)).toHaveLength(1);
+    expect(flat(text)).toContain(
+      "Interrupted. The session reads are saved; grouping starts again next time. To continue, run:",
+    );
+    // The stopping run says nothing about the summaries it gave up, and holds no lock.
+    const after = text.slice(text.indexOf("Interrupted."));
+    expect(after).not.toMatch(/Working preferences|could not be summarized|failed/);
+    expect(fs.existsSync(path.join(home, "distill", "writer.lock"))).toBe(false);
+  });
+
   it("Ctrl-C at the closing menu after a successful run exits 130", async () => {
     vi.stubEnv("HUMAN_HINDSIGHT_PLAIN", "1");
     const home = tmpHome(sessions(1));
