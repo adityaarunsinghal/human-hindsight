@@ -144,7 +144,8 @@ else answer();
         "NO_COLOR": "1",
         "TERM": "dumb",
     })
-    for key in ["HUMAN_HINDSIGHT_FOLLOW_UP", "HUMAN_HINDSIGHT_PROJECT", "HUMAN_HINDSIGHT_RUNNER", "HUMAN_HINDSIGHT_MODEL"]:
+    # The child PTYs simulate a person's terminal, including when this test runs in CI.
+    for key in ["CI", "HUMAN_HINDSIGHT_PLAIN", "HUMAN_HINDSIGHT_FOLLOW_UP", "HUMAN_HINDSIGHT_PROJECT", "HUMAN_HINDSIGHT_RUNNER", "HUMAN_HINDSIGHT_MODEL"]:
         env.pop(key, None)
     args = [
         shutil.which("node"), str(cli), "--home", str(root / "library"),
