@@ -1,7 +1,7 @@
 import type { Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
 import type { SavedSessionRead, StageItem, StageProgressSink } from "../distill/stage-events.js";
-import { type LiveRegion, liveRegion, type TerminalHost, writeAbove } from "./live.js";
+import { frameHeight, type LiveRegion, liveRegion, type TerminalHost, writeAbove } from "./live.js";
 import { canColor, glyph, lineWidth, type TerminalEnv, terminalWidth } from "./mode.js";
 import {
   bold,
@@ -357,6 +357,8 @@ export function startStageProgress(
       row = row ? `${row}${separator}${fact}` : fact;
     }
     lines.push(rail(row));
+    const countRows = lines.length;
+    let hintRow: number | undefined;
     if (!final) {
       const labels = [...running.values()];
       if (reading) {
@@ -369,12 +371,14 @@ export function startStageProgress(
         if (projects.length) {
           const activity = `${style.magenta("Reading")}  ${projects.join(style.dim(separator))}`;
           lines.push(...wrapText(activity, width).map(rail));
-          if (saved === 0)
+          if (saved === 0) {
+            hintRow = lines.length;
             lines.push(
               ...wrapText("The first summary appears as soon as a read finishes.", width).map(
                 (line) => rail(style.dim(line)),
               ),
             );
+          }
         }
       } else {
         for (const name of labels.slice(0, RUNNING_LINES))
@@ -382,6 +386,14 @@ export function startStageProgress(
         if (labels.length > RUNNING_LINES)
           lines.push(rail(style.dim(`and ${labels.length - RUNNING_LINES} more running`)));
       }
+    }
+    // Keep spacing inside the frame so timer ticks and resizes never append blank rows.
+    if (reading && !final) {
+      if (lines.length > countRows && lines.length < frameHeight(out))
+        lines.splice(countRows, 0, style.dim(mark("│", "|")));
+      if (hintRow !== undefined && lines.length < frameHeight(out))
+        lines.splice(hintRow + 1, 0, style.dim(mark("│", "|")));
+      if (saved > 0 && lines.length < frameHeight(out)) lines.unshift("");
     }
     region.render(lines);
   }
@@ -398,6 +410,7 @@ export function startStageProgress(
     const lines = width ? wrapText(header, Math.max(1, width - 3)).map(rail) : [rail(header)];
     const append = (label: string, value: string, color: (text: string) => string) => {
       if (!value) return;
+      if (region) lines.push(style.dim(mark("│", "|")));
       const prefix = `${label} `;
       const gutter = visibleWidth(prefix);
       const size = width === undefined ? undefined : Math.max(1, width - 3);
@@ -422,6 +435,7 @@ export function startStageProgress(
         terminalExcerpt(read.preference, 160, mark("…", "...")),
         style.green,
       );
+    if (region && saved > 1) lines.unshift("");
     writeAbove(out, lines.join("\n"), o.env);
   }
 

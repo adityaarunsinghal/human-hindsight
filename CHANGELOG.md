@@ -4,6 +4,11 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.2] - 2026-11-24
+
+- The terminal gives the runner and quality pills more room inside and between choices. Blank rows separate the pills from their headings, model details, and start controls.
+- Home and history menus space out individual choices when the window has room. During a reflection, the readiness check, project activity, saved reads, and resume command each have their own space.
+
 ## [2.1.1] - 2026-11-24
 
 - Interactive reflections print a private localhost link as soon as the prompts are saved. Open it to read your prompts while each finished batch adds its guidance and sources to **Preferences**. The link stays available for 30 minutes after the command exits. Use `npx human-hindsight gui` to reopen your library later.
@@ -845,6 +850,7 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
+[2.1.2]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.5...v2.0.0

@@ -58,7 +58,7 @@ import type { AgentRunner, RunnerName } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import type { TerminalHost } from "../ui/live.js";
-import { canColor, canPrompt, glyph, isInteractive } from "../ui/mode.js";
+import { canAnimate, canColor, canPrompt, glyph, isInteractive } from "../ui/mode.js";
 import { terminalPrivacyReminder } from "../ui/privacy.js";
 import { withSpinner } from "../ui/progress.js";
 import { chooseMenuAnswer } from "../ui/prompt.js";
@@ -774,16 +774,26 @@ async function distillSelectedSessions(opts: {
     if (!gate.result) {
       const quality = session.quality === "balanced" ? "Balanced" : "Best";
       const runner = RUNNER_INFO[session.ledgerRunner].displayName;
+      const spaced = canAnimate({ output: out });
+      if (spaced) write();
       write(
         `${ink.bold("Preparing reflection")} ${glyph("·", "-")} ${ink[RUNNER_INK[session.ledgerRunner]](runner)} ${glyph("·", "-")} ${ink.yellow(quality)}`,
       );
+      if (spaced) write();
       write(
         `${ink.cyan(counted(plan.digests, "session"))}${projects.size ? ` across ${ink.magenta(counted(projects.size, "project"))}` : ""}`,
       );
       const represented = batchProjectLine(projectNames, out);
-      if (represented) write(represented);
+      if (represented) {
+        if (spaced) write();
+        write(represented);
+      }
+      if (spaced) write();
       gate.result = session.liveCheck(stages).then((checked) => {
-        if (!checked.ok) write(checked.line);
+        if (!checked.ok) {
+          if (spaced) write();
+          write(checked.line);
+        }
         return checked;
       });
     }

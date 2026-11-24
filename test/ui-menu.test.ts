@@ -95,7 +95,9 @@ describe("single-key menu", () => {
     const vt = terminalModel(32);
     vt.apply(output.raw());
     const frame = vt.rows().join("\n");
-    expect(frame).toContain("• Resume my reflection\n  (recommended)\n› Read my preferences");
+    expect(frame).toContain(
+      "Pick\n\n• Resume my reflection\n  (recommended)\n\n› Read my preferences",
+    );
     expect(frame.match(/^› /gm)).toHaveLength(1);
     expect(frame.match(/^• /gm)).toHaveLength(2);
     input.press(KEYS.down, KEYS.enter);

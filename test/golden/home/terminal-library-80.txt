@@ -1,18 +1,29 @@
-│ Human Hindsight 2.1.1
+│ Human Hindsight 2.1.2
 │ Understand how you work. Codify your taste.
 │
 │ Your history
+│
 │ Claude Code  12 sessions · 3 projects
+│
 │ 12 sessions across 3 projects
 ────────────────────────────────────────────────────────────────────────
 
 What would you like to do?
+
 › Open my reflections (recommended)  in the browser
+
 • Read my preferences  guidance from my history
+
 • Reflect on new sessions  nothing new since my last export
+
 • Suggest subagents  roles from my preferences
+
 • Export my messages  local Markdown
+
 • Show projects  history inventory
+
 • Check setup  tools and sign-in
+
 • Quit  q
+
   ↑ ↓ to move · Enter to choose
