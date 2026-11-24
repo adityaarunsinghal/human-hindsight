@@ -719,6 +719,46 @@ describe("suggest-subagents plan and consent screens", () => {
     expect(out).toMatch(/Declined\. Nothing was sent\./);
   });
 
+  it("a run approved by the reflection plan that led here prints its plan and asks nothing", async () => {
+    const home = libraryHome();
+    const fake = fakeRunner();
+    const cap = capture();
+    // No input stream and no --yes: only the approval carried over starts it.
+    const code = await runSuggestSubagents(
+      { home, concurrency: "1" },
+      {
+        runner: fake.runner,
+        runnerName: "kiro",
+        output: cap.out,
+        now: () => NOW,
+        userHome: tmpDir(),
+        approved: true,
+      },
+    );
+    expect(code).toBe(0);
+    const text = strip(cap.text());
+    expect(text).toContain("Suggesting subagents, as approved with the plan above.");
+    expect(text.indexOf("Suggesting subagents, as approved")).toBeLessThan(
+      text.indexOf("Subagent plan"),
+    );
+    expect(text).not.toContain("Choose [");
+    expect(fake.count("propose")).toBe(1);
+    expect(readSuggestion(home)?.artifact.roles.length).toBeGreaterThan(0);
+  });
+
+  it("without that approval, the same call with no terminal sends nothing", async () => {
+    const home = libraryHome();
+    const fake = fakeRunner();
+    const { code, text } = await run(
+      home,
+      { concurrency: "1" },
+      { runner: fake.runner, input: "" },
+    );
+    expect(code).toBe(2);
+    expect(strip(text)).not.toContain("as approved with the plan above");
+    expect(fake.calls).toEqual([]);
+  });
+
   it("--author-only --dry-run prints the author-only plan and calls nothing", async () => {
     const home = libraryHome();
     await run(home, { yes: true, concurrency: "1" }, { runner: fakeRunner({ author: 2 }).runner });

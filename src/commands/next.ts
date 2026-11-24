@@ -199,6 +199,8 @@ export function nextArguments(name: NextCommand, input: object, o: NextOptions =
   // The distill switches that change what a run does, as typed.
   if (command === "reflect") {
     if (args.group === false) result.push("--no-group");
+    if (args.prompts === false) result.push("--no-prompts");
+    if (args.subagents === true) result.push("--subagents");
     if (args.generalize === false) result.push("--no-generalize");
     if (args.breaker === false) result.push("--no-breaker");
   }

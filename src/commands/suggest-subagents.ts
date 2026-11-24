@@ -165,6 +165,11 @@ export interface SuggestSubagentsDeps {
   /** Where Ctrl-C arrives and how the process ends (tests). */
   host?: TerminalHost;
   exit?(code: number): void;
+  /**
+   * The person already approved this step: the reflection plan that leads
+   * here named it, with its calls. The plan is still printed.
+   */
+  approved?: boolean;
 }
 
 const GENERATE_ONLY = [
@@ -558,6 +563,8 @@ async function withApproval(opts: {
   run: (guard: ApprovedRun) => Promise<number>;
 }): Promise<number> {
   const { args, session, deps, out } = opts;
+  if (deps.approved && !args.yes)
+    out.write("Suggesting subagents, as approved with the plan above.\n\n");
   const decision = await (deps.confirm ?? confirmPlan)(
     {
       digests: 0,
@@ -572,7 +579,7 @@ async function withApproval(opts: {
       fullPlan: `${resumeCommand(args, session.quality, !!args["author-only"])} --dry-run`,
     },
     {
-      yes: args.yes === true,
+      yes: args.yes === true || deps.approved === true,
       dryRun: args["dry-run"] === true,
       input: deps.input,
       output: out,

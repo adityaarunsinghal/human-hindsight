@@ -47,6 +47,10 @@ export interface DistillPlan {
   concurrency?: number;
   sessions?: number;
   projects?: number;
+  /** False when this run groups nothing and writes no prompt (`--no-prompts`). */
+  prompts?: boolean;
+  /** Set when the run goes on to suggest subagent roles (`--subagents`). */
+  roles?: { min: number; max: number };
   /** Eligible sessions before `--recent` narrowed them. */
   eligible?: number;
   /** The `--recent` count in effect, if any. */
@@ -68,6 +72,8 @@ export interface DistillPlan {
       cluster: string;
       author: string;
       generalize: string;
+      /** The model that chooses and writes subagent roles, when the run goes on to them. */
+      roles?: string;
       reusable: number;
       regenerating: number;
       /** Notes about this plan's models, when they need one. */
@@ -251,9 +257,15 @@ type Choice = NonNullable<DistillPlan["choices"]>[Quality];
 /** "sonnet for session reads, opus for grouping and writing", or one model named once. */
 function stageModels(plan: DistillPlan, choice: Choice): string {
   const name = (model: string) => (model === "CLI default" ? "the CLI's default model" : model);
-  const grouping = plan.cluster > 0;
-  const used = [choice.digest, choice.author, ...(grouping ? [choice.cluster] : [])];
+  const prompts = plan.prompts !== false;
+  const grouping = prompts && plan.cluster > 0;
+  const used = [
+    choice.digest,
+    ...(prompts ? [choice.author] : []),
+    ...(grouping ? [choice.cluster] : []),
+  ];
   if (plan.generalize) used.push(choice.generalize);
+  if (plan.roles && choice.roles) used.push(choice.roles);
   if (used.every((model) => model === choice.digest))
     return `${name(choice.digest)} for every step`;
   const parts = [`${name(choice.digest)} for session reads`];
@@ -261,10 +273,12 @@ function stageModels(plan: DistillPlan, choice: Choice): string {
     parts.push(`${name(choice.author)} for grouping and writing`);
   else {
     if (grouping) parts.push(`${name(choice.cluster)} for grouping`);
-    parts.push(`${name(choice.author)} for writing`);
+    if (prompts) parts.push(`${name(choice.author)} for writing`);
   }
   if (plan.generalize && choice.generalize !== choice.digest)
     parts.push(`${name(choice.generalize)} for preference summaries`);
+  if (plan.roles && choice.roles)
+    parts.push(`${name(choice.roles)} for choosing and writing roles`);
   return parts.join(", ");
 }
 
@@ -447,9 +461,12 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
     plan.recent !== undefined && plan.eligible !== undefined && plan.eligible > sessions
       ? `your ${counted(sessions, "most recent session", "most recent sessions")} (of ${count(plan.eligible)} eligible)`
       : counted(sessions, "session");
+  const prompts = plan.prompts !== false;
   row(
     "Reads",
-    `${scope}, about ${counted(plan.authorEstimate, "prompt")}${plan.generalize ? ", plus your working preferences" : ""}.`,
+    prompts
+      ? `${scope}, about ${counted(plan.authorEstimate, "prompt")}${plan.generalize ? ", plus your working preferences" : ""}.`
+      : `${scope}${plan.generalize ? " and your working preferences" : ""}. No prompts are written in this run.`,
   );
   if (plan.recent !== undefined && plan.eligible !== undefined && plan.eligible > sessions)
     row("", "The rest can follow in a later run, which reuses this saved work.");
@@ -483,15 +500,25 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
             ? ""
             : ` (estimated ${counted(windows, "batch", "batches")}${plan.clusterMergeEstimate ? ` and ${count(plan.clusterMergeEstimate)} merge` : ""})`
         }`;
-  row("Calls", `${reads}, ${grouping}, and about ${counted(plan.authorEstimate, "writing call")}.`);
+  row(
+    "Calls",
+    prompts
+      ? `${reads}, ${grouping}, and about ${counted(plan.authorEstimate, "writing call")}.`
+      : `${sentence(reads)}.`,
+  );
   if (plan.generalize)
     row(
       "",
-      `Meanwhile, summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
+      `${prompts ? "Meanwhile" : "Then"}, summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
+    );
+  if (plan.roles)
+    row(
+      "",
+      `Then choose and write subagent roles from those preferences: 1 call to choose roles, then one call for each role (${count(plan.roles.min)} to ${count(plan.roles.max)} roles). This approval covers them.`,
     );
   row(
     "",
-    `${pace(plan.concurrency ?? DEFAULT_CONCURRENCY, session)}. Grouping runs one call at a time.`,
+    `${pace(plan.concurrency ?? DEFAULT_CONCURRENCY, session)}.${prompts && plan.cluster > 0 ? " Grouping runs one call at a time." : ""}`,
   );
 
   // Models, by real name.
@@ -565,8 +592,8 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
       choice
         ? [
             choice.digest,
-            ...(plan.grouping === false ? [] : [choice.cluster]),
-            choice.author,
+            ...(plan.grouping === false || !prompts ? [] : [choice.cluster]),
+            ...(prompts ? [choice.author] : []),
             ...(plan.generalize ? [choice.generalize] : []),
           ]
         : [],

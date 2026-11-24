@@ -23,6 +23,7 @@ import {
   type RunSession,
   type StageKey,
 } from "../core/run-session.js";
+import { MAX_ROLES, MIN_ROLES } from "../core/subagents.js";
 import { checkedValue, valueProblem, wholeOption } from "../core/value-rule.js";
 import {
   askYesNoAnswer,
@@ -118,6 +119,10 @@ export interface DistillArgs {
   quality?: string;
   recent?: string;
   generalize?: boolean;
+  /** citty maps `--no-prompts` to `prompts: false`: read and summarize, group and write nothing. */
+  prompts?: boolean;
+  /** After the preference summaries, suggest subagent roles in the same run. */
+  subagents?: boolean;
   library?: boolean;
   "follow-up"?: boolean;
   project?: string;
@@ -307,6 +312,8 @@ export interface DistillDeps {
    */
   sleep?(ms: number): Promise<void>;
   startLibrary?: (home: string, o?: { port?: number }) => Promise<LiveLibrary>;
+  /** Runs the subagent step that `--subagents` goes on to (default: the real command). */
+  suggestSubagents?: typeof import("./suggest-subagents.js").runSuggestSubagents;
   /** Legacy test seam; distill no longer performs clipboard writes. */
   clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
@@ -361,6 +368,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       );
       if (args.group !== false) clusterBatchSize = size;
     }
+    // The roles are chosen from the preference summaries.
+    if (args.subagents && args.generalize === false)
+      throw new Error("--subagents needs the preference summaries; remove --no-generalize.");
   } catch (error) {
     (deps.output ?? process.stdout).write(`error: ${(error as Error).message}\n`);
     return 1;
@@ -609,6 +619,26 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
   } finally {
     await session.finalize();
   }
+  if (code === 0 && args.subagents && !args["dry-run"]) {
+    // The plan named this step and its calls, so it runs on that approval.
+    // It ends with its own closing menu.
+    if (!readObservedPreferences(home).length) {
+      write("No preferences were found in these sessions, so there are no subagents to suggest.");
+      return 0;
+    }
+    const { runSuggestSubagents } = await import("./suggest-subagents.js");
+    return (deps.suggestSubagents ?? runSuggestSubagents)(
+      {
+        home,
+        runner: args.runner,
+        quality: session.quality,
+        ...(args.yes && { yes: true }),
+        ...(args["follow-up"] === false && { "follow-up": false }),
+        ...(args.verbose && { verbose: true }),
+      },
+      { approved: true, input: deps.input, output: out, host: deps.host, runners: deps.runners },
+    );
+  }
   if (
     code === 0 &&
     !args["dry-run"] &&
@@ -845,10 +875,12 @@ async function distillSelectedSessions(opts: {
   // first sentence ("Claude Code is not signed in.").
   const gate: { result?: Promise<{ ok: true; line?: string } | { ok: false; line: string }> } = {};
   // Exactly the stages this run can call, so no model is checked that is never used.
+  // Without prompts the run reads and summarizes: nothing is grouped or written.
+  const prompts = args.prompts !== false;
   const stages: StageKey[] = [
     "digest",
-    ...(noGroup ? [] : (["cluster"] as const)),
-    "author",
+    ...(prompts && !noGroup ? (["cluster"] as const) : []),
+    ...(prompts ? (["author"] as const) : []),
     ...(args.generalize === false ? [] : (["generalize"] as const)),
   ];
   const ink = palette(canColor({ output: out }));
@@ -945,6 +977,7 @@ async function distillSelectedSessions(opts: {
         cluster: session.displayModelFor("cluster"),
         author: session.displayModelFor("author"),
         generalize: session.displayModelFor("generalize"),
+        ...(args.subagents && { roles: session.displayModelFor("roles") }),
         notes: description.plans[quality].notes,
       };
     }
@@ -958,16 +991,18 @@ async function distillSelectedSessions(opts: {
       library: readLibrary(home).length,
       qualityFixed: Boolean(args.quality),
       digests: plan.digests - choices[selectedQuality].reusable,
-      cluster: plan.cluster,
-      clusterWindowsEstimate: plan.clusterWindowsEstimate,
-      clusterMergeEstimate: plan.clusterMergeEstimate,
-      authorEstimate: plan.authorEstimate,
+      prompts,
+      ...(args.subagents && { roles: { min: MIN_ROLES, max: MAX_ROLES } }),
+      cluster: prompts ? plan.cluster : 0,
+      clusterWindowsEstimate: prompts ? plan.clusterWindowsEstimate : undefined,
+      clusterMergeEstimate: prompts ? plan.clusterMergeEstimate : undefined,
+      authorEstimate: prompts ? plan.authorEstimate : 0,
       runnerName: session.ledgerRunner,
       session: description,
       quality: selectedQuality,
       choices,
       generalize: args.generalize !== false,
-      grouping: !noGroup,
+      grouping: prompts && !noGroup,
       concurrency,
       force: args.force,
       model: session.displayModelFor("digest"),
@@ -1226,7 +1261,7 @@ async function distillSelectedSessions(opts: {
         command("To browse your saved library, run:", nextCommandText("gui", { ...args, home }));
       }
     };
-    await openLibrary([...(summarizing ? ["summaries"] : []), "prompts"]);
+    await openLibrary([...(summarizing ? ["summaries"] : []), ...(prompts ? ["prompts"] : [])]);
 
     // The preference summaries need only the reads, so they start here and
     // run beside grouping and writing. A failure never fails the library.
@@ -1322,106 +1357,110 @@ async function distillSelectedSessions(opts: {
     };
     const summaries = summarizing ? await startSummaries() : undefined;
 
-    write();
-    let stage: "cluster" | "author" = "cluster";
-    phase = "grouping";
-    try {
-      // Backend per export (absent means claude): names the corpus in the
-      // grouping prompt (named single-source, neutral for merged corpora).
-      const clusterOrigins: Record<string, SourceName> = {};
-      for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
-      const clusterProgress = startStageProgress(
-        out,
-        noGroup ? "Preparing one task per session" : "Grouping sessions",
-        progressOptions,
-      );
-      const clusterResult = await runClusterStage({
-        ...common,
-        digests: digestsForCluster,
-        origins: clusterOrigins,
-        generation: digestResult.generation,
-        noGroup,
-        model: session.modelFor("cluster"),
-        batchSize: clusterBatchSize,
-        progress: clusterProgress,
-      }).finally(() => clusterProgress.end());
+    // Grouping and writing, unless this run is for the preferences alone.
+    const groupAndWrite = async () => {
       write();
-      write(
-        groupingLine({
-          sessions: Object.keys(digestsForCluster).length,
-          groups: clusterResult.tasks.length,
-          misc: clusterResult.misc.length,
+      let stage: "cluster" | "author" = "cluster";
+      phase = "grouping";
+      try {
+        // Backend per export (absent means claude): names the corpus in the
+        // grouping prompt (named single-source, neutral for merged corpora).
+        const clusterOrigins: Record<string, SourceName> = {};
+        for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
+        const clusterProgress = startStageProgress(
+          out,
+          noGroup ? "Preparing one task per session" : "Grouping sessions",
+          progressOptions,
+        );
+        const clusterResult = await runClusterStage({
+          ...common,
+          digests: digestsForCluster,
+          origins: clusterOrigins,
+          generation: digestResult.generation,
           noGroup,
-          reused: clusterResult.resumed,
-        }),
-      );
-      if (args.verbose)
-        for (const t of clusterResult.tasks)
-          write(`  ${bullet} ${t.slug} (${counted(t.members.length, "session")})`);
-
-      stage = "author";
-      phase = "writing";
-      // The library checkpoints each successfully written prompt.
-      write();
-      const authorProgress = startStageProgress(out, "Writing prompts", progressOptions);
-      const authorResult = await runAuthorStage({
-        ...common,
-        tasks: clusterResult.tasks,
-        digests: digestsForCluster,
-        entries: plan.eligible,
-        generation: digestResult.generation,
-        toolVersion: pkg.version,
-        model: session.modelFor("author"),
-        progress: authorProgress,
-        breaker: args.breaker !== false,
-        truncate,
-        force: args.force === true,
-        concurrency,
-      }).finally(() => authorProgress.end());
-
-      write();
-      // Wrapped like every sentence around it; each line keeps the color.
-      for (const line of wrapText(librarySentence(authorResult), width))
-        write(authorResult.authored.length > 0 ? green(line) : line);
-      if (authorResult.skipped.length) {
-        say(
-          "A prompt is not written for work that was abandoned. Preferences from those sessions are still kept.",
+          model: session.modelFor("cluster"),
+          batchSize: clusterBatchSize,
+          progress: clusterProgress,
+        }).finally(() => clusterProgress.end());
+        write();
+        write(
+          groupingLine({
+            sessions: Object.keys(digestsForCluster).length,
+            groups: clusterResult.tasks.length,
+            misc: clusterResult.misc.length,
+            noGroup,
+            reused: clusterResult.resumed,
+          }),
         );
         if (args.verbose)
-          for (const s of authorResult.skipped)
-            say(`${glyph("·", "-")} ${s.slug}: ${s.reason}`, "  ");
-      }
-      const unverified = unverifiedLine(authorResult.unverified.length);
-      if (unverified) say(unverified);
-      const keptNames = authorResult.kept.map((task) => task.slug);
-      const kept = keptLine(keptNames, args.verbose === true);
-      if (kept) say(kept);
+          for (const t of clusterResult.tasks)
+            write(`  ${bullet} ${t.slug} (${counted(t.members.length, "session")})`);
 
-      if (authorResult.failed.length > 0) {
+        stage = "author";
+        phase = "writing";
+        // The library checkpoints each successfully written prompt.
         write();
-        write("Prompts that could not be written (the others are saved):");
-        for (const f of authorResult.failed) failure(`${f.export}: ${f.error}`);
-        command(
-          "To try only these again, run:",
-          retryCommandText("author", { ...explicitArgs, home }),
-        );
-        hadFailure = true;
-      }
+        const authorProgress = startStageProgress(out, "Writing prompts", progressOptions);
+        const authorResult = await runAuthorStage({
+          ...common,
+          tasks: clusterResult.tasks,
+          digests: digestsForCluster,
+          entries: plan.eligible,
+          generation: digestResult.generation,
+          toolVersion: pkg.version,
+          model: session.modelFor("author"),
+          progress: authorProgress,
+          breaker: args.breaker !== false,
+          truncate,
+          force: args.force === true,
+          concurrency,
+        }).finally(() => authorProgress.end());
 
-      if (authorResult.notAttempted.length) {
-        hadFailure = true;
-        say(
-          `${counted(authorResult.notAttempted.length, "remaining prompt was", "remaining prompts were")} not attempted. Run npx human-hindsight reflect to continue.`,
+        write();
+        // Wrapped like every sentence around it; each line keeps the color.
+        for (const line of wrapText(librarySentence(authorResult), width))
+          write(authorResult.authored.length > 0 ? green(line) : line);
+        if (authorResult.skipped.length) {
+          say(
+            "A prompt is not written for work that was abandoned. Preferences from those sessions are still kept.",
+          );
+          if (args.verbose)
+            for (const s of authorResult.skipped)
+              say(`${glyph("·", "-")} ${s.slug}: ${s.reason}`, "  ");
+        }
+        const unverified = unverifiedLine(authorResult.unverified.length);
+        if (unverified) say(unverified);
+        const keptNames = authorResult.kept.map((task) => task.slug);
+        const kept = keptLine(keptNames, args.verbose === true);
+        if (kept) say(kept);
+
+        if (authorResult.failed.length > 0) {
+          write();
+          write("Prompts that could not be written (the others are saved):");
+          for (const f of authorResult.failed) failure(`${f.export}: ${f.error}`);
+          command(
+            "To try only these again, run:",
+            retryCommandText("author", { ...explicitArgs, home }),
+          );
+          hadFailure = true;
+        }
+
+        if (authorResult.notAttempted.length) {
+          hadFailure = true;
+          say(
+            `${counted(authorResult.notAttempted.length, "remaining prompt was", "remaining prompts were")} not attempted. Run npx human-hindsight reflect to continue.`,
+          );
+        }
+      } catch (err) {
+        failure((err as Error).message);
+        command(
+          `Saved progress is kept. To try the ${stage === "cluster" ? "grouping" : "prompt writing"} again, run:`,
+          retryCommandText(stage, { ...explicitArgs, home }),
         );
+        hadFailure = true;
       }
-    } catch (err) {
-      failure((err as Error).message);
-      command(
-        `Saved progress is kept. To try the ${stage === "cluster" ? "grouping" : "prompt writing"} again, run:`,
-        retryCommandText(stage, { ...explicitArgs, home }),
-      );
-      hadFailure = true;
-    }
+    };
+    if (prompts) await groupAndWrite();
 
     // Nothing to open after the reads (no preference in them): the prompts are there now.
     await openLibrary(summarizing ? ["summaries"] : []);
@@ -1526,6 +1565,17 @@ export default defineCommand({
       type: "boolean",
       description:
         "Serve the local library during an interactive reflection (skip with --no-library)",
+    },
+    prompts: {
+      type: "boolean",
+      default: true,
+      description:
+        "Group sessions and write reusable prompts (use --no-prompts to read sessions and summarize preferences only)",
+    },
+    subagents: {
+      type: "boolean",
+      description:
+        "After the preference summaries, suggest subagent roles in the same run, on the same approval",
     },
     generalize: {
       type: "boolean",

@@ -9,8 +9,9 @@
 
 What would you like to do?
 › 1  Reflect on my history (recommended)  export, then review the plan
-• 2  Export my messages  local Markdown
-• 3  Show projects  history inventory
-• 4  Check setup  tools and sign-in
+• 2  Suggest subagents  reads my sessions, then proposes roles
+• 3  Export my messages  local Markdown
+• 4  Show projects  history inventory
+• 5  Check setup  tools and sign-in
 • q  Quit
   Choose [1]:

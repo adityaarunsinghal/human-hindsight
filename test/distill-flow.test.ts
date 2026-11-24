@@ -1154,6 +1154,100 @@ describe("the run", () => {
     }
   });
 
+  it("--no-prompts reads and summarizes, and groups and writes nothing", async () => {
+    const home = tmpHome(sessions(3));
+    const claude = fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }));
+    const { code, text } = await run({ home, yes: true, prompts: false }, { runners: [claude] });
+    expect(code).toBe(0);
+    expect(modelCalls(claude, "digest")).toBe(3);
+    expect(modelCalls(claude, "window")).toBe(0);
+    expect(modelCalls(claude, "author")).toBe(0);
+    expect(modelCalls(claude, "generalize")).toBeGreaterThan(0);
+    // Only the models of the steps that run are checked: reads and summaries share one.
+    expect(modelCalls(claude, "check")).toBe(1);
+    const plan = flat(text.slice(0, text.indexOf("Preparing reflection")));
+    expect(plan).toContain(
+      "Reads 3 sessions and your working preferences. No prompts are written in this run.",
+    );
+    expect(plan).toContain("Calls 3 session reads. Then, summarize preferences");
+    expect(plan).toContain("sonnet for every step");
+    expect(plan).not.toMatch(/grouping|writing call/i);
+    expect(plan).toContain("one tiny request checks that Claude Code is ready");
+    expect(flat(text)).not.toMatch(/Grouping sessions|Writing prompts/);
+    expect(fs.existsSync(path.join(home, "library"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "distill", "digests.json"))).toBe(true);
+  });
+
+  it("--subagents says so on the plan and goes on to the roles on that approval", async () => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }));
+    const suggestSubagents = vi.fn(async () => 0);
+    const { code, text } = await run(
+      { home, yes: true, prompts: false, subagents: true, quality: "fast" },
+      { runners: [claude], suggestSubagents },
+    );
+    expect(code).toBe(0);
+    const plan = flat(text.slice(0, text.indexOf("Preparing reflection")));
+    expect(plan).toContain(
+      "Then choose and write subagent roles from those preferences: 1 call to choose roles, then one call for each role (2 to 15 roles). This approval covers them.",
+    );
+    // The reads are done before the roles are asked for, with the same CLI and plan.
+    expect(suggestSubagents).toHaveBeenCalledTimes(1);
+    expect(modelCalls(claude, "digest")).toBe(2);
+    const [args, deps] = suggestSubagents.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(args).toMatchObject({ home, quality: "fast", yes: true });
+    expect(deps.approved).toBe(true);
+    // The closing menu belongs to the subagent step, so reflect prints no next step of its own.
+    expect(text).not.toContain("next:");
+  });
+
+  it.each([
+    { name: "a declined plan", args: {}, input: "q\n", code: 2 },
+    { name: "--dry-run", args: { "dry-run": true }, input: undefined, code: 0 },
+  ])("--subagents after $name asks for no roles", async ({ args, input, code }) => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }));
+    const suggestSubagents = vi.fn(async () => 0);
+    const result = await run(
+      { home, subagents: true, ...args },
+      {
+        runners: [claude],
+        suggestSubagents,
+        ...(input !== undefined && { input: PassThrough.from([input]) }),
+      },
+    );
+    expect(result.code).toBe(code);
+    expect(suggestSubagents).not.toHaveBeenCalled();
+    expect(modelCalls(claude)).toBe(0);
+  });
+
+  it("--subagents with no preference in the sessions says so and asks for no roles", async () => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES);
+    const suggestSubagents = vi.fn(async () => 0);
+    const { code, text } = await run(
+      { home, yes: true, subagents: true },
+      { runners: [claude], suggestSubagents },
+    );
+    expect(code).toBe(0);
+    expect(flat(text)).toContain(
+      "No preferences were found in these sessions, so there are no subagents to suggest.",
+    );
+    expect(suggestSubagents).not.toHaveBeenCalled();
+  });
+
+  it("--subagents needs the preference summaries", async () => {
+    const home = tmpHome(sessions(2));
+    const { code, text } = await run({ home, subagents: true, generalize: false });
+    expect(code).toBe(1);
+    expect(text).toBe(
+      "error: --subagents needs the preference summaries; remove --no-generalize.\n",
+    );
+  });
+
   it("summaries still running when the prompts are written show their progress from then on", async () => {
     const home = tmpHome(sessions(2));
     let written!: () => void;

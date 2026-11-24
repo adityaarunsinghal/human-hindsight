@@ -125,6 +125,14 @@ Options
   --library                                Serve the local library during an
                                            interactive reflection (skip with
                                            --no-library)
+  --prompts                                Group sessions and write reusable
+                                           prompts (use --no-prompts to read
+                                           sessions and summarize preferences
+                                           only) (Default: true)
+  --no-prompts                             Turn off --prompts
+  --subagents                              After the preference summaries,
+                                           suggest subagent roles in the same
+                                           run, on the same approval
   --generalize                             Summarize working preferences after
                                            writing prompts (skip with
                                            --no-generalize) (Default: true)

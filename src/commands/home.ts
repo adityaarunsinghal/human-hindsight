@@ -9,6 +9,7 @@ import {
   readExportSessionShare,
   startEnvironment,
 } from "../core/environment.js";
+import { readObservedPreferences } from "../core/preferences.js";
 import { suggestionPath } from "../core/subagents.js";
 import { type OperationRecord, OperationStore, writerBusyReason } from "../distill/operations.js";
 import type { RunnerIo } from "../runners/shared.js";
@@ -229,11 +230,14 @@ function candidateChoices(
       detail: refreshDetail(snapshot),
     });
   }
-  if (ready && saved.library) {
+  // Offered from the first run: without saved reads it makes them first.
+  if (ready && (saved.library || history)) {
     choices.push({
       key: "suggest",
       label: "Suggest subagents",
-      detail: "roles from my preferences",
+      detail: saved.library
+        ? "roles from my preferences"
+        : "reads my sessions, then proposes roles",
     });
   }
   if (!ready && saved.exported && !saved.library) choices.push(doctor);
@@ -332,6 +336,15 @@ export function homeFix(snapshot: EnvironmentSnapshot, args: HomeArgs): HomeFix 
     if (row?.fix) return { says: "Sign in before reflecting:", run: row.fix };
   }
   return undefined;
+}
+
+/** Whether a session read has left a preference to suggest roles from. */
+function hasSavedPreferences(home: string): boolean {
+  try {
+    return readObservedPreferences(home).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** One line of the frame above the menu. `drop` lines leave first, lowest first, when rows run short. */
@@ -551,20 +564,25 @@ export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<nu
   if (answer === "interrupt") return 130;
   if (answer === "quit") return 0;
   if (io.dispatch) return io.dispatch(answer, args);
-  return runAction(answer, args, { output, runnerAvailable });
+  return runAction(answer, args, { output, runnerAvailable, home: paths.home });
 }
 
 async function runAction(
   action: HomeAction,
   args: HomeArgs,
-  o: { output: Writable; runnerAvailable: boolean },
+  o: { output: Writable; runnerAvailable: boolean; home: string },
 ): Promise<number> {
   if (action === "scan") {
     runScan(args);
     return 0;
   }
-  if (action === "suggest") return generateSubagents(args);
-  if (action === "export" || action === "build" || action === "refresh") {
+  // Subagents come from the preferences in the session reads. With some
+  // saved, the command plans from them. Without any, one run makes them
+  // first and writes no prompts: export if needed, read, summarize, then roles.
+  const fromScratch = action === "suggest" && !hasSavedPreferences(o.home);
+  if (action === "suggest" && !fromScratch) return generateSubagents(args);
+  const exported = fs.existsSync(path.join(o.home, "exports", "manifest.json"));
+  if (action === "export" || action === "build" || action === "refresh" || !exported) {
     const stats = runExport({ ...args, guided: true, output: o.output });
     if (stats.busy) return 1;
     if (stats.exportedSessions === 0) {
@@ -575,8 +593,9 @@ async function runAction(
       o.output.write(`${hint(nextCommandText(o.runnerAvailable ? "reflect" : "doctor", args))}\n`);
       return 0;
     }
-    return runNextCommand("reflect", args);
   }
+  if (fromScratch) return runNextCommand("reflect", { ...args, prompts: false, subagents: true });
+  if (action === "build" || action === "refresh") return runNextCommand("reflect", args);
   const { command, tab } = actionCommand(action);
   return runNextCommand(command, tab ? { ...args, tab } : args);
 }

@@ -468,12 +468,26 @@ describe("first run, in a terminal", () => {
     [
       "one CLI ready",
       READY_HISTORY,
-      ["Reflect on my history", "Export my messages", "Show projects", "Check setup", "Quit"],
+      [
+        "Reflect on my history",
+        "Suggest subagents",
+        "Export my messages",
+        "Show projects",
+        "Check setup",
+        "Quit",
+      ],
     ],
     [
       "exported only",
       { ...READY_HISTORY, saved: "exported" },
-      ["Reflect on my history", "Export my messages", "Show projects", "Check setup", "Quit"],
+      [
+        "Reflect on my history",
+        "Suggest subagents",
+        "Export my messages",
+        "Show projects",
+        "Check setup",
+        "Quit",
+      ],
     ],
     [
       "exported, no CLI",
@@ -576,8 +590,10 @@ describe("first run, in a terminal", () => {
 
   it.each([
     ["Enter takes the recommended item", [KEYS.enter], "build"],
-    ["a digit takes that item", ["3"], "scan"],
-    ["arrows move, Enter takes", [KEYS.down, KEYS.enter], "export"],
+    ["a digit takes that item", ["4"], "scan"],
+    ["arrows move, Enter takes", [KEYS.down, KEYS.enter], "suggest"],
+    // Offered from the first run: it makes the reads it needs.
+    ["Suggest subagents is the second item on a first run", ["2"], "suggest"],
   ] as [string, string[], HomeAction][])("%s", async (_name, keys, action) => {
     const t = await run(READY_HISTORY, keys);
     expect(t.dispatched).toEqual([action]);
@@ -794,7 +810,7 @@ describe("terminal modes", () => {
     await settle();
     await settle();
     expect(t.output.text()).toContain("Choose [1]:");
-    t.input.press("3\n");
+    t.input.press("4\n");
     expect(await done).toBe(0);
     expect(t.dispatched).toEqual(["scan"]);
     expect(t.input.rawModeCalls).toEqual([]);
