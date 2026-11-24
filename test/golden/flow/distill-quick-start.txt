@@ -18,7 +18,7 @@ Reflect on your history
 Runs on  Claude Code (claude 9.9.9)
 
 Quality
-( › 1 Balanced )   ( • 2 Best )
+( • 1 Fast )   ( › 2 Balanced )   ( • 3 Best )
   sonnet for session reads, opus for grouping and writing
 
 Plan  25 session reads, about 1 grouping call, and about 8 writing calls.
@@ -32,4 +32,4 @@ Sending  Selected session text and working preferences go through Claude Code to
 
   s  Start reflection
   q  Not now
-  Choose [1/2/s/q]: Declined. Nothing was sent.
+  Choose [1/2/3/s/q]: Declined. Nothing was sent.

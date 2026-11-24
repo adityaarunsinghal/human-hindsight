@@ -1,9 +1,29 @@
-import type { ModelCatalog, RunnerName } from "../runners/types.js";
+import type { Effort, ModelCatalog, RunnerName } from "../runners/types.js";
 
-export type Quality = "balanced" | "best";
+export type { Effort };
+
+/** The plans a person can choose, fastest first. */
+export const QUALITIES = ["fast", "balanced", "best"] as const;
+export type Quality = (typeof QUALITIES)[number];
 export type ModelRole = "bulk" | "major";
 export type Tier = "light" | "heavy" | "frontier";
 export type PlanLabel = `${Quality}/${ModelRole}`;
+/**
+ * How hard a model is asked to reason. Every call a plan makes carries the
+ * plan's level, so a run does not depend on the reasoning setting a person
+ * keeps for their own interactive sessions.
+ */
+export const PLAN_EFFORT: Record<Quality, Effort> = {
+  fast: "low",
+  balanced: "high",
+  best: "xhigh",
+};
+/** The effort as the plan screen says it. */
+export const EFFORT_WORDS: Record<Effort, string> = {
+  low: "low",
+  high: "high",
+  xhigh: "extra high",
+};
 
 export interface ResolvedRole {
   tier: Tier | "default";
@@ -23,16 +43,23 @@ export interface RunnerModelPlan {
 
 export function parseQuality(raw?: string): Quality {
   const value = (raw ?? process.env.HUMAN_HINDSIGHT_QUALITY ?? "balanced").trim().toLowerCase();
-  if (value === "balanced" || value === "best") return value;
-  throw new Error(`Unknown quality "${value}". Choose --quality balanced or --quality best.`);
+  if ((QUALITIES as readonly string[]).includes(value)) return value as Quality;
+  throw new Error(
+    `Unknown quality "${value}". Choose --quality fast, --quality balanced, or --quality best.`,
+  );
 }
 
 export function isPlanLabel(value: string | undefined): value is PlanLabel {
-  return typeof value === "string" && /^(balanced|best)\/(bulk|major)$/.test(value);
+  return typeof value === "string" && /^(fast|balanced|best)\/(bulk|major)$/.test(value);
 }
 
 export function planLabel(quality: Quality, role: ModelRole): PlanLabel {
   return `${quality}/${role}`;
+}
+
+/** The plan a label belongs to. */
+export function qualityOf(label: PlanLabel): Quality {
+  return label.slice(0, label.indexOf("/")) as Quality;
 }
 
 const TIERS: readonly Tier[] = ["frontier", "heavy", "light"];
@@ -42,6 +69,8 @@ const FAMILIES: Record<Tier, readonly [string, string]> = {
   frontier: ["fable", "astra"],
 };
 const PLANS: Record<Quality, Record<ModelRole, Tier>> = {
+  // Fast keeps every step on the light model and asks for low effort.
+  fast: { bulk: "light", major: "light" },
   balanced: { bulk: "light", major: "heavy" },
   best: { bulk: "heavy", major: "frontier" },
 };
@@ -246,10 +275,10 @@ export function planModels(
   return { runner, quality, roles, notes };
 }
 
-/** True when Balanced and Best resolve to different models for some role. */
+/** True when some plan resolves to a different model than another for some role. */
 export function offersQualityChoice(plans: Record<Quality, RunnerModelPlan>): boolean {
   return (["bulk", "major"] as const).some(
-    (key) => plans.balanced.roles[key].display !== plans.best.roles[key].display,
+    (key) => new Set(QUALITIES.map((quality) => plans[quality].roles[key].display)).size > 1,
   );
 }
 

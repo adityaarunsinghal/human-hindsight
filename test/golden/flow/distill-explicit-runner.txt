@@ -11,15 +11,16 @@ Checking available coding CLIs…
            Then summarize preferences across your saved library, up to 100
            observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
-  Models   1 Balanced (selected): gpt-5.6-terra for session reads, gpt-5.6-sol
+  Models   1 Fast: gpt-5.6-terra for every step
+           2 Balanced (selected): gpt-5.6-terra for session reads, gpt-5.6-sol
            for grouping and writing
-           2 Best: gpt-5.6-sol for session reads, gpt-5.6-astra for grouping and
+           3 Best: gpt-5.6-sol for session reads, gpt-5.6-astra for grouping and
            writing
   Sending  The selected session text and your working preferences go to your
            provider through Codex, the same way your normal sessions do, and the
-           calls use your tokens there. Before the first model call, two tiny
-           requests, one for each model, check that Codex is ready; when
-           everything is reused, nothing is sent.
+           calls use your tokens there. Before the first model call, one tiny
+           request for each model checks that Codex is ready; when everything is
+           reused, nothing is sent.
 
 Sessions that would be read:
   • s00 (3 messages)

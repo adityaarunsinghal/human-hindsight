@@ -150,6 +150,8 @@ export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo)
       );
     }
     if (opts.model) args.push("--model", opts.model);
+    // Without this a call inherits the person's own setting for interactive work.
+    if (opts.effort) args.push("-c", `model_reasoning_effort=${JSON.stringify(opts.effort)}`);
     args.push("-"); // large prompts go through stdin, never the process argument list
     const prompt =
       (opts.disableTools ?? true) ? `${opts.prompt}${TOOL_BAN_LINE.codex}` : opts.prompt;
@@ -237,6 +239,8 @@ export function makeCodexRunner(io: RunnerIo = defaultIo, deps: RunnerEnv = {}):
         hasOutsideCredentials("codex", env) || Boolean(config().provider),
       ),
     listModels: () => readCatalog(io, "codex", {}, config().model),
+    // `model_reasoning_effort` is a configuration key every supported version reads.
+    acceptsEffort: () => true,
     async preflight() {
       // The version is shown, not required: no flag or output shape depends on it.
       await requireFlags(io, await requireBinary("codex", io), "codex", EXEC_FLAGS);

@@ -14,8 +14,9 @@ import { closestMatches } from "../ui/suggest.js";
 export const sharedArgs = {
   quality: {
     type: "string",
-    valueHint: "balanced|best",
-    description: "Model plan for reading and writing (default: balanced)",
+    valueHint: "fast|balanced|best",
+    description:
+      "Model plan and reasoning effort: fast (low), balanced (high, the default), or best (extra high)",
   },
   recent: {
     type: "string",

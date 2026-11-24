@@ -326,6 +326,7 @@ describe("planModels", () => {
   it("with no model list, says once that the CLI default is used and offers no choice", () => {
     const empty = catalog([]);
     const plans = {
+      fast: planModels("kiro", empty, "fast"),
       balanced: planModels("kiro", empty, "balanced"),
       best: planModels("kiro", empty, "best"),
     };
@@ -335,6 +336,7 @@ describe("planModels", () => {
     }
     expect(offersQualityChoice(plans)).toBe(false);
     const listed = {
+      fast: planModels("claude", ALIASES, "fast"),
       balanced: planModels("claude", ALIASES, "balanced"),
       best: planModels("claude", ALIASES, "best"),
     };
@@ -426,6 +428,9 @@ describe("labels and quality", () => {
   it("parses quality and rejects unknown values", () => {
     expect(parseQuality(" Best ")).toBe("best");
     expect(parseQuality(undefined)).toBe("balanced");
-    expect(() => parseQuality("fast")).toThrow(/--quality balanced or --quality best/);
+    expect(parseQuality("FAST")).toBe("fast");
+    expect(() => parseQuality("quick")).toThrow(
+      /--quality fast, --quality balanced, or --quality best/,
+    );
   });
 });

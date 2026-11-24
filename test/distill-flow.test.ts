@@ -41,7 +41,7 @@ import { fakeInput, fakeOutput } from "./support/tty.js";
 
 // --- fakes -------------------------------------------------------------------
 
-const PLAN_LABEL = /\b(balanced|best)\/(bulk|major)\b/;
+const PLAN_LABEL = /\b(fast|balanced|best)\/(bulk|major)\b/;
 const ALIASES: ModelCatalog = { ids: ["sonnet", "opus", "fable"], source: "aliases" };
 const CODEX: ModelCatalog = {
   ids: ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-astra"],
@@ -342,10 +342,11 @@ describe("the plan screen", () => {
     expect(code).toBe(0);
     await expect(text).toMatchFileSnapshot(golden("distill-fresh"));
     expect(flat(text)).toContain("5 sessions, about 2 prompts, plus your working preferences");
+    expect(flat(text)).toContain("1 Fast: sonnet for every step");
     expect(flat(text)).toContain(
-      "1 Balanced (selected): sonnet for session reads, opus for grouping and writing",
+      "2 Balanced (selected): sonnet for session reads, opus for grouping and writing",
     );
-    expect(flat(text)).toContain("2 Best: opus for session reads, fable for grouping and writing");
+    expect(flat(text)).toContain("3 Best: opus for session reads, fable for grouping and writing");
     expect(flat(text)).not.toContain("Also ready");
     expect(flat(text)).not.toContain("Library");
     // One line says what happens before the CLIs are asked, and it makes no
@@ -509,7 +510,7 @@ describe("consent", () => {
     const home = tmpHome(sessions(2));
     const claude = fakeCli("claude", ALIASES);
     const codex = fakeCli("codex", CODEX);
-    const input = PassThrough.from(["s\nc\n2\nx\n\ns\n"]);
+    const input = PassThrough.from(["s\nc\n3\nx\n\ns\n"]);
     const result = await run({ home, generalize: false }, { runners: [claude, codex], input });
     expect(result.code).toBe(0);
     expect(result.text).toContain("Which coding CLI should run this reflection?");
@@ -1765,7 +1766,7 @@ describe("after the run", () => {
     const io = scripted(
       [
         // s starts the selected plan.
-        ["Choose [1/2/s/q]", "s\n"],
+        ["Choose [1/2/3/s/q]", "s\n"],
         ["What next?", "SIGINT"],
       ],
       host,

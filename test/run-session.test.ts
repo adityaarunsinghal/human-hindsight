@@ -234,6 +234,73 @@ describe("calls at once", () => {
   });
 });
 
+describe("the reasoning effort a plan sets", () => {
+  it("a CLI that takes an effort makes the plans differ, and the plan screen names each level", async () => {
+    // No model list: every plan uses the CLI's default model, and still differs by effort.
+    const takes = { ...fake("codex", NONE), acceptsEffort: () => true };
+    const described = (await open([takes]).session).describe();
+    expect(described.setsEffort).toBe(true);
+    expect(described.qualityChoice).toBe(true);
+    const same = {
+      digest: "CLI default",
+      cluster: "CLI default",
+      author: "CLI default",
+      generalize: "CLI default",
+      reusable: 0,
+      regenerating: 0,
+    };
+    const text = stripVTControlCharacters(
+      renderPlan({
+        sessions: 3,
+        digests: 3,
+        cluster: 1,
+        authorEstimate: 2,
+        session: described,
+        quality: "balanced",
+        choices: { fast: same, balanced: same, best: same },
+      }),
+    ).replace(/\s+/g, " ");
+    expect(text).toContain(
+      "1 Fast: the CLI's default model for every step, at low reasoning effort",
+    );
+    expect(text).toContain(
+      "2 Balanced (selected): the CLI's default model for every step, at high reasoning effort",
+    );
+    expect(text).toContain(
+      "3 Best: the CLI's default model for every step, at extra high reasoning effort",
+    );
+  });
+
+  it("is not claimed for a CLI that takes none, or beside a model the person named", async () => {
+    expect((await open([fake("claude", ALIASES)]).session).describe().setsEffort).toBe(false);
+    const takes = { ...fake("codex", CODEX), acceptsEffort: () => true };
+    const named = await open([takes], { runner: "codex", explicit: { model: "gpt-5.6-sol" } })
+      .session;
+    expect(named.describe().setsEffort).toBe(false);
+  });
+
+  it("every call of the approved plan carries the plan's level", async () => {
+    const efforts: (string | undefined)[] = [];
+    const takes: AgentRunner = {
+      ...fake("codex", CODEX, async (opts) => {
+        efforts.push(opts.effort);
+        return { ok: true };
+      }),
+      acceptsEffort: () => true,
+    };
+    const session = await open([takes], { quality: "fast" }).session;
+    session.describe();
+    expect((await session.liveCheck(["digest", "author"])).ok).toBe(true);
+    await session.run({
+      prompt: "p",
+      schema: { parse: (v: unknown) => v } as never,
+      model: session.modelFor("digest"),
+    });
+    expect(efforts.length).toBeGreaterThan(1);
+    expect(new Set(efforts)).toEqual(new Set(["low"]));
+  });
+});
+
 describe("the plan screen for a CLI without a model list", () => {
   it("offers no Balanced or Best choice", async () => {
     const described = (await open([fake("opencode", NONE)]).session).describe();
@@ -253,7 +320,7 @@ describe("the plan screen for a CLI without a model list", () => {
         authorEstimate: 2,
         session: described,
         quality: "balanced",
-        choices: { balanced: same, best: same },
+        choices: { fast: same, balanced: same, best: same },
       }),
     );
     expect(described.qualityChoice).toBe(false);

@@ -4,7 +4,7 @@ import { defineCommand } from "citty";
 import { DEFAULT_CONCURRENCY, resolveInputBudget, resolveTimeoutMs } from "../core/budget.js";
 import { fingerprint } from "../core/fingerprint.js";
 import { atomicWriteFilePrivate } from "../core/fsutil.js";
-import { parseQuality, type Quality } from "../core/model-plan.js";
+import { parseQuality, QUALITIES, type Quality } from "../core/model-plan.js";
 import { PREFERENCE_REVIEW_FILE, readPreferenceReviews } from "../core/preference-review.js";
 import { readObservedPreferences } from "../core/preferences.js";
 import { openRunSession, type RunSession, type StageKey } from "../core/run-session.js";
@@ -1004,7 +1004,7 @@ async function runGenerate(
     // planned before the screen, so its numbers hold whichever is picked.
     const plans = {} as Record<Quality, GeneralizePlan>;
     const selectedQuality = session.quality;
-    for (const quality of ["balanced", "best"] as const) {
+    for (const quality of QUALITIES) {
       session.quality = quality;
       const plan = planGeneralize({
         home,
@@ -1049,15 +1049,12 @@ async function runGenerate(
         includeUnreviewed,
         ...(selection === "accepted" && inputs.length < candidates ? { candidates } : {}),
         ...bounds,
-        choices: {
-          balanced: planChoice(
-            session,
-            "balanced",
-            plans.balanced,
-            description.plans.balanced.notes,
-          ),
-          best: planChoice(session, "best", plans.best, description.plans.best.notes),
-        },
+        choices: Object.fromEntries(
+          QUALITIES.map((quality) => [
+            quality,
+            planChoice(session, quality, plans[quality], description.plans[quality].notes),
+          ]),
+        ) as Record<Quality, SubagentsChoice>,
       },
       preview: () => {
         write();
@@ -1365,10 +1362,12 @@ async function runAuthorOnly(
         selection: artifact.selection,
         minRoles: bare.length,
         maxRoles: bare.length,
-        choices: {
-          balanced: planChoice(session, "balanced", undefined, description.plans.balanced.notes),
-          best: planChoice(session, "best", undefined, description.plans.best.notes),
-        },
+        choices: Object.fromEntries(
+          QUALITIES.map((quality) => [
+            quality,
+            planChoice(session, quality, undefined, description.plans[quality].notes),
+          ]),
+        ) as Record<Quality, SubagentsChoice>,
         authorOnly: { names: bare.map((role) => role.name), roles: artifact.roles.length },
       },
       beforeCheck: checkSnapshot,

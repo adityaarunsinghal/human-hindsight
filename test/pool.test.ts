@@ -18,18 +18,23 @@ import { claudeEnvelope, fakeRunnerIo } from "./support/runner-io.js";
 type Script = (opts: RunOptions<unknown>, call: number) => Promise<unknown>;
 interface Fake extends AgentRunner {
   models: (string | undefined)[];
+  /** The reasoning effort each call carried. */
+  efforts: (string | undefined)[];
   finalized: number;
 }
 const fakes: Fake[] = [];
 
-function fake(name: RunnerName, script: Script, cost?: string): Fake {
+function fake(name: RunnerName, script: Script, cost?: string, o: { effort?: boolean } = {}): Fake {
   const runner: Fake = {
     name,
     installHint: "",
     models: [],
+    efforts: [],
     finalized: 0,
+    ...(o.effort && { acceptsEffort: () => true }),
     run: async <T>(opts: RunOptions<T>) => {
       runner.models.push(opts.model);
+      runner.efforts.push(opts.effort);
       return (await script(opts as RunOptions<unknown>, runner.models.length)) as T;
     },
     costSummary: () => cost,
@@ -51,6 +56,7 @@ function candidate(
     runner,
     catalog,
     plans: {
+      fast: planModels(runner.name, catalog, "fast"),
       balanced: planModels(runner.name, catalog, "balanced"),
       best: planModels(runner.name, catalog, "best"),
     },
@@ -69,7 +75,7 @@ function pool(
   runners: AgentRunner[],
   o: {
     pinned?: boolean;
-    quality?: "balanced" | "best";
+    quality?: "fast" | "balanced" | "best";
     disclosed?: boolean;
     pinHint?: string;
   } = {},
@@ -489,6 +495,69 @@ describe("createRunnerPool", () => {
     expect(p.adapter.name).toBe("claude");
     await p.adapter.run(call());
     expect(p.adapter.name).toBe("codex");
+  });
+});
+
+describe("the reasoning effort a plan sets", () => {
+  it("goes with every call a plan makes: low for Fast, high for Balanced, extra high for Best", async () => {
+    const claude = fake("claude", ok, undefined, { effort: true });
+    const { pool: p, events } = pool([claude]);
+    for (const model of ["fast/bulk", "fast/major", "balanced/bulk", "balanced/major", "best/bulk"])
+      await p.run(call(model));
+    expect(claude.models).toEqual(["sonnet", "sonnet", "sonnet", "opus", "opus"]);
+    expect(claude.efforts).toEqual(["low", "low", "high", "high", "xhigh"]);
+    expect(events).toEqual([]);
+  });
+
+  it("is left to the CLI for a model the person named, and for a CLI that takes none", async () => {
+    const claude = fake("claude", ok, undefined, { effort: true });
+    await pool([claude], { pinned: true }).pool.run(call("explicit-model"));
+    expect(claude.efforts).toEqual([undefined]);
+    const codex = fake("codex", ok);
+    await pool([codex]).pool.run(call("best/major"));
+    expect(codex.efforts).toEqual([undefined]);
+  });
+
+  it("a level the CLI does not take is asked once more at its own setting, then left off, with one line", async () => {
+    const claude = fake(
+      "claude",
+      async (opts) => {
+        if (opts.effort) throw failure("cli-error", "unknown effort level");
+        return { ok: true };
+      },
+      undefined,
+      { effort: true },
+    );
+    const codex = fake("codex", ok, undefined, { effort: true });
+    const { pool: p, events } = pool([claude, codex], { quality: "best" });
+    // Ten at once fail the same way: none is counted against the CLI.
+    const results = await Promise.all(Array.from({ length: 10 }, () => p.run(call("best/bulk"))));
+    expect(results).toEqual(Array(10).fill({ ok: true }));
+    expect(p.active()).toBe("claude");
+    expect(codex.models).toEqual([]);
+    expect(events.map((event) => event.kind)).toEqual(["effort"]);
+    expect(events[0]?.line).toBe(
+      "Claude Code did not take extra high reasoning effort for opus. Those calls use its own setting.",
+    );
+    // Later calls for that model go straight to the CLI's own setting.
+    const before = claude.efforts.length;
+    await p.run(call("best/bulk"));
+    expect(claude.efforts.slice(before)).toEqual([undefined]);
+    // Another model of the plan still carries the effort until it is refused too.
+    await p.run(call("best/major"));
+    expect(claude.efforts.at(-1)).toBeUndefined();
+    expect(claude.efforts).toContain("xhigh");
+  });
+
+  it("a call that fails with and without the effort keeps it and fails as before", async () => {
+    const claude = fake("claude", fail("cli-error"), undefined, { effort: true });
+    const { pool: p, events } = pool([claude], { pinned: true });
+    await expect(p.run(call("balanced/bulk"))).rejects.toThrow("cli-error failure");
+    // Once with the effort, once without: the effort was not the cause.
+    expect(claude.efforts).toEqual(["high", undefined]);
+    await expect(p.run(call("balanced/bulk"))).rejects.toThrow("cli-error failure");
+    expect(claude.efforts).toEqual(["high", undefined, "high"]);
+    expect(events).toEqual([]);
   });
 });
 

@@ -19,7 +19,14 @@ import { writeAbove } from "../ui/live.js";
 import { canColor } from "../ui/mode.js";
 import { palette } from "../ui/style.js";
 import { installedRunnerNames, readExportSessionShare } from "./environment.js";
-import { isPlanLabel, type ModelRole, planLabel, planModels, type Quality } from "./model-plan.js";
+import {
+  isPlanLabel,
+  type ModelRole,
+  planLabel,
+  planModels,
+  QUALITIES,
+  type Quality,
+} from "./model-plan.js";
 
 export type StageKey =
   | "digest"
@@ -35,8 +42,13 @@ export interface SessionDescription {
   alsoReady: string[];
   pinned: boolean;
   plans: Record<Quality, { bulk: string; major: string; notes: string[] }>;
-  /** False when Balanced and Best name the same models, so a choice would mean nothing. */
+  /** False when every plan would make the same calls, so a choice would mean nothing. */
   qualityChoice?: boolean;
+  /**
+   * The CLI takes a reasoning effort for each call, so every plan sets its
+   * own. False: its calls run at the CLI's own setting.
+   */
+  setsEffort?: boolean;
   /**
    * The most calls the selected CLI takes at once, when it has a limit of its
    * own. A stage runs at most this many at a time on it ("up to N at a time").
@@ -195,10 +207,9 @@ function prepared(runner: AgentRunner, catalog: ModelCatalog, version?: string):
     runner,
     catalog,
     version,
-    plans: {
-      balanced: planModels(runner.name, catalog, "balanced"),
-      best: planModels(runner.name, catalog, "best"),
-    },
+    plans: Object.fromEntries(
+      QUALITIES.map((quality) => [quality, planModels(runner.name, catalog, quality)]),
+    ) as Candidate["plans"],
   };
 }
 
@@ -438,7 +449,12 @@ function createSession(
       ? []
       : candidates.slice(start + 1).map((item) => RUNNER_INFO[item.runner.name].displayName);
     disclosed = alsoReady.length > 0;
-    const plans = { balanced: describePlan("balanced"), best: describePlan("best") };
+    const plans = Object.fromEntries(
+      QUALITIES.map((choice) => [choice, describePlan(choice)]),
+    ) as SessionDescription["plans"];
+    // A plan's effort goes with the models the plan chose, not with one the person named.
+    const setsEffort =
+      !o.injectedRunner && !explicit.model && used.runner.acceptsEffort?.() === true;
     return {
       runnerLine: used.version
         ? `${info.displayName} (${info.binary} ${used.version})`
@@ -447,7 +463,10 @@ function createSession(
       pinned,
       plans,
       qualityChoice:
-        plans.balanced.bulk !== plans.best.bulk || plans.balanced.major !== plans.best.major,
+        setsEffort ||
+        new Set(QUALITIES.map((choice) => `${plans[choice].bulk}\n${plans[choice].major}`)).size >
+          1,
+      setsEffort,
       ...(used.runner.maxConcurrency !== undefined
         ? { maxConcurrency: used.runner.maxConcurrency }
         : {}),

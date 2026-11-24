@@ -12,7 +12,7 @@ import {
 import { runnerSessionShare } from "../core/environment.js";
 import { generalizedGap } from "../core/generalized.js";
 import { OUTCOME_NOT_VERIFIED, readLibrary } from "../core/library.js";
-import { parseQuality, type Quality } from "../core/model-plan.js";
+import { parseQuality, QUALITIES, type Quality } from "../core/model-plan.js";
 import { damagedFile } from "../core/plain-failure.js";
 import { preferenceReview, readPreferenceReviews } from "../core/preference-review.js";
 import { preferenceId, readObservedPreferences } from "../core/preferences.js";
@@ -820,7 +820,7 @@ async function distillSelectedSessions(opts: {
   const projects = new Set(projectNames.filter(Boolean));
   const ready = () => {
     if (!gate.result) {
-      const quality = session.quality === "balanced" ? "Balanced" : "Best";
+      const quality = { fast: "Fast", balanced: "Balanced", best: "Best" }[session.quality];
       const runner = RUNNER_INFO[session.ledgerRunner].displayName;
       write(
         `${ink.bold("Preparing reflection")} ${glyph("·", "-")} ${ink[RUNNER_INK[session.ledgerRunner]](runner)} ${glyph("·", "-")} ${ink.yellow(quality)}`,
@@ -890,7 +890,7 @@ async function distillSelectedSessions(opts: {
     const selectedQuality = session.quality;
     const choices = {} as NonNullable<DistillPlan["choices"]>;
     const reusedBy = {} as Record<Quality, Set<string>>;
-    for (const quality of ["balanced", "best"] as const) {
+    for (const quality of QUALITIES) {
       session.quality = quality;
       const { reused, ...reuse } = planDigestReuse({
         home,

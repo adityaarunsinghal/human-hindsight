@@ -338,6 +338,13 @@ describe("kiro-cli version detection", () => {
     const old = ["chat", "--no-interactive", "--agent", KIRO_NO_TOOLS_AGENT];
     expect(kiroChatArgs(2)).toEqual(old);
     expect(kiroChatArgs(null)).toEqual(old);
+    // An effort is the last pair, after the model.
+    expect(kiroChatArgs(3, "claude-sonnet-5.5", "low").slice(-4)).toEqual([
+      "--model",
+      "claude-sonnet-5.5",
+      "--effort",
+      "low",
+    ]);
   });
 
   it("probes the version once per environment, not once per call", async () => {

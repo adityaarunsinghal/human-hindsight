@@ -47,6 +47,24 @@ describe("Codex runner", () => {
     expect(fs.existsSync(scratch)).toBe(false);
   });
 
+  it("sets the reasoning effort of a call only when one is given", async () => {
+    const effortOf = async (effort?: "low" | "high" | "xhigh") => {
+      let seen: string | undefined;
+      const io = ioFor(async (_bin, args) => {
+        seen = args.find((arg) => arg.startsWith("model_reasoning_effort="));
+        expect(seen === undefined || args[args.indexOf(seen) - 1] === "-c").toBe(true);
+        fs.writeFileSync(argsFile(args, "--output-last-message"), '{"answer":"ready"}');
+        return success;
+      });
+      await runCodex({ prompt: "p", schema, model: "m", effort }, io);
+      return seen;
+    };
+    expect(await effortOf("low")).toBe('model_reasoning_effort="low"');
+    expect(await effortOf("xhigh")).toBe('model_reasoning_effort="xhigh"');
+    // Without one the call inherits the person's own Codex setting, as before.
+    expect(await effortOf()).toBeUndefined();
+  });
+
   it("accepts completed JSONL agent messages when a wrapper omits the output file", async () => {
     const stdout = [
       { type: "thread.started", thread_id: "t1" },

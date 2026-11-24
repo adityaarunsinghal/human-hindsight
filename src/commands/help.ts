@@ -73,7 +73,7 @@ export const helpTopics: HelpTopic[] = [
     examples: [
       example("reflect --dry-run", "Preview the plan before sending any session text."),
       example("reflect --recent 10", "Start with your ten most recent eligible sessions."),
-      example("reflect --quality best", "Review the plan using the most capable available models."),
+      example("reflect --quality fast", "Use the lighter model and low reasoning effort."),
     ],
     common: ["dry-run", "recent", "quality", "project"],
   },
@@ -347,7 +347,10 @@ const VALUE_RULES: Record<string, ValueRule> = {
     accepts: (value) => passes(() => parseRunnerMode(value)),
     says: choiceList([...Object.keys(RUNNER_INFO), "auto"]),
   },
-  quality: { accepts: (value) => passes(() => parseQuality(value)), says: "balanced or best" },
+  quality: {
+    accepts: (value) => passes(() => parseQuality(value)),
+    says: "fast, balanced, or best",
+  },
   recent: RECENT_RULE,
 };
 

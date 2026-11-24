@@ -12,13 +12,14 @@ Examples
     Write the saved roles to a directory.
 
 Common options
-  --dry-run                Print the call plan and the inputs; run nothing
-  --quality balanced|best  Model plan for reading and writing (default:
-                           balanced)
-  --export <dir>           Write the saved suggestion as files under this
-                           directory (no model calls)
-  --target <tool>          With --export: claude, codex, kiro, kirocrew,
-                           knowledge, or all (default: all)
+  --dry-run                     Print the call plan and the inputs; run nothing
+  --quality fast|balanced|best  Model plan and reasoning effort: fast (low),
+                                balanced (high, the default), or best (extra
+                                high)
+  --export <dir>                Write the saved suggestion as files under this
+                                directory (no model calls)
+  --target <tool>               With --export: claude, codex, kiro, kirocrew,
+                                knowledge, or all (default: all)
 
 More help
   npx human-hindsight suggest-subagents --help --all

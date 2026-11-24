@@ -10,16 +10,17 @@ Checking available coding CLIs…
            Then summarize preferences across your saved library, up to 100
            observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
-  Models   1 Balanced (selected): sonnet for session reads, opus for grouping
+  Models   1 Fast: sonnet for every step
+           2 Balanced (selected): sonnet for session reads, opus for grouping
            and writing
-           2 Best: opus for session reads, fable for grouping and writing
+           3 Best: opus for session reads, fable for grouping and writing
   Library  1 saved prompt. 2 earlier results will be regenerated. Hand-edited
            prompts, ratings, and reviews are kept.
   Sending  The selected session text and your working preferences go to your
            provider through Claude Code, the same way your normal sessions do,
-           and the calls use your tokens there. Before the first model call, two
-           tiny requests, one for each model, check that Claude Code is ready;
-           when everything is reused, nothing is sent.
+           and the calls use your tokens there. Before the first model call, one
+           tiny request for each model checks that Claude Code is ready; when
+           everything is reused, nothing is sent.
 
 Sessions that would be read:
   • alpha-a1111111.md (2 messages)

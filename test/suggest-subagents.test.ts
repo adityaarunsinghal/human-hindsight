@@ -631,7 +631,7 @@ describe("helpers", () => {
 /** Plan screens are compared as golden text; the assertions beside each name what it must say. */
 const golden = (name: string) => `golden/suggest-subagents/${name}.txt`;
 /** Plan labels are internal; the person always sees concrete model names. */
-const PLAN_LABEL = /\b(balanced|best)\/(bulk|major)\b/;
+const PLAN_LABEL = /\b(fast|balanced|best)\/(bulk|major)\b/;
 
 describe("suggest-subagents plan and consent screens", () => {
   it.each([
