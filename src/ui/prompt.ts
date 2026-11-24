@@ -293,12 +293,14 @@ function menuLines<K extends string>(
   width = Number.POSITIVE_INFINITY,
   numbered = false,
   notice?: string,
+  height?: number,
 ): string[] {
   const s = palette(color);
-  const lines = [...o.above, ...(o.above.length ? [""] : []), s.bold(o.title)];
+  const heading = [...o.above, ...(o.above.length ? [""] : []), s.bold(o.title)];
   const arrow = glyph("›", ">");
   const dot = glyph("•", "*");
-  o.choices.forEach((choice, i) => {
+  const options = o.choices.map((choice, i) => {
+    const lines: string[] = [];
     const active = choice.key === selected;
     const cursor = active ? s.green(arrow) : s.dim(dot);
     const label = active ? s.bold(s.green(choice.label)) : choice.label;
@@ -328,15 +330,29 @@ function menuLines<K extends string>(
       if (numbered && choice.detail)
         lines.push(...wrapText(choice.detail, width, { indent: gutter }).map(s.dim));
     }
+    return lines;
   });
   if (!o.choices.some((choice) => choice.key === "quit")) {
-    lines.push(numbered ? `${dot} q  Quit` : `${s.dim(dot)} Quit  ${s.dim("q")}`);
+    options.push([numbered ? `${dot} q  Quit` : `${s.dim(dot)} Quit  ${s.dim("q")}`]);
   }
+  const footer: string[] = [];
   if (selected !== undefined && !numbered)
-    lines.push(
+    footer.push(
       s.dim(glyph("  ↑ ↓ to move · Enter to choose", "  Up/Down to move, Enter to choose")),
     );
-  if (notice) lines.push(...wrapText(notice, width, { indent: "  " }).map(s.dim));
+  if (notice) footer.push(...wrapText(notice, width, { indent: "  " }).map(s.dim));
+  // Give complete options breathing room only after their wrapped lines and controls fit.
+  const used = heading.length + options.reduce((n, rows) => n + rows.length, 0) + footer.length;
+  const spare = (height ?? used) - used;
+  const lines = heading;
+  if (spare >= 1) lines.push("");
+  const spaceOptions = spare >= options.length + (footer.length ? 1 : 0);
+  options.forEach((rows, index) => {
+    if (index && spaceOptions) lines.push("");
+    lines.push(...rows);
+  });
+  if (footer.length && spare >= 2) lines.push("");
+  lines.push(...footer);
   return lines;
 }
 
@@ -442,7 +458,7 @@ function fitFrame<K extends string>(
   const height = frameHeight(output);
   // A live region leaves the last column free.
   const width = terminalWidth(output) - 1;
-  const full = menuLines(o, color, selected, width, false, notice);
+  const full = menuLines(o, color, selected, width, false, notice, height);
   if (full.length <= height || o.above.length === 0) return full;
   // The first line above is the screen's title: it stays while there is room for it.
   const [first = "", ...rest] = o.above;
@@ -452,7 +468,7 @@ function fitFrame<K extends string>(
     : full.length - rest.length <= height
       ? [first]
       : [];
-  return menuLines({ ...o, above }, color, selected, width, false, notice);
+  return menuLines({ ...o, above }, color, selected, width, false, notice, height);
 }
 
 /**

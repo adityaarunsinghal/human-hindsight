@@ -113,17 +113,18 @@ export function startLines<Q extends string>(
     const label = named[i] ?? option.label;
     const active = option === selected;
     const ink = option.key === "best" ? "246;161;199" : "141;227;228";
-    return choicePill(active, String(i + 1), ` ${label}`, ink, o.color === true);
+    return choicePill(active, String(i + 1), label, ink, o.color === true);
   });
   const besides = options.map((option, i) =>
     option.detail
-      ? `${" ".repeat(column - visibleWidth(named[i] ?? ""))}  ${s.dim(option.detail)}`
+      ? `${" ".repeat(column - visibleWidth(named[i] ?? ""))}    ${s.dim(option.detail)}`
       : "",
   );
   // One layout for every option, so the details line up or none is shown beside its row.
   const fits = rows.every((row, i) => visibleWidth(row + (besides[i] ?? "")) <= width);
   const lines = [s.bold(q.title ?? "Start?")];
   options.forEach((option, i) => {
+    lines.push("");
     const row = rows[i] ?? "";
     if (fits) lines.push(row + (besides[i] ?? ""));
     else {
@@ -134,6 +135,7 @@ export function startLines<Q extends string>(
         );
     }
   });
+  if (options.length) lines.push("");
   lines.push(`  ${START_KEY}  ${s.bold(selected ? `Start with ${selected.label}` : "Start")}`);
   lines.push("  q  Not now");
   for (const note of o.notes ?? []) lines.push(s.dim(`  ${note}`));

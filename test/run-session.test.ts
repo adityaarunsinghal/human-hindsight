@@ -355,7 +355,7 @@ describe("liveCheck", () => {
     expect(most).toBe(2);
     expect(claude.timeouts).toEqual([60_000, 60_000]);
     expect(output.text()).toBe(
-      "Checking that Claude Code is ready.\nClaude Code is ready: sonnet-5 reads sessions, opus-5 groups and writes.\n",
+      "Checking that Claude Code is ready.\n\nClaude Code is ready: sonnet-5 reads sessions, opus-5 groups and writes.\n",
     );
   });
 
@@ -369,7 +369,7 @@ describe("liveCheck", () => {
     await expect(s.liveCheck("consolidate")).resolves.toEqual({ ok: true });
     expect(claude.models).toEqual([s.displayModelFor("consolidate")]);
     expect(output.text()).toBe(
-      `Checking that Claude Code is ready.\nClaude Code is ready (${s.displayModelFor("consolidate")}-5).\n`,
+      `Checking that Claude Code is ready.\n\nClaude Code is ready (${s.displayModelFor("consolidate")}-5).\n`,
     );
   });
 
@@ -391,6 +391,7 @@ describe("liveCheck", () => {
       [
         "Checking that Claude Code is ready.",
         "Claude Code cannot use opus here (your provider refused it). Using sonnet for grouping and writing.",
+        "",
         "Claude Code is ready (sonnet).",
         "",
       ].join("\n"),
@@ -497,7 +498,7 @@ describe("liveCheck", () => {
     expect(s.ledgerRunner).toBe("claude");
     // The second attempt is quiet: no second "Checking" line and no switch line.
     expect(output.text()).toBe(
-      "Checking that Claude Code is ready.\nClaude Code is ready (sonnet).\n",
+      "Checking that Claude Code is ready.\n\nClaude Code is ready (sonnet).\n",
     );
   });
 
@@ -516,6 +517,7 @@ describe("liveCheck", () => {
         "Checking that Claude Code is ready.",
         "Claude Code failed twice in a row. Continuing with Codex.",
         "Checking that Codex is ready.",
+        "",
         "Codex is ready: gpt-5.6-terra reads sessions, gpt-5.6-sol groups and writes.",
         "",
       ].join("\n"),

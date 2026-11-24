@@ -56,12 +56,12 @@ export function choicePill(
   color: boolean,
 ): string {
   const marker = active ? glyph("›", ">") : glyph("•", "-");
-  if (!color) return `( ${marker} ${key} ${label} )`;
+  if (!color) return `(  ${marker} ${key}  ${label}  )`;
   const fill = active ? "164;220;202" : "33;39;55";
   const foreground = active ? "21;38;31" : ink;
   const keyInk = active ? foreground : "245;215;155";
   const markerInk = active ? foreground : "156;164;191";
-  return `\x1b[38;2;${fill}m${glyph("◖", "(")}\x1b[48;2;${fill};38;2;${markerInk}m${marker} \x1b[1;38;2;${keyInk}m${key}\x1b[22;38;2;${foreground}m ${label}\x1b[49;38;2;${fill}m${glyph("◗", ")")}\x1b[39m`;
+  return `\x1b[38;2;${fill}m${glyph("◖", "(")}\x1b[48;2;${fill};38;2;${markerInk}m  ${marker} \x1b[1;38;2;${keyInk}m${key}\x1b[22;38;2;${foreground}m  ${label}  \x1b[49;38;2;${fill}m${glyph("◗", ")")}\x1b[39m`;
 }
 
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });

@@ -168,7 +168,13 @@ describe("stage progress", () => {
     s.clock.advance(1_000);
     for (const tick of s.ticks) tick();
     expect(s.screen()).toContain("Reading Field notes ×2 · Reference");
-    expect(s.screen()).toContain("The first summary appears as soon as a read finishes.");
+    expect(s.screen()).toMatch(
+      /estimating\n│\n│ Reading Field notes ×2 · Reference\n│\n│ The first summary/,
+    );
+    const firstFrameRows = s.screen().split("\n").length;
+    s.clock.advance(100);
+    for (const tick of s.ticks) tick();
+    expect(s.screen().split("\n")).toHaveLength(firstFrameRows);
     expect(s.out.raw()).toContain("\x1b[34mField notes");
     expect(s.out.raw()).toContain("\x1b[36mReference");
 
