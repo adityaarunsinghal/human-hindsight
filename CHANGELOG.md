@@ -6,6 +6,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [2.1.3] - 2026-11-24
 
+- Codex reads one historical session per request in a fresh, ephemeral process. Human Hindsight discovers enabled MCP servers once per runner and disables them for tool-free calls, which saves startup time on machines with configured servers.
 - **Fast, Balanced, Best.** Fast is a new plan that uses the lighter model for every step. Each plan now sets the reasoning effort of its own calls: low for Fast, high for Balanced, extra high for Best, on Claude Code, Codex and Kiro CLI where the installed version takes one. Until now every call inherited the reasoning setting you keep for your own sessions. OpenCode names its effort levels per model, so its calls run at the model's own setting, and a model you name with `--model` runs at your CLI's own setting. At the plan, `1`, `2` and `3` select Fast, Balanced and Best.
 - **Subagents from the first screen.** **Suggest subagents** is offered on a machine with no saved reads. It exports your messages if needed, then one plan covers reading the sessions, summarizing preferences, and choosing and writing the roles. No prompts are written. From a script: `npx human-hindsight reflect --no-prompts --subagents --quality fast --yes`.
 - **Your reflections open sooner.** The link appears once the sessions are read, with your preferences already there. Preference summaries run beside grouping and writing, and the page says when more is still arriving.

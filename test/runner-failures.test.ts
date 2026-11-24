@@ -62,7 +62,11 @@ function runnerFor(item: CapturedCase): { runner: AgentRunner; io: FakeRunnerIo 
       io.script("claude", { has: ["-p"] }, failed);
       return { runner: makeClaudeRunner(io), io };
     case "codex":
-      io.script("codex", { has: ["exec", "--json"] }, failed);
+      io.script("codex", { has: ["mcp", "list", "--json"] }, { stdout: "[]" }).script(
+        "codex",
+        { has: ["exec", "--json"] },
+        failed,
+      );
       return { runner: makeCodexRunner(io), io };
     case "kiro":
       io.script("kiro-cli", { has: ["--no-interactive"] }, failed);

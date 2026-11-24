@@ -96,13 +96,54 @@ const EXEC_FLAGS = [
   "--config",
 ] as const;
 
+/** An empty MCP table merges with user configuration. Disable each enabled entry explicitly. */
+function mcpDisableArgs(io: RunnerIo) {
+  let cached: Promise<string[]> | undefined;
+  async function discover(bin: string, cwd: string): Promise<string[]> {
+    try {
+      const result = await io.spawn(
+        bin,
+        ["mcp", "list", "--json", "-c", "plugins={}", "-c", "apps._default.enabled=false"],
+        {
+          input: "",
+          cwd,
+          timeoutMs: 5_000,
+        },
+      );
+      if (result.code !== 0 || result.timedOut) return [];
+      const servers: unknown = JSON.parse(result.stdout);
+      if (!Array.isArray(servers)) return [];
+      // Dotted CLI overrides accept bare key segments. Never copy server config, command, or env.
+      const names = new Set<string>();
+      for (const server of servers) {
+        if (
+          server?.enabled === true &&
+          typeof server.name === "string" &&
+          /^[A-Za-z0-9_-]+$/.test(server.name)
+        ) {
+          names.add(server.name);
+        }
+      }
+      return [...names].flatMap((name) => ["-c", `mcp_servers.${name}.enabled=false`]);
+    } catch {
+      // Wrappers and older CLIs may support exec without a machine-readable MCP catalog.
+      return [];
+    }
+  }
+  return (bin: string, cwd: string) => (cached ??= discover(bin, cwd));
+}
+
 /**
  * codex exec provides schema-constrained JSON in a final-message file. Each call
  * gets a private scratch cwd and an ephemeral session so distilling history
  * doesn't generate more history to mine. Auth and model defaults stay with the
  * user's CLI; nothing here calls an API directly.
  */
-export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo): Promise<T> {
+export async function runCodex<T>(
+  opts: RunOptions<T>,
+  io: RunnerIo = defaultIo,
+  disableMcp = mcpDisableArgs(io),
+): Promise<T> {
   requireConcreteModel(opts.model);
   const bin = await requireBinary("codex", io);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "human-hindsight-codex-"));
@@ -147,6 +188,7 @@ export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo)
         "apps._default.enabled=false",
         "-c",
         "plugins={}",
+        ...(await disableMcp(bin, scratch)),
       );
     }
     if (opts.model) args.push("--model", opts.model);
@@ -224,6 +266,7 @@ export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo)
  */
 export function makeCodexRunner(io: RunnerIo = defaultIo, deps: RunnerEnv = {}): AgentRunner {
   const env = deps.env ?? process.env;
+  const disableMcp = mcpDisableArgs(io);
   const config = () => codexDefaults(env, deps.readFile);
   return {
     name: "codex",
@@ -245,6 +288,6 @@ export function makeCodexRunner(io: RunnerIo = defaultIo, deps: RunnerEnv = {}):
       // The version is shown, not required: no flag or output shape depends on it.
       await requireFlags(io, await requireBinary("codex", io), "codex", EXEC_FLAGS);
     },
-    run: (opts) => runCodex(opts, io),
+    run: (opts) => runCodex(opts, io, disableMcp),
   };
 }
