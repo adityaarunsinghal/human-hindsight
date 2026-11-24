@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type HomeAction, type HomeArgs, type HomeIo, runHome } from "../src/commands/home.js";
+import {
+  type HomeAction,
+  type HomeArgs,
+  type HomeIo,
+  PRIVACY_LINE,
+  runHome,
+} from "../src/commands/home.js";
 import type { HistoryCounts } from "../src/core/environment-history.js";
 import { PRIVACY_REMINDER } from "../src/core/privacy.js";
 import { PROBES } from "../src/runners/capabilities.js";
@@ -292,6 +298,32 @@ describe("first run, without a terminal", () => {
     expect(t.text).not.toContain("What would you like to do?");
     expect(t.text).toMatch(/next: npx human-hindsight /);
     await expect(golden(t.text, t)).toMatchFileSnapshot(`golden/home/pipe-${name}.txt`);
+  });
+
+  it.each([
+    ["no history", {}],
+    ["one ready CLI", READY_HISTORY],
+    ["a saved library", { ...READY_HISTORY, saved: "library" }],
+  ] as [
+    string,
+    Case,
+  ][])("%s: says once, in the card, that no session text leaves the machine before a plan is approved", async (_name, c) => {
+    const sentence = "No session text leaves this machine until you approve a plan.";
+    expect(PRIVACY_LINE).toBe(sentence);
+    const said = (text: string) =>
+      text
+        .split("\n")
+        .filter((row) => row.startsWith("│"))
+        .map((row) => row.replace(/^│ ?/, "").trim())
+        .join(" ")
+        .split(sentence).length - 1;
+    // Printed once to a pipe, and once in a live frame at 80 and at 60 columns.
+    const piped = await run({ ...c, terminal: { tty: false } }, []);
+    expect(said(piped.text)).toBe(1);
+    for (const columns of [80, 60]) {
+      const live = await run({ ...c, terminal: { columns, rows: 24 } });
+      expect(said(live.shown), `${columns} columns`).toBe(1);
+    }
   });
 
   it("an empty machine gets the friendly empty state, not an install command or a zero count", async () => {

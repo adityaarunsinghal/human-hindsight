@@ -4,6 +4,7 @@
 │ Your history
 │ Claude Code  12 sessions · 3 projects
 │ 12 sessions across 3 projects
+│ No session text leaves this machine until you approve a plan.
 ────────────────────────────────────────────────────────────────────────
 
 → next: npx human-hindsight gui --home=<ROOT>/home --tab=preferences

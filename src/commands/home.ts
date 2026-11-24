@@ -285,6 +285,7 @@ function updatedChoices(
 }
 
 const TAGLINE = "Understand how you work. Codify your taste.";
+export const PRIVACY_LINE = "No session text leaves this machine until you approve a plan.";
 const toolNames = Object.values(SOURCE_PRODUCT_NAMES);
 const toolList = `${toolNames.slice(0, -1).join(", ")}, or ${toolNames.at(-1)}`;
 
@@ -423,6 +424,9 @@ function homeLines(
   } else if (rows.some((row) => row.history?.exact === false)) {
     prose("Checking Kiro Crew runs in Kiro CLI history.", s.dim);
   }
+  // The one promise this screen makes. Session text is sent only by a model
+  // step, and every model step shows its plan and waits for approval first.
+  prose(PRIVACY_LINE);
   const fix = homeFix(snapshot, args);
   if (fix) {
     prose(fix.says);

@@ -4,6 +4,7 @@
 │ Your history
 │ Claude Code  12 sessions · 3 projects
 │ 12 sessions across 3 projects
+│ No session text leaves this machine until you approve a plan.
 │ Export works now. To reflect on your history, install a coding CLI:
   npm install -g @anthropic-ai/claude-code && claude auth login
 ────────────────────────────────────────────────────────────────────────
