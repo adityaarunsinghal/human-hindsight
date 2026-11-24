@@ -42,6 +42,7 @@ function tmpHome(): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   while (tmpDirs.length) {
     const d = tmpDirs.pop();
     if (d) fs.rmSync(d, { recursive: true, force: true });
@@ -904,6 +905,9 @@ describe("preferences tells one story on two streams", () => {
   });
 
   it("Ctrl-C at the consolidation question exits 130 after one line and calls nothing", async () => {
+    vi.stubEnv("CI", "");
+    vi.stubEnv("TERM", "xterm-256color");
+    vi.stubEnv("HUMAN_HINDSIGHT_PLAIN", "");
     const home = threeCandidates();
     for (const preference of readObservedPreferences(home)) {
       savePreferenceReview(home, preference, { status: "accepted" });
@@ -927,6 +931,7 @@ describe("preferences tells one story on two streams", () => {
     for (let i = 0; i < 50 && !output.text().includes("Start?"); i++) {
       await new Promise((resolve) => setImmediate(resolve));
     }
+    expect(output.text()).toContain("Start?");
     host.emit("SIGINT");
     expect(await done).toBe(130);
     expect(calls).toBe(0);
