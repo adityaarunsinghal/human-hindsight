@@ -458,6 +458,8 @@ export function createGuiHandler(opts: {
   liveBatches?: LiveBatches;
   /** Called once, on the first request that carried the session key. */
   onAuthenticated?: () => void;
+  /** Stop this view: the next reflection on this machine takes its port over. */
+  onShutdown?: () => void;
 }): (req: GuiRequest) => Promise<GuiResponse> {
   const { home, token } = opts;
   let authenticated = false;
@@ -562,6 +564,11 @@ export function createGuiHandler(opts: {
             : "Could not save this review. Choose Refresh and check the selected scope.",
         );
       }
+    }
+    // Only the view a reflection started takes this, and only with its session key.
+    if (route === "/api/shutdown" && req.method === "POST" && opts.onShutdown) {
+      setImmediate(opts.onShutdown);
+      return reply(204, "");
     }
     if (req.method !== "GET" && !head) {
       return reply(405, "Read-only library.", TEXT_TYPE, { Allow: "GET, HEAD" });
@@ -682,6 +689,8 @@ export async function startGuiServer(opts: {
   liveBatches?: LiveBatches;
   /** Called once, on the first request that carried the session key. */
   onAuthenticated?: () => void;
+  /** Let a later view on this machine ask this one to stop and free its port. */
+  handoff?: boolean;
 }): Promise<GuiServer> {
   const port = opts.port ?? 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
@@ -695,7 +704,9 @@ export async function startGuiServer(opts: {
     hosts,
     onAuthenticated: opts.onAuthenticated,
     liveBatches: opts.liveBatches,
+    ...(opts.handoff && { onShutdown: () => stop() }),
   });
+  let stop = () => {};
   const server = http.createServer(
     { requestTimeout: 10_000, headersTimeout: 10_000 },
     (req, res) => {
@@ -732,7 +743,7 @@ export async function startGuiServer(opts: {
   hosts.add(`127.0.0.1:${address.port}`);
   hosts.add(`localhost:${address.port}`);
   let closing: Promise<void> | undefined;
-  return {
+  const gui: GuiServer = {
     server,
     url: `http://127.0.0.1:${address.port}`,
     token,
@@ -744,4 +755,6 @@ export async function startGuiServer(opts: {
       return closing;
     },
   };
+  stop = () => void gui.close().catch(() => {});
+  return gui;
 }

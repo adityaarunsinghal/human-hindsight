@@ -115,6 +115,30 @@ describe("every /api route needs the session key in its header", () => {
     );
   });
 
+  it.each([
+    ...hostileOrigins.map(([label, headers]) => [label, { headers }] as const),
+    ...keys.map(([label, key]) => [label, { token: key.token }] as const),
+  ])("the route that stops a reflection's view refuses %s", async (_label, o) => {
+    let stopped = 0;
+    const live = guiHarness(home.dir, gui.token);
+    live.handle = createGuiHandler({
+      home: home.dir,
+      token: gui.token,
+      hosts: new Set([live.host]),
+      onShutdown: () => stopped++,
+    });
+    const token = "token" in o ? (resolve(o.token) as string | false) : undefined;
+    const headers = "headers" in o ? (o.headers as Record<string, string>) : undefined;
+    expectRefused(await request(live, "/api/shutdown", { method: "POST", headers, token }));
+    await new Promise((done) => setImmediate(done));
+    expect(stopped).toBe(0);
+    // With the key it stops, once; a view opened by the gui command has no such route.
+    expect((await request(live, "/api/shutdown", { method: "POST" })).status).toBe(204);
+    await new Promise((done) => setImmediate(done));
+    expect(stopped).toBe(1);
+    expect((await request(gui, "/api/shutdown", { method: "POST" })).status).toBe(405);
+  });
+
   it("serves every /api route with the key, and an unknown /api route is then 404", async () => {
     for (const route of API_GET_ROUTES) {
       expect((await request(gui, route)).status, route).toBe(200);

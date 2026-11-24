@@ -235,8 +235,8 @@ export function libraryLinkLines(o: {
   arriving: string[];
   width: number;
   color: boolean;
-  /** On a remote machine: the command that forwards the port. */
-  forward?: string;
+  /** On a remote machine: what to do on the laptop so the address opens there. */
+  forward?: string[];
 }): string[] {
   const s = palette(o.color);
   const link = o.color ? `\u001b]8;;${o.address}\u001b\\${o.address}\u001b]8;;\u001b\\` : o.address;
@@ -251,7 +251,11 @@ export function libraryLinkLines(o: {
     `  ${link}`,
     ...wrapText(note, o.width, { indent: "  " }).map(s.dim),
   ];
-  if (o.forward) lines.push("  On your laptop, forward the port first:", `    ${o.forward}`);
+  if (o.forward)
+    lines.push(
+      "  This is a remote machine. On your laptop, forward the port first:",
+      ...o.forward.map((line) => `    ${line}`),
+    );
   return lines;
 }
 
@@ -302,7 +306,7 @@ export interface DistillDeps {
    * returns at once.
    */
   sleep?(ms: number): Promise<void>;
-  startLibrary?: (home: string) => Promise<LiveLibrary>;
+  startLibrary?: (home: string, o?: { port?: number }) => Promise<LiveLibrary>;
   /** Legacy test seam; distill no longer performs clipboard writes. */
   clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
@@ -1200,8 +1204,13 @@ async function distillSelectedSessions(opts: {
       if (!preferences && !readLibrary(home).length) return;
       try {
         const { startLiveLibrary } = await import("../gui/live-library.js");
-        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(home);
-        const { isRemoteSession, forwardCommand } = await import("./gui.js");
+        const { isRemoteSession, forwardingLines, REMOTE_PORT } = await import("./gui.js");
+        const remote = isRemoteSession(process.env);
+        // A remote machine keeps one port, so a port forwarded once keeps working.
+        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(
+          home,
+          remote ? { port: REMOTE_PORT } : {},
+        );
         const { address } = liveLibrary;
         write();
         for (const line of libraryLinkLines({
@@ -1210,9 +1219,7 @@ async function distillSelectedSessions(opts: {
           arriving,
           width,
           color: canColor({ output: out }),
-          forward: isRemoteSession(process.env)
-            ? forwardCommand(Number(new URL(address).port), process.env)
-            : undefined,
+          forward: remote ? forwardingLines(Number(new URL(address).port), process.env) : undefined,
         }))
           write(line);
       } catch {
