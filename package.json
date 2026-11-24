@@ -1,6 +1,6 @@
 {
   "name": "human-hindsight",
-  "version": "2.1.2",
+  "version": "2.1.3",
   "description": "Reflect on your coding-agent history to see how you work. Find preferences in your own words, reuse prompts, and suggest specialist agents when you need them.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",

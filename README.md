@@ -45,11 +45,15 @@ Use Node.js 22.13 or later in the 22 line, or 23.4 or later, on macOS, Linux or 
 npx human-hindsight export              # Save your messages as local Markdown
 npx human-hindsight reflect --dry-run   # Preview the plan for exported sessions
 npx human-hindsight reflect --recent 25 # Reflect on the 25 latest eligible sessions
+npx human-hindsight reflect --quality fast # Lighter model and low reasoning effort for a quicker run
+npx human-hindsight reflect --no-prompts --subagents # Read, summarize, then suggest subagents in one run
 npx human-hindsight gui                 # Open the local browser view
 npx human-hindsight preferences         # Print the preferences you have accepted
 npx human-hindsight suggest-subagents   # Plan and generate specialist roles
 npx human-hindsight doctor              # Check for history and a signed-in coding tool
 ```
+
+Fast, Balanced and Best, choosing a coding CLI, remote machines, long sessions and troubleshooting are covered in the [guide](https://github.com/adityaarunsinghal/human-hindsight/blob/main/GUIDE.md).
 
 Upgrading from 2.0? Your library, hand-edited prompts, ratings and preference reviews carry forward. `distill` is an alias for `reflect`. Existing `cc-hindsight` scripts and data folders still work. [Release notes](https://github.com/adityaarunsinghal/human-hindsight/blob/main/CHANGELOG.md)
 
