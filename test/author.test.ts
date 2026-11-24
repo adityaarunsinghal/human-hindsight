@@ -3,9 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { librarySentence, type ManifestEntry } from "../src/commands/distill.js";
+import { fittedLine, librarySentence, type ManifestEntry } from "../src/commands/distill.js";
 import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
 import { oneshotHash } from "../src/core/library.js";
+import { fitWholeMembers } from "../src/distill/author.js";
 import {
   createRetryHandlers,
   prepareTaskRecoveryInputs,
@@ -982,7 +983,18 @@ describe("runAuthorStage", () => {
     expect(fs.existsSync(path.join(home, "library", "auth-feature-work"))).toBe(false);
   });
 
-  it("blocks an over-budget task under --truncate=never without a runner call", async () => {
+  it("fittedLine names the prompts written from part of their group", () => {
+    expect(fittedLine([])).toBeUndefined();
+    expect(fittedLine([{ slug: "extract-report", used: 9, sessions: 15 }])).toBe(
+      "1 prompt was written from the whole sessions that fit the size limit per call, and the other sessions of its group were left out: extract-report (9 of 15 sessions). To use every session, each shortened to fit, run:",
+    );
+    const many = Array.from({ length: 5 }, (_, i) => ({ slug: `g${i}`, used: 1, sessions: 2 }));
+    expect(fittedLine(many)).toContain(
+      "5 prompts were written from the whole sessions that fit the size limit per call, and the other sessions of their groups were left out: g0 (1 of 2 sessions), g1 (1 of 2 sessions), g2 (1 of 2 sessions), and 2 more.",
+    );
+  });
+
+  it("blocks a group of which no whole session fits, under --truncate=never, without a runner call", async () => {
     const home = tmpHome();
     fs.writeFileSync(path.join(home, "exports", "a.md"), "z".repeat(5_000));
     let called = false;
@@ -1005,6 +1017,72 @@ describe("runAuthorStage", () => {
     expect(result.failed[0]?.export).toBe("auth-feature-work");
     expect(result.failed[0]?.error).toContain("exceeds the input budget");
     expect(fs.existsSync(path.join(home, "library", "auth-feature-work"))).toBe(false);
+  });
+
+  it("writes a group too long for one call from the whole sessions that fit, and records the rest", async () => {
+    const home = tmpHome();
+    // 400 + 500 + 400 characters against 1,000: two whole sessions fit.
+    fs.writeFileSync(path.join(home, "exports", "a.md"), "A".repeat(400));
+    fs.writeFileSync(path.join(home, "exports", "b.md"), "B".repeat(500));
+    fs.writeFileSync(path.join(home, "exports", "c.md"), "C".repeat(400));
+    let prompt = "";
+    const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
+      prompt = opts.prompt;
+      return AUTHORED;
+    }) as RunnerFn;
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      entries: ["a.md", "b.md", "c.md"].map(entry),
+      tasks: [task("auth-feature-work", ["a.md", "b.md", "c.md"])],
+      // The session that ended with a result goes first; an abandoned one last.
+      digests: {
+        "a.md": digest("abandoned"),
+        "b.md": digest("completed"),
+        "c.md": digest("partial"),
+      },
+      runner,
+      budget: 1_000,
+      truncate: "never",
+    });
+    expect(result.failed).toEqual([]);
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    expect(result.fitted).toEqual([{ slug: "auth-feature-work", used: 2, sessions: 3 }]);
+    // Whole sessions only: b and c entire, nothing of a, and no cut marker.
+    expect(prompt).toContain("B".repeat(500));
+    expect(prompt).toContain("C".repeat(400));
+    expect(prompt).not.toContain("AAAA");
+    const sources = JSON.parse(
+      fs.readFileSync(path.join(home, "library", "auth-feature-work", "sources.json"), "utf8"),
+    );
+    expect(sources.members).toEqual(["a.md", "b.md", "c.md"]);
+    expect(sources.truncations).toEqual([{ export: "a.md", block: 0, dropped_chars: 400 }]);
+    expect(sources.input_coverage).toBeCloseTo(900 / 1300, 5);
+  });
+
+  it("fitWholeMembers prefers sessions with a result, then the newest, and never cuts one", () => {
+    const member = (exportName: string, size: number, outcome: Digest["outcome"]) => ({
+      exportName,
+      content: "x".repeat(size),
+      digest: digest(outcome),
+    });
+    const members = [
+      member("a.md", 600, "unclear"),
+      member("b.md", 600, "completed"),
+      member("c.md", 300, "partial"),
+      member("d.md", 300, "partial"),
+    ];
+    const newest = (name: string) => ({ "c.md": "2026-01-01", "d.md": "2026-02-01" })[name] ?? "";
+    const fitted = fitWholeMembers(members, 1_000, newest);
+    // b first (completed), then the newer partial d; c and a no longer fit.
+    expect(fitted.kept.map((m) => m.exportName)).toEqual(["b.md", "d.md"]);
+    expect(fitted.left.map((m) => m.exportName)).toEqual(["a.md", "c.md"]);
+    // A session too long by itself is passed over for one that fits.
+    const mixed = fitWholeMembers(
+      [member("big.md", 5_000, "completed"), member("small.md", 100, "abandoned")],
+      1_000,
+    );
+    expect(mixed.kept.map((m) => m.exportName)).toEqual(["small.md"]);
+    expect(fitWholeMembers([member("big.md", 5_000, "completed")], 1_000).kept).toEqual([]);
   });
 
   it("cuts an over-budget task under --truncate=extreme and authors it", async () => {

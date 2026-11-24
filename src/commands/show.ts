@@ -44,7 +44,7 @@ export default defineCommand({
     const separator = ` ${glyph("·", "|")} `;
     const coverage =
       typeof s.input_coverage === "number" && s.input_coverage < 1
-        ? `${separator}${(s.input_coverage * 100).toFixed(1)}% of sources (truncated)`
+        ? `${separator}written from ${(s.input_coverage * 100).toFixed(1)}% of the source text`
         : "";
     console.log(bold(`# ${title ?? s.title ?? slug}`));
     const facts =

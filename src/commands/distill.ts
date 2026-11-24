@@ -680,6 +680,23 @@ const SAVED_AT = {
 } as const;
 
 /**
+ * Prompts written from part of their group: the whole group did not fit one
+ * call, so the whole sessions that fit were used. The command that follows
+ * the sentence uses every session, each shortened to fit.
+ */
+export function fittedLine(
+  fitted: { slug: string; used: number; sessions: number }[],
+): string | undefined {
+  if (!fitted.length) return undefined;
+  const one = fitted.length === 1;
+  const named = fitted
+    .slice(0, 3)
+    .map((task) => `${task.slug} (${task.used} of ${counted(task.sessions, "session")})`);
+  const more = fitted.length > named.length ? `, and ${fitted.length - named.length} more` : "";
+  return `${counted(fitted.length, "prompt was", "prompts were")} written from the whole sessions that fit the size limit per call, and the other sessions of ${one ? "its group" : "their groups"} were left out: ${named.join(", ")}${more}. To use every session, each shortened to fit, run:`;
+}
+
+/**
  * Prompts the person edited, which this run kept as they are: one plain line,
  * or undefined when there are none. More than three names are listed only
  * under `--verbose`.
@@ -1433,6 +1450,17 @@ async function distillSelectedSessions(opts: {
         const keptNames = authorResult.kept.map((task) => task.slug);
         const kept = keptLine(keptNames, args.verbose === true);
         if (kept) say(kept);
+        const fitted = fittedLine(authorResult.fitted);
+        if (fitted)
+          command(
+            fitted,
+            nextCommandText("reflect", {
+              ...args,
+              home,
+              quality: session.quality,
+              truncate: "extreme",
+            }),
+          );
 
         if (authorResult.failed.length > 0) {
           write();

@@ -95,6 +95,11 @@ export interface AuthorStageResult {
   unverified: string[];
   /** Prompts the person edited by hand, kept as they are (`--force` replaces them). */
   kept: SkippedTask[];
+  /**
+   * Prompts this run wrote from part of their group: the whole group did not
+   * fit one call, so the whole sessions that fit were used and the rest left out.
+   */
+  fitted: { slug: string; used: number; sessions: number }[];
   failed: StageFailure[];
   notAttempted: string[];
 }
@@ -376,12 +381,28 @@ function prepareAuthorRequest(
   const originals = members.map((member) => ({ ...member }));
   const total = members.reduce((sum, member) => sum + member.content.length, 0);
   let inputCoverage = 1;
+  let included = members;
   const truncations: { export: string; block: number; dropped_chars: number }[] = [];
-  if (total > settings.budget) {
-    if (settings.truncate === "never")
+  if (total > settings.budget && settings.truncate === "never") {
+    // Nothing is shortened. The prompt is written from the whole sessions
+    // that fit, and each session left out is recorded with the prompt.
+    const lastActive = (name: string) =>
+      logical.entries.find((entry) => entry.export === name)?.last_ts ?? "";
+    const fitted = fitWholeMembers(members, settings.budget, lastActive);
+    if (!fitted.kept.length)
       throw new Error(
         `The group's input is ${total.toLocaleString("en-US")} characters, over the size limit per call of ${settings.budget.toLocaleString("en-US")}`,
       );
+    included = fitted.kept;
+    for (const member of fitted.left)
+      truncations.push({
+        export: member.exportName,
+        block: 0,
+        dropped_chars: member.content.length,
+      });
+    const left = fitted.left.reduce((sum, member) => sum + member.content.length, 0);
+    inputCoverage = total ? (total - left) / total : 1;
+  } else if (total > settings.budget) {
     const shares = allocateMemberBudgets(
       members.map((member) => member.content.length),
       settings.budget,
@@ -396,7 +417,7 @@ function prepareAuthorRequest(
     }
     inputCoverage = total ? (total - dropped) / total : 1;
   }
-  const prompt = buildAuthorPrompt({ task: logical.task, members });
+  const prompt = buildAuthorPrompt({ task: logical.task, members: included });
   const lineage = stageLineage({
     stage: "author",
     promptVersion: AUTHOR_PROMPT_VERSION,
@@ -411,6 +432,40 @@ function prepareAuthorRequest(
     },
   });
   return { prompt, inputCoverage, truncations, lineage };
+}
+
+/** Sessions that ended with a result come first when a group does not fit one call. */
+const OUTCOME_RANK: Record<string, number> = { completed: 0, partial: 1, unclear: 2, abandoned: 3 };
+
+/**
+ * The whole sessions of a group that fit one call. Nothing is cut: a session
+ * is used entire or left out. Sessions that reached a result come first, then
+ * the newest; one that does not fit is passed over for a smaller one.
+ */
+export function fitWholeMembers<M extends { exportName: string; content: string; digest?: Digest }>(
+  members: M[],
+  budget: number,
+  lastActive: (exportName: string) => string = () => "",
+): { kept: M[]; left: M[] } {
+  const rank = (member: M) => OUTCOME_RANK[member.digest?.outcome ?? "unclear"] ?? 2;
+  const order = [...members].sort(
+    (a, b) =>
+      rank(a) - rank(b) ||
+      lastActive(b.exportName).localeCompare(lastActive(a.exportName)) ||
+      a.exportName.localeCompare(b.exportName),
+  );
+  const kept = new Set<M>();
+  let used = 0;
+  for (const member of order) {
+    if (used + member.content.length > budget) continue;
+    kept.add(member);
+    used += member.content.length;
+  }
+  // The order the prompt has always listed its sessions in.
+  return {
+    kept: members.filter((member) => kept.has(member)),
+    left: members.filter((member) => !kept.has(member)),
+  };
 }
 
 function authorResult(
@@ -830,6 +885,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     skipped: [],
     unverified: [],
     kept: [],
+    fitted: [],
     failed: [],
     notAttempted: [],
   };
@@ -911,7 +967,13 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
             `member preference evidence is stale (${stale.exportName}); run ${reflect} to refresh the session summary`,
           );
         const total = members.reduce((sum, member) => sum + member.content.length, 0);
-        if (total > settings.budget && settings.truncate === "never") {
+        // A group too long for one call is written from the whole sessions
+        // that fit. It is blocked only when no single session of it fits.
+        const fits =
+          total <= settings.budget ||
+          settings.truncate !== "never" ||
+          fitWholeMembers(members, settings.budget).kept.length > 0;
+        if (!fits) {
           // Recorded with the full prompt it would have sent; a blocked unit is never dispatched.
           store.block(
             queue(buildAuthorPrompt({ task, members })).id,
@@ -931,6 +993,17 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           return;
         }
         const request = prepareAuthorRequest(opts.home, logical, settings, contents);
+        // Written from part of its group: said after the stage, by name.
+        const leftOut =
+          settings.truncate === "never" ? (request.truncations as unknown[]).length : 0;
+        const noteFitted = () => {
+          if (leftOut)
+            result.fitted.push({
+              slug: id,
+              used: members.length - leftOut,
+              sessions: members.length,
+            });
+        };
         const unchanged =
           existing?.generation === opts.generation &&
           current !== null &&
@@ -976,6 +1049,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
               ),
             );
             result.authored.push(id);
+            noteFitted();
             if (!isOutcomeVerified(saved.value.sources)) result.unverified.push(id);
             reporter.item(
               id,
@@ -1033,6 +1107,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           executeOperation({ store, operation, settings, request, run, handler, publish: true }),
         )) as AuthorResult;
         result.authored.push(id);
+        noteFitted();
         const verified = isOutcomeVerified(value.sources);
         if (!verified) result.unverified.push(id);
         breaker.success();
