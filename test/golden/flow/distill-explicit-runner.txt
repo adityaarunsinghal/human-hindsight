@@ -1,0 +1,29 @@
+Human Hindsight is fully open source (https://github.com/adityaarunsinghal/human-hindsight). Export stays local; model steps use your own coding tool and its configured provider. Human Hindsight has no session-upload service.
+
+Checking which coding CLIs are ready.
+
+  Distill plan
+
+  Reads    3 sessions, about 1 prompt, plus your working preferences.
+  Runs on  Codex (codex 9.9.9)
+           This run stays on this CLI.
+  Calls    3 session reads, about 1 grouping call, and about 1 writing call.
+           Then the working preference summaries. Their count is known after
+           reading sessions.
+           Up to 10 at a time. Grouping runs one call at a time.
+  Models   1 Balanced (selected): gpt-5.6-terra for session reads, gpt-5.6-sol
+           for grouping and writing
+           2 Best: gpt-5.6-sol for session reads, gpt-5.6-astra for grouping and
+           writing
+  Sending  The selected session text and your working preferences go to your
+           provider through Codex, the same way your normal sessions do, and the
+           calls use your tokens there. Before the first model call, two tiny
+           requests, one for each model, check that Codex is ready; when
+           everything is reused, nothing is sent.
+
+Sessions that would be read:
+  • s00 (3 messages)
+  • s01 (3 messages)
+  • s02 (3 messages)
+
+Nothing was sent. Run the same command without --dry-run to start.

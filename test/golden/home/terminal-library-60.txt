@@ -1,0 +1,24 @@
+│ Human Hindsight 2.0.0
+│
+│ Your coding tools on this machine
+│ Tool         History on disk  Command         Sign-in
+│ Claude Code  12 sessions      ✓ claude 1.2.3  ✓ ready
+│ No history or command found for Codex, Kiro CLI, or
+│ OpenCode.
+│ 12 sessions across 3 projects. Newest activity: today.
+│
+│ Private by default
+│ No session text leaves this machine until you approve a
+│ plan.
+│ This screen only asks your coding tools for their version
+│ and sign-in status.
+
+What would you like to do?
+› 1  Open my library (recommended)  in your browser
+  2  Generate my subagents  roles from your preferences
+  3  Refresh my library  nothing new since your last export
+  4  Export my prompts only  Markdown, no model calls
+  5  Show every project  the full inventory
+  6  Check my setup  versions, sign-in, fixes
+  q  Quit
+  Use arrow keys and Enter, or press a number.

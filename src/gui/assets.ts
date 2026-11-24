@@ -1,4 +1,11 @@
+import { SUBAGENT_TARGETS } from "../core/subagents-paths.js";
 import { iconMarkup } from "./icons.js";
+import { exportLabel, targetChoiceLabel } from "./subagents-view.js";
+
+// Fixed labels only: every target already includes the shared knowledge files.
+const exportOptions = (["all", ...SUBAGENT_TARGETS] as const)
+  .map((target) => `<option value="${target}">${targetChoiceLabel(target)}</option>`)
+  .join("");
 
 /** Static assets ship inside the CLI bundle: no frontend build, CDN, or asset directory. */
 export const GUI_HTML = `<!doctype html>
@@ -13,36 +20,22 @@ export const GUI_HTML = `<!doctype html>
   <script src="/app.js" defer></script>
 </head>
 <body>
+  <a id="skip-link" class="skip-link" href="#viewer">Skip to content</a>
   <header class="topbar">
     <div class="brand">Human Hindsight <span> / Library</span></div>
     <div class="top-tips">
-      <aside id="tips" class="tips" aria-label="Quick tips" hidden>
-        <div class="tip-strip">
-          <button id="tip-toggle" class="tip-toggle" type="button" aria-expanded="false" aria-controls="tip-details">
-            ${iconMarkup("bulb")}
-            <span id="tip-face" class="tip-face"><span id="tip-title"></span><span id="tip-number" class="tip-number"></span></span>
-            <span class="tip-chevron">${iconMarkup("chevron-down")}</span>
-          </button>
-          <button id="next-tip" class="icon-button" type="button" aria-label="Next tip" title="Next tip">${iconMarkup("arrow-right")}</button>
-        </div>
-        <div id="tip-details" class="tip-details" hidden>
+      <span id="refresh-status" class="muted refresh-status" role="status"></span>
+      <button id="refresh" class="tip-toggle" type="button" title="Read the library again">Refresh</button>
+      <details id="tips" class="tips">
+        <summary id="tip-toggle" class="tip-toggle">${iconMarkup("info")} Help</summary>
+        <div id="tip-details" class="tip-details">
+          <label for="tip-topic">Help topic</label>
+          <select id="tip-topic"></select>
           <p id="tip-text"></p>
-          <div id="tip-command-row" class="tip-command-row" hidden>
-            <code id="tip-command" tabindex="0"></code>
-            <button id="copy-tip" class="icon-button" type="button" aria-label="Copy command" title="Copy command">${iconMarkup("copy")}</button>
-          </div>
-          <div class="tip-footer">
-            <span id="tip-cost" class="muted" hidden></span>
-            <div class="tip-controls">
-              <button id="previous-tip" class="icon-button" type="button" aria-label="Previous tip" title="Previous tip">${iconMarkup("arrow-left")}</button>
-              <button id="pause-tips" class="icon-button" type="button" aria-label="Pause tips" title="Pause tips" aria-pressed="false">${iconMarkup("pause")}</button>
-              <button id="hide-tips" class="icon-button" type="button" aria-label="Hide tips" title="Hide tips">${iconMarkup("close")}</button>
-            </div>
-          </div>
-          <span id="tip-status" class="muted" role="status"></span>
+          <div id="tip-command"></div>
+          <span id="tip-cost" class="muted" hidden></span>
         </div>
-      </aside>
-      <button id="show-tips" class="icon-button" type="button" aria-label="Show tips" title="Show tips" aria-controls="tips" hidden>${iconMarkup("bulb")}</button>
+      </details>
     </div>
   </header>
   <main class="workspace">
@@ -50,6 +43,7 @@ export const GUI_HTML = `<!doctype html>
       <div class="library-tabs" role="tablist" aria-label="Library">
         <button id="prompts-tab" type="button" role="tab" aria-selected="true" aria-controls="browse-panel">Prompts</button>
         <button id="preferences-tab" type="button" role="tab" aria-selected="false" aria-controls="browse-panel" tabindex="-1">Preferences</button>
+        <button id="subagents-tab" type="button" role="tab" aria-selected="false" aria-controls="browse-panel" tabindex="-1" aria-label="Suggested subagents" title="Suggested subagents">Subagents</button>
       </div>
       <div id="browse-panel" class="browse-panel" role="tabpanel" aria-labelledby="prompts-tab">
       <div class="filters">
@@ -58,16 +52,18 @@ export const GUI_HTML = `<!doctype html>
           <input id="search" type="search" placeholder="Search prompts…" autocomplete="off" spellcheck="false">
           <kbd aria-hidden="true">/</kbd>
         </div>
-        <div class="filter-row">
+        <div id="filter-row" class="filter-row">
           <div id="domain-picker" class="domain-picker">
             <button id="domain" class="domain-trigger" type="button" aria-label="Filter by domain" aria-expanded="false" aria-controls="domain-menu"><span id="domain-label">All domains</span></button>
             <div id="domain-menu" class="domain-menu" hidden></div>
           </div>
-          <select id="sort" aria-label="Sort prompts"><option value="newest">Newest first</option><option value="title">Title A–Z</option></select>
+          <select id="sort" aria-label="Sort prompts"><option value="newest">Newest first</option><option value="title">Title A to Z</option></select>
         </div>
         <div id="count" class="muted" role="status">Loading library…</div>
+        <div id="count-note" class="muted" hidden></div>
         <div class="preference-views">
-          <button id="all-preferences" type="button" aria-current="false" hidden disabled>All</button>
+          <button id="overview-button" type="button" aria-current="true">Overview</button>
+          <button id="all-preferences" type="button" aria-current="false" hidden disabled>Candidates</button>
           <button id="accepted-preferences" type="button" aria-current="false" hidden>Accepted</button>
           <button id="saved-preferences" type="button" aria-current="false" hidden>Saved</button>
         </div>
@@ -78,7 +74,7 @@ export const GUI_HTML = `<!doctype html>
     </aside>
     <section id="viewer" class="viewer" aria-label="Selected prompt">
       <div class="reader">
-        <div class="reader-toolbar">
+        <div id="reader-toolbar" class="reader-toolbar">
           <div id="view-mode" class="view-mode" role="group" aria-label="Prompt view">
             <button id="preview-mode" class="icon-button" type="button" aria-label="Preview" title="Preview" aria-pressed="true">${iconMarkup("eye")}</button>
             <button id="source-mode" class="icon-button" type="button" aria-label="Markdown" title="Markdown" aria-pressed="false">${iconMarkup("code")}</button>
@@ -86,30 +82,35 @@ export const GUI_HTML = `<!doctype html>
           <span id="word-count" class="muted"></span>
           <button id="copy" class="icon-button primary" type="button" aria-label="Copy prompt" title="Copy prompt" disabled>${iconMarkup("copy")}</button>
         </div>
+        <div id="subagents-toolbar" class="reader-toolbar subagents-toolbar" hidden>
+          <label id="export-target-label" for="export-target" class="sr-only">Coding tool to download for</label>
+          <select id="export-target" title="All targets">${exportOptions}</select>
+          <button id="export-all" class="button-link primary" type="button" title="Download every target as one zip">${exportLabel("all")}</button>
+          <span id="export-status" class="muted export-status" role="status"></span>
+        </div>
+        <div id="subagents-banner" class="subagents-banner" hidden></div>
         <h1 id="title" tabindex="-1">Your prompt library</h1>
         <div id="metadata" class="metadata"></div>
+        <div id="earlier-notice" class="notice earlier-notice" hidden></div>
         <p id="consolidation-notice" class="notice" hidden></p>
-        <p id="notice" class="notice" role="status" hidden></p>
+        <div id="notice" class="notice" role="status" hidden></div>
+        <div id="guide" hidden></div>
+        <div id="subagents-view" class="subagents" hidden></div>
         <section id="instruction-settings" class="review-settings" aria-label="Instruction scope" hidden>
           <label for="instruction-project">Instructions for</label>
           <select id="instruction-project"><option value="">Global preferences only</option></select>
           <p class="muted">Includes accepted global preferences.</p>
         </section>
-        <div id="empty" class="empty" hidden>
-          <h2 id="empty-title">No prompts yet</h2>
-          <p id="empty-text">Build your library in the terminal, then reload this page.</p>
-          <code id="empty-command">human-hindsight</code>
-        </div>
         <article id="body" class="markdown" tabindex="0" aria-label="Rendered prompt"></article>
         <textarea id="source" aria-label="Original Markdown" readonly spellcheck="false" hidden></textarea>
         <section id="preference-review" class="preference-review" aria-label="Review preference" hidden>
           <div class="review-bar">
             <p id="review-summary" class="muted"></p>
             <div class="review-actions">
-              <button id="accept-preference" class="icon-button" type="button" aria-label="Accept preference" title="Accept preference">${iconMarkup("check")}</button>
-              <button id="edit-preference" class="icon-button" type="button" aria-label="Edit wording or scope" title="Edit wording or scope">${iconMarkup("edit")}</button>
-              <button id="dismiss-preference" class="icon-button" type="button" aria-label="Dismiss preference" title="Dismiss preference">${iconMarkup("close")}</button>
-              <button id="reset-preference" class="icon-button" type="button" aria-label="Review again" title="Review again" hidden>${iconMarkup("undo")}</button>
+              <button id="accept-preference" class="icon-button labeled" type="button" title="Accept">${iconMarkup("check")}<span>Accept</span></button>
+              <button id="edit-preference" class="icon-button labeled" type="button" title="Edit wording or scope">${iconMarkup("edit")}<span>Edit</span></button>
+              <button id="dismiss-preference" class="icon-button labeled" type="button" title="Dismiss">${iconMarkup("close")}<span>Dismiss</span></button>
+              <button id="reset-preference" class="icon-button labeled" type="button" title="Review again" hidden>${iconMarkup("undo")}<span>Review again</span></button>
             </div>
           </div>
           <div id="preference-editor" hidden>
@@ -168,29 +169,27 @@ input:focus-visible, select:focus-visible, button:focus-visible, article:focus-v
 .topbar { height: 53px; flex-shrink: 0; padding: 0 24px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); gap: 32px; position: relative; z-index: 4; }
 .brand { font-weight: 650; letter-spacing: -.35px; white-space: nowrap; }
 .brand span { font-weight: 400; color: var(--muted); margin-left: 8px; }
-.top-tips { display: flex; justify-content: flex-end; flex: 1; min-width: 0; max-width: 480px; }
-.tips { position: relative; width: 100%; min-width: 0; }
-.tip-strip { display: flex; align-items: center; height: 34px; background: var(--soft); border-radius: 6px; }
-.tip-toggle { display: flex; flex: 1; align-items: center; gap: 9px; min-width: 0; height: 34px; padding: 0 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); text-align: left; overflow: hidden; perspective: 500px; }
+.top-tips { display: flex; justify-content: flex-end; }
+.tips { position: relative; }
+#refresh.tip-toggle { border: 0; background: transparent; }
+.top-tips { align-items: center; gap: 4px; min-width: 0; }
+.refresh-status { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.skip-link { position: absolute; left: 12px; top: -60px; z-index: 10; padding: 8px 12px; background: var(--ink); color: var(--paper); border-radius: 2px; text-decoration: none; }
+.skip-link:focus { top: 8px; outline: 2px solid var(--accent); outline-offset: 2px; }
+.export-status { flex: 1 0 100%; text-align: right; font-size: 11px; }
+.export-status:empty { flex-basis: 0; }
+.tip-toggle { display: flex; align-items: center; gap: 6px; padding: 6px 8px; color: var(--muted); cursor: pointer; list-style: none; font-size: 12px; }
+.tip-toggle::-webkit-details-marker { display: none; }
 .tip-toggle > .icon { width: 15px; height: 15px; }
-.tip-face { display: flex; align-items: center; flex: 1; min-width: 0; gap: 12px; transform-origin: center center; }
-#tip-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
-.tip-number { flex: none; font-size: 10px; opacity: .65; }
-.tip-chevron .icon { width: 12px; height: 12px; }
-.tip-toggle[aria-expanded="true"] .tip-chevron { transform: rotate(180deg); }
-.tip-details { position: absolute; top: 42px; right: 0; width: min(430px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--paper); box-shadow: 0 10px 32px #00000012; }
-.tip-details p { margin: 0 0 12px; font-size: 12px; }
-.tip-details a { color: inherit; text-underline-offset: 3px; }
-.tip-command-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 4px; background: var(--soft); }
-.tip-command-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 11px; padding: 5px 0; }
-.tip-footer { display: flex; justify-content: space-between; gap: 8px; align-items: center; margin-top: 10px; }
-.tip-footer .muted { font-size: 10px; }
-.tip-controls { display: flex; align-items: center; margin-left: auto; gap: 2px; }
-#tip-status:empty { display: none; }
+.tip-details { position: absolute; top: 38px; right: 0; width: min(390px, calc(100vw - 32px)); padding: 16px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); box-shadow: 0 10px 32px #00000012; }
+.tip-details p { margin: 12px 0; font-size: 12px; }
+.tip-details a, .overview a, .agreement a { color: inherit; text-underline-offset: 3px; }
+.command-row { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 4px; background: var(--soft); }
+.command-row code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-size: 11px; padding: 5px 0; }
 .workspace { display: grid; grid-template-columns: 300px minmax(0, 1fr); flex: 1; min-height: 0; }
 .sidebar { background: var(--soft); border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; min-width: 0; }
 .library-tabs { display: flex; gap: 4px; padding: 12px 16px 0; }
-.library-tabs button { flex: 1; min-width: 0; padding: 8px 6px; background: transparent; border-color: transparent; font-size: 12px; }
+.library-tabs button { flex: 1 1 auto; min-width: 0; padding: 8px 6px; background: transparent; border-color: transparent; font-size: 12px; }
 .library-tabs button[aria-selected="true"] { background: var(--paper); border-color: var(--line); font-weight: 600; }
 .browse-panel { display: flex; flex-direction: column; min-height: 0; }
 .filters { padding: 12px 16px 8px; }
@@ -213,7 +212,8 @@ select, .domain-trigger {
   background-color: var(--paper); background-image: var(--chevron);
   background-repeat: no-repeat; background-size: 12px 8px; background-position: right 12px center;
 }
-#sort { flex: 0 0 112px; width: 112px; }
+/* The page sets the width from the longest label of the current list. */
+#sort { flex: 0 0 auto; width: calc(13ch + 47px); max-width: 60%; }
 .domain-picker { position: relative; flex: 1; min-width: 0; }
 .domain-trigger { display: block; text-align: left; overflow: hidden; }
 .domain-trigger:hover { background-color: var(--soft); }
@@ -238,7 +238,8 @@ select, .domain-trigger {
 .domain-context-more[open] > summary .domain-chevron { transform: rotate(90deg); }
 .domain-context-tree { position: absolute; top: calc(100% + 8px); left: 0; z-index: 2; width: 340px; max-width: 100%; max-height: 380px; overflow: auto; padding: 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); box-shadow: 0 8px 28px #00000012; }
 .muted { color: var(--muted); font-size: 12px; }
-#count { font-size: 10px; }
+#count, #count-note { font-size: 10px; }
+.earlier-notice { margin: 0 0 20px; }
 #list { overflow-y: auto; min-height: 0; padding: 0 8px 14px; }
 .entry { width: 100%; display: block; text-align: left; padding: 10px 10px; border: 0; border-left: 2px solid transparent; border-radius: 0; background: transparent; margin-bottom: 2px; }
 .entry:hover { background: var(--paper); }
@@ -250,6 +251,16 @@ select, .domain-trigger {
 .entry-state { flex: none; width: 6px; height: 6px; border-radius: 50%; border: 1px solid currentColor; }
 .entry-state[data-state="accepted"] { background: currentColor; }
 .entry-state[data-state="dismissed"] { border-radius: 0; height: 1px; }
+.entry-state-label { flex: none; }
+.list-section { margin: 14px 10px 2px; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.list-section:first-child { margin-top: 2px; }
+.list-heading { display: flex; justify-content: space-between; gap: 8px; margin: 8px 10px 2px; font-size: 11px; font-weight: 600; overflow-wrap: anywhere; }
+.list-heading-count { color: var(--muted); font-weight: 400; }
+.list-one-time { margin: 14px 0 0; border-top: 1px solid var(--line); }
+.list-one-time > summary { position: relative; padding: 10px 10px 8px 30px; cursor: pointer; list-style: none; font-size: 11px; color: var(--muted); }
+.list-one-time > summary::-webkit-details-marker { display: none; }
+.list-one-time > summary::before { content: ""; position: absolute; left: 10px; top: 15px; width: 12px; height: 8px; background-image: var(--chevron); background-size: 12px 8px; transform: rotate(-90deg); }
+.list-one-time[open] > summary::before { transform: rotate(0deg); }
 .list-empty { color: var(--muted); text-align: center; padding: 32px 16px; font-size: 13px; }
 .list-empty button { display: block; margin: 12px auto; font-size: 12px; }
 .viewer { overflow-y: auto; min-width: 0; }
@@ -258,6 +269,7 @@ select, .domain-trigger {
 .view-mode { display: inline-flex; gap: 2px; }
 .view-mode button[aria-pressed="true"] { color: var(--ink); background: var(--soft); }
 #word-count { flex: 1; text-align: right; font-size: 11px; white-space: nowrap; }
+.button-link { display: inline-flex; align-items: center; flex: none; padding: 6px 12px; border: 1px solid var(--line); border-radius: 2px; color: var(--ink); background: var(--paper); font-size: 11px; line-height: 1.6; text-decoration: none; white-space: nowrap; }
 .primary { margin-left: auto; background: var(--ink); border-color: var(--ink); color: var(--paper); }
 .primary:hover:not(:disabled) { color: var(--ink); background: var(--paper); }
 h1 { font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.7px; margin: 0 0 12px; overflow-wrap: anywhere; }
@@ -276,8 +288,10 @@ h1 { font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.7px;
 .preference-review { margin: 16px 0 0; }
 .review-bar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 4px 12px; padding: 8px 0; }
 #review-summary { margin: 0; font-size: 11px; }
-.review-actions { display: flex; gap: 4px; align-items: center; }
+.review-actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .review-actions button { font-size: 11px; }
+.icon-button.labeled { width: auto; gap: 6px; padding: 0 10px; color: var(--ink); border-color: var(--line); }
+.icon-button.labeled .icon { width: 15px; height: 15px; }
 .review-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin: 0 0 22px; }
 .review-settings label { margin: 0; }
 .review-settings p { flex-basis: 100%; font-size: 11px; margin: 0; }
@@ -331,9 +345,72 @@ h1 { font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.7px;
 .evidence { margin-top: 8px; padding-left: 12px; border-left: 2px solid var(--line); color: var(--muted); font-size: 12px; }
 .evidence > :last-child { margin-bottom: 0; }
 .notice { color: var(--ink); background: var(--soft); border: 1px solid var(--line); padding: 12px 15px; }
-.empty { margin-top: 64px; color: var(--muted); }
-.empty h2 { font-size: 19px; font-weight: 500; color: var(--ink); margin-bottom: 8px; }
-.empty code { display: inline-block; font-size: 13px; padding: 9px 12px; background: var(--soft); border: 1px solid var(--line); border-radius: 5px; margin-top: 8px; color: var(--ink); }
+.subagents-toolbar { gap: 8px; flex-wrap: wrap; }
+.subagents-toolbar select { flex: 0 1 180px; width: 180px; margin-left: auto; }
+.subagents-toolbar .button-link { margin-left: 0; }
+.subagents-banner .notice { margin: 0 0 18px; }
+.notice > p { margin: 0 0 8px; }
+.notice > p:last-child { margin: 0; }
+.notice .command-row { background: var(--paper); }
+.command-status { display: block; margin-top: 4px; font-size: 11px; }
+.command-status:empty { display: none; }
+.overview, .agreement { max-width: 680px; overflow-wrap: anywhere; }
+.overview h2, .agreement h2 { font-size: 14px; margin: 24px 0 10px; }
+.highlights { list-style: none; margin: 0; padding: 0; }
+.highlights li { border-top: 1px solid var(--line); padding: 12px 0; }
+.highlights li > span { display: block; margin-top: 3px; font-size: 11px; }
+.overview .overview-action { display: inline-block; padding: 6px 12px; background: var(--ink); border: 1px solid var(--ink); color: var(--paper); text-decoration: none; border-radius: 2px; }
+.overview .overview-action:hover { background: var(--paper); color: var(--ink); }
+.overview-summary { font-size: 14px; }
+.overview:has(.agreement-groups) { max-width: 900px; }
+.overview-copy .copy-status { margin-top: 8px; }
+.copy-fallback { display: block; width: 100%; min-height: 160px; margin-top: 10px; padding: 10px; color: var(--ink); background: var(--soft); border: 1px solid var(--line); font: 12px/1.6 var(--mono); }
+.overview-export { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.overview-export select { flex: 0 1 200px; width: 200px; }
+.overview-export .export-status { flex: 1 0 100%; text-align: left; }
+.agreement-section h2 { margin-top: 32px; }
+.section-note { margin: -4px 0 4px; font-size: 11px; }
+.agreement-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 4px 32px; }
+.agreement-group h3 { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin: 14px 0 4px; font-size: 13px; }
+.agreement-group .group-count { font-size: 11px; font-weight: 400; white-space: nowrap; }
+.agreement-group .highlights li { padding: 8px 0; }
+.group-toggle { margin: 4px 0 8px; padding: 4px 8px; font-size: 11px; color: var(--muted); }
+.one-time-notes { margin-top: 32px; }
+.one-time-notes > div { padding: 4px 14px 10px; border-top: 1px solid var(--line); }
+.lesson-changed { color: var(--ink); background: var(--soft); border-left: 2px solid var(--ink); padding: 4px 10px; font-size: 12px; }
+.agreement dt { color: var(--muted); font-size: 11px; }
+.agreement dd { margin: 0 0 12px; }
+.agreement-evidence > div { padding: 10px 14px; border-top: 1px solid var(--line); }
+.agreement-evidence > div > :first-child { margin-top: 0; }
+.agreement-evidence > div > :last-child { margin-bottom: 0; }
+.subagents-intro { color: var(--muted); max-width: 640px; }
+.subagents-intro p { margin: 0 0 14px; }
+.subagent-detail { font-size: 13px; line-height: 1.7; overflow-wrap: anywhere; }
+.role-fields { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0 0 1.3em; }
+.role-fields dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+.role-fields dd { margin: 0; }
+.markdown .chips { display: flex; flex-wrap: wrap; gap: 6px; list-style: none; padding: 0; }
+.markdown .chips li { margin: 0; padding: 1px 9px; border: 1px solid var(--line); border-radius: 999px; font-size: 11px; }
+.lesson { padding: 12px 0 2px; border-top: 1px solid var(--line); }
+.markdown h2 + .lesson { border-top: 0; padding-top: 0; }
+.markdown .lesson h3 { margin: 0 0 .5em; font-size: 1em; }
+.markdown .lesson p { margin: 0 0 .7em; }
+.lesson-source a { color: inherit; text-underline-offset: 3px; }
+.markdown h3.target-heading { margin: 1.4em 0 .5em; color: var(--muted); font-size: 11px; font-weight: 500; text-transform: uppercase; letter-spacing: .06em; }
+.file-block { border: 1px solid var(--line); margin: 0 0 12px; }
+.file-block > summary { position: relative; padding: 8px 12px 8px 32px; cursor: pointer; list-style: none; font-size: 12px; }
+.file-block > summary::-webkit-details-marker { display: none; }
+.file-block > summary::before { content: ""; position: absolute; left: 12px; top: 14px; width: 12px; height: 8px; background-image: var(--chevron); background-size: 12px 8px; transform: rotate(-90deg); }
+.file-block[open] > summary::before { transform: rotate(0deg); }
+.file-toolbar { display: flex; align-items: center; gap: 8px; padding: 2px 6px; border-top: 1px solid var(--line); }
+.file-toolbar > .icon-button { margin-left: auto; }
+.file-status { font-size: 11px; }
+.file-preview { padding: 14px 16px 2px; border-top: 1px solid var(--line); }
+.markdown .file-source { margin: 0; border: 0; border-top: 1px solid var(--line); }
+.markdown .frontmatter { margin-bottom: 1em; }
+.markdown .set-aside { list-style: none; padding: 0; }
+.markdown .set-aside li { padding-left: 0; margin: 0 0 12px; }
+.entry-divider { margin-top: 8px; border-top: 1px solid var(--line); }
 @media (prefers-color-scheme: dark) {
   :root {
     --paper: #0d0d0d; --ink: #eee; --muted: #aaa; --line: #333; --accent: #eee; --soft: #171717;
@@ -344,14 +421,14 @@ h1 { font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.7px;
   body { height: auto; min-height: 100dvh; }
   .topbar { height: 53px; padding: 0 16px; gap: 14px; }
   .brand span { display: none; }
-  .tip-number { display: none; }
-  .tip-toggle { gap: 6px; }
-  .tip-details { right: 0; }
   .workspace { grid-template-columns: 1fr; }
   .sidebar { border-right: 0; border-bottom: 1px solid var(--line); }
   .library-tabs { padding: 12px 16px 0; }
   .filters { padding: 10px 16px 8px; }
-  #list { max-height: 210px; padding: 0 8px 8px; }
+  /* A fade at the bottom shows that the short list scrolls, instead of a row cut through its text. */
+  #list { max-height: 40vh; padding: 0 8px 8px; -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to bottom, #000 calc(100% - 28px), transparent); padding-bottom: 28px; }
+  .refresh-status { font-size: 10px; }
+  .refresh-words { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
   .entry { padding: 8px 10px; }
   .reader { padding: 18px 22px 40px; }
   .reader-toolbar { margin-bottom: 20px; }
@@ -361,10 +438,6 @@ h1 { font-size: 23px; line-height: 1.4; font-weight: 600; letter-spacing: -.7px;
 }
 @media (max-width: 420px) {
   .brand { font-size: 11px; }
-  .tip-toggle > .icon { display: none; }
-  .tip-toggle { padding-right: 4px; }
-  .tip-chevron { display: none; }
-  .tip-strip > .icon-button { width: 28px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; }

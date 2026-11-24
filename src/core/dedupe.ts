@@ -1,9 +1,9 @@
 /**
- * core/dedupe.ts — rule R8: global cross-file dedupe.
+ * core/dedupe.ts: rule R8: global cross-file dedupe.
  *
  * THE SINGLE SOURCE OF TRUTH for the deduped corpus. Export, anaphora, and the
  * outcome-evidence pass all consume ONE `buildCorpus` pass, so the per-session
- * message `index` aligns exactly with the exported markdown — no O(N²)
+ * message `index` aligns exactly with the exported markdown, with no O(N²)
  * re-export per alignment.
  *
  * Why dedupe at all: Claude Code copies prior history into a NEW session file
@@ -11,8 +11,14 @@
  * multiple transcripts. Attributing each key to the earliest session keeps
  * evidence from being double-counted. Timestamp keying is deliberate:
  * fork-copies carry IDENTICAL timestamps (they are literal copies), whereas a
- * human deliberately re-sending the same text does so at a NEW timestamp — so
- * a different key — and therefore survives in both sessions.
+ * human deliberately re-sending the same text does so at a NEW timestamp, so
+ * a different key, and therefore survives in both sessions.
+ *
+ * A message WITHOUT a timestamp carries no evidence of being a copy: two "yes"
+ * replies with no timestamp are two replies. Such a message is deduplicated
+ * only against the same position in the same session (its key holds the
+ * session's source path and the message's position), so it never collides
+ * across sessions or with a later identical reply.
  *
  * Pure module: no filesystem access. Input is the ALREADY-EXTRACTED result of
  * each session (a SessionSource turned raw lines into messages+drops upstream);
@@ -22,11 +28,11 @@
 
 import type { Drop, ExtractedMessage, ExtractResult } from "../sources/types.js";
 
-/** One session's input to the corpus builder — pre-extracted by its source. */
+/** One session's input to the corpus builder, pre-extracted by its source. */
 export interface DedupeInput {
   /** Project short name (from discover). Copied through to the corpus. */
   project: string;
-  /** Session id — the transcript basename without `.jsonl`. */
+  /** Session id: the transcript basename without `.jsonl`. */
   sessionId: string;
   /** Absolute (or resolved) path to the source file, for provenance. */
   sourcePath: string;
@@ -79,8 +85,18 @@ export interface Corpus {
  * Dedupe key: `(timestamp, text)`. The NUL separator can never occur inside a
  * timestamp, so it unambiguously delimits the two fields.
  */
-function dedupeKey(message: ExtractedMessage): string {
-  return `${message.timestamp}\u0000${message.text}`;
+export function dedupeKey(timestamp: string, text: string): string {
+  return `${timestamp}\u0000${text}`;
+}
+
+/**
+ * The corpus key of one extracted message: {@link dedupeKey} when it has a
+ * timestamp; otherwise a key private to its session and position (see the
+ * module comment). The leading NUL keeps the two kinds apart.
+ */
+function corpusKey(sourcePath: string, position: number, timestamp: string, text: string): string {
+  if (timestamp !== "") return dedupeKey(timestamp, text);
+  return `\u0000${sourcePath}\u0000${position}\u0000${text}`;
 }
 
 /**
@@ -110,7 +126,7 @@ function earliestTimestamp(messages: ExtractedMessage[]): string {
  * permutation of the input (asserted in test/dedupe.test.ts).
  *
  * A zero-surviving-message session stays in the corpus with an empty
- * `messages` array — export skips it naturally (rule R9), and the anaphora and
+ * `messages` array: export skips it naturally (rule R9), and the anaphora and
  * outcome passes still record that it was seen.
  */
 export function buildCorpus(input: DedupeInput[]): Corpus {
@@ -139,8 +155,8 @@ export function buildCorpus(input: DedupeInput[]): Corpus {
     const messages: DedupedMessage[] = [];
     let dedupeDropped = 0;
 
-    for (const message of result.messages) {
-      const key = dedupeKey(message);
+    for (const [position, message] of result.messages.entries()) {
+      const key = corpusKey(session.sourcePath, position, message.timestamp, message.text);
       if (seen.has(key)) {
         // Earlier session already owns this exact (timestamp, text): fork copy.
         dedupeDropped++;

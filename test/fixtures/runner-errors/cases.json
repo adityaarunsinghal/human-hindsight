@@ -1,0 +1,101 @@
+[
+  {
+    "id": "claude-unknown-model",
+    "runner": "claude",
+    "version": "2.1.330",
+    "expected": "model-unavailable",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"terminal_reason\":\"api_error\",\"api_error_status\":400,\"duration_api_ms\":0,\"total_cost_usd\":0,\"modelUsage\":{},\"session_id\":\"00000000-0000-4000-8000-000000000001\",\"result\":\"API Error (example-missing-model): 400 The provided model identifier is invalid.. Run --model to pick a different model.\"}",
+    "stderr": "[claude-code:unrecognized_model] {\"model\":\"example-missing-model\",\"query_source\":\"sdk\"}\n"
+  },
+  {
+    "id": "claude-signed-out",
+    "runner": "claude",
+    "version": "2.1.330",
+    "expected": "sign-in",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"terminal_reason\":\"api_error\",\"api_error_status\":null,\"total_cost_usd\":0,\"modelUsage\":{},\"session_id\":\"00000000-0000-4000-8000-000000000002\",\"result\":\"Not logged in · Please run /login\"}",
+    "stderr": ""
+  },
+  {
+    "id": "claude-signed-out-cloud-credentials",
+    "runner": "claude",
+    "version": "2.1.330",
+    "expected": "sign-in",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"terminal_reason\":\"api_error\",\"api_error_status\":null,\"total_cost_usd\":0,\"modelUsage\":{},\"session_id\":\"00000000-0000-4000-8000-000000000003\",\"result\":\"API Error: Could not load AWS credentials · Could not load credentials from any providers. Check or refresh your AWS credentials and try again.\"}",
+    "stderr": ""
+  },
+  {
+    "id": "claude-model-refused-by-provider",
+    "runner": "claude",
+    "version": "2.1.330",
+    "expected": "model-unavailable",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":true,\"terminal_reason\":\"api_error\",\"api_error_status\":400,\"total_cost_usd\":0,\"modelUsage\":{},\"session_id\":\"00000000-0000-4000-8000-000000000009\",\"result\":\"API Error: 400 data retention mode 'none' is not available for this model\"}",
+    "stderr": ""
+  },
+  {
+    "id": "codex-unknown-model",
+    "runner": "codex",
+    "version": "0.171.0",
+    "expected": "model-unavailable",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"00000000-0000-4000-8000-000000000004\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"error\",\"message\":\"Model metadata for `example-missing-model` not found. Defaulting to fallback metadata; this can degrade performance and cause issues.\"}}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"The provided model identifier is invalid.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\\"code\\\":\\\"validation_error\\\"}}\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"{\\\"error\\\":{\\\"message\\\":\\\"The provided model identifier is invalid.\\\",\\\"type\\\":\\\"invalid_request_error\\\",\\\"param\\\":null,\\\"code\\\":\\\"validation_error\\\"}}\"}}\n",
+    "stderr": "Reading additional input from stdin...\n"
+  },
+  {
+    "id": "codex-signed-out",
+    "runner": "codex",
+    "version": "0.171.0",
+    "expected": "sign-in",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"thread.started\",\"thread_id\":\"00000000-0000-4000-8000-000000000005\"}\n{\"type\":\"turn.started\"}\n{\"type\":\"error\",\"message\":\"Reconnecting... 5/5 (unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses)\"}\n{\"type\":\"error\",\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses\"}\n{\"type\":\"turn.failed\",\"error\":{\"message\":\"unexpected status 401 Unauthorized: Missing bearer or basic authentication in header, url: https://api.openai.com/v1/responses\"}}\n",
+    "stderr": "2026-01-01T00:00:00.000000Z ERROR codex_api::endpoint::responses_websocket: failed to connect to Responses WebSocket stage=Unknown\n"
+  },
+  {
+    "id": "kiro-unknown-model",
+    "runner": "kiro",
+    "version": "3.5.0",
+    "expected": "model-unavailable",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"runStarted\",\"data\":{\"payloadSchema\":\"acp\",\"acpProtocolVersion\":1,\"engine\":\"v2\"}}\n{\"type\":\"metadata\",\"data\":{\"sessionId\":\"00000000-0000-4000-8000-000000000006\",\"turnDurationMs\":798,\"reasoning\":{\"support\":\"unavailable\",\"effortLevels\":[]}}}\n{\"type\":\"runError\",\"data\":{\"sessionId\":\"00000000-0000-4000-8000-000000000006\",\"stage\":\"prompt\",\"message\":\"Internal error (code -32603): Encountered an error in the response stream: The model 'example-missing-model' is not available. Please use '/model' to select a different model and try again.\"}}\n",
+    "stderr": ""
+  },
+  {
+    "id": "kiro-signed-out",
+    "runner": "kiro",
+    "version": "3.5.0",
+    "expected": "sign-in",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"runError\",\"data\":{\"sessionId\":null,\"stage\":\"auth\",\"message\":\"Not logged in. Set the KIRO_API_KEY environment variable or run `kiro-cli login` first.\"}}\n",
+    "stderr": "Not logged in. Set the KIRO_API_KEY environment variable or run `kiro-cli login` first.\n"
+  },
+  {
+    "id": "opencode-unknown-model",
+    "runner": "opencode",
+    "version": "1.18.15",
+    "expected": "cli-error",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"error\",\"timestamp\":1767225600000,\"sessionID\":\"ses_example0001\",\"error\":{\"name\":\"UnknownError\",\"data\":{\"message\":\"Unexpected server error. Check server logs for details.\",\"ref\":\"err_example01\"}}}\n",
+    "stderr": ""
+  },
+  {
+    "id": "opencode-signed-out",
+    "runner": "opencode",
+    "version": "1.18.15",
+    "expected": "cli-error",
+    "exitCode": 1,
+    "stdout": "{\"type\":\"error\",\"timestamp\":1767225600000,\"sessionID\":\"ses_example0002\",\"error\":{\"name\":\"UnknownError\",\"data\":{\"message\":\"Unexpected server error. Check server logs for details.\",\"ref\":\"err_example02\"}}}\n",
+    "stderr": ""
+  },
+  {
+    "id": "opencode-database-locked",
+    "runner": "opencode",
+    "version": "1.18.15",
+    "expected": "transient",
+    "exitCode": 1,
+    "stdout": "",
+    "stderr": "\u001b[91m\u001b[1mError: \u001b[0mUnexpected error\n\ndatabase is locked\n"
+  }
+]

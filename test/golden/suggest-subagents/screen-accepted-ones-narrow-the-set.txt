@@ -1,0 +1,20 @@
+  Subagent plan
+
+  Reads    3 working preferences you accepted, of 14 observed.
+  Runs on  Claude Code (claude 9.9.9)
+           Also ready if needed: Codex. If Claude Code stops working during the
+           run, the work moves on and the screen says so.
+  Calls    1 call to summarize preferences, 1 call to choose roles, and 2 to 15
+           calls to write role prompts, one per role.
+           A large set of preferences can need more calls to choose roles.
+           An answer that fails its checks gets one more try. Up to 10 at a
+           time.
+  Models   1 Balanced (selected): fast-model for preference summaries,
+           strong-model for choosing and writing roles
+           2 Best: strong-model for preference summaries, top-model for choosing
+           and writing roles
+  Sending  Your working preferences and the evidence quoted for them go to your
+           provider through Claude Code (or the CLI the run moves to), the same
+           way your normal sessions do, and the calls use your tokens there.
+           Before the first model call, two tiny requests, one for each model,
+           check that Claude Code is ready.

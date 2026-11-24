@@ -1,0 +1,23 @@
+human-hindsight prune
+Remove library entries left behind when sessions were
+regrouped.
+
+Examples
+  human-hindsight prune --dry-run
+    Preview the entries eligible for removal.
+
+  human-hindsight prune
+    Review the list and confirm before anything is removed.
+
+Common options
+  --dry-run  List what would be removed; remove nothing
+  --force    Also remove entries you edited by hand
+
+More help
+  human-hindsight prune --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

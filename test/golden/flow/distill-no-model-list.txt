@@ -1,0 +1,27 @@
+Human Hindsight is fully open source (https://github.com/adityaarunsinghal/human-hindsight). Export stays local; model steps use your own coding tool and its configured provider. Human Hindsight has no session-upload service.
+
+Checking which coding CLIs are ready.
+Asking Kiro CLI which models it offers. This contacts its service; no session text is sent.
+
+  Distill plan
+
+  Reads    3 sessions, about 1 prompt, plus your working preferences.
+  Runs on  Kiro CLI (kiro-cli 9.9.9)
+  Calls    3 session reads, about 1 grouping call, and about 1 writing call.
+           Then the working preference summaries. Their count is known after
+           reading sessions.
+           Up to 10 at a time. Grouping runs one call at a time.
+  Models   This CLI did not list its models, so every step uses its own default
+           model.
+  Sending  The selected session text and your working preferences go to your
+           provider through Kiro CLI, the same way your normal sessions do, and
+           the calls use your tokens there. Before the first model call, one
+           tiny request checks that Kiro CLI is ready; when everything is
+           reused, nothing is sent.
+
+Sessions that would be read:
+  • s00 (3 messages)
+  • s01 (3 messages)
+  • s02 (3 messages)
+
+Nothing was sent. Run the same command without --dry-run to start.

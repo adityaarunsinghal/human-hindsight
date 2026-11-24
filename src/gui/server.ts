@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import fs from "node:fs";
 import http, { type Server } from "node:http";
 import path from "node:path";
@@ -8,7 +8,13 @@ import {
   readConsolidatedPreferences,
 } from "../core/consolidated-preferences.js";
 import { domainPath } from "../core/domains.js";
-import { oneshotHash, parseOneshot, readLibrary } from "../core/library.js";
+import {
+  fromEarlierGrouping,
+  isOutcomeVerified,
+  oneshotHash,
+  parseOneshot,
+  readLibrary,
+} from "../core/library.js";
 import {
   preferenceReview,
   readPreferenceReviews,
@@ -20,7 +26,19 @@ import {
   readObservedPreferences,
   renderPreferencesBlock,
 } from "../core/preferences.js";
+import { readSuggestion, type SuggestionArtifact, SuggestionReadError } from "../core/subagents.js";
+import {
+  renderSubagentTree,
+  SUBAGENT_TARGETS,
+  type SubagentTarget,
+} from "../core/subagents-render.js";
+import { zipStore } from "../core/zip.js";
+import { loadTasks } from "../distill/checkpoints.js";
+import { acquireWriterLock, WriterBusyError } from "../distill/operations.js";
 import { GUI_CSS, GUI_HTML, GUI_JS } from "./assets.js";
+import { readHighlights, savedAgreements } from "./highlights.js";
+import { SESSION_HEADER } from "./session.js";
+import { exportFilename } from "./subagents-view.js";
 
 export interface GuiEntry {
   slug: string;
@@ -32,7 +50,11 @@ export interface GuiEntry {
   confidence: string;
   rating: "up" | "down" | null;
   edited: boolean;
+  /** False when no session behind the prompt reached a result that could be verified. */
+  outcomeVerified: boolean;
   preferenceIds: string[];
+  /** Left behind when sessions were regrouped: kept on disk, removed by `prune`. */
+  earlier: boolean;
 }
 
 export interface GuiPreference {
@@ -77,8 +99,75 @@ export interface GuiSnapshot {
     reviewed: boolean;
   } | null;
   consolidationInvalid: boolean;
-  commands: Record<"preferences" | "consolidate" | "export" | "distill" | "status", string>;
+  /** `start` is the bare command: the guided first run. */
+  /** `gui` reopens this library after a restart. */
+  commands: Record<
+    "start" | "gui" | "preferences" | "consolidate" | "export" | "distill" | "status",
+    string
+  >;
   skipped: number;
+}
+
+/**
+ * The Suggested subagents tab. `files` is `renderSubagentTree(suggestion, { target: "all" })`
+ * as a plain object: the same bytes Export all zips, rendered once on the
+ * server so the browser bundle does not carry a second copy of the renderer.
+ */
+export interface GuiSubagents {
+  suggestion: SuggestionArtifact | null;
+  stale: boolean;
+  error?: string;
+  command: string;
+  files: Record<string, string>;
+}
+
+export type { GuiAgreements } from "./highlights.js";
+
+/** Copyable shell text for this home, never executed by the browser or server. */
+function commandFor(home: string) {
+  const homeArg = `'${path.resolve(home).replaceAll("'", "'\\''")}'`;
+  return (name: string, flags = "") =>
+    `npx human-hindsight@latest ${name ? `${name}${flags} ` : ""}--home ${homeArg}`;
+}
+
+/**
+ * Read the saved suggestion with the same preference and review reads the
+ * Preferences tab uses, so `stale` agrees with what that tab shows. A damaged
+ * file is reported, never treated as absent and never rewritten.
+ */
+function subagentsSnapshot(home: string): GuiSubagents {
+  const command = commandFor(home)("suggest-subagents");
+  try {
+    const saved = readSuggestion(home);
+    if (!saved) return { suggestion: null, stale: false, command, files: {} };
+    return {
+      suggestion: saved.artifact,
+      stale: saved.stale,
+      command,
+      files: Object.fromEntries(renderSubagentTree(saved.artifact, { target: "all" })),
+    };
+  } catch (error) {
+    if (!(error instanceof SuggestionReadError)) throw error;
+    return { suggestion: null, stale: false, error: error.reason, command, files: {} };
+  }
+}
+
+/**
+ * The only accepted query is one `target` from a fixed list; it selects a
+ * renderer option and never names a file. Anything else is refused.
+ */
+function exportTarget(url: string | undefined): SubagentTarget | "all" | null {
+  let query: URLSearchParams;
+  try {
+    query = new URL(url ?? "/", "http://127.0.0.1").searchParams;
+  } catch {
+    return null;
+  }
+  if ([...query.keys()].some((key) => key !== "target") || query.getAll("target").length > 1)
+    return null;
+  const target = query.get("target") ?? "all";
+  if (target === "all") return "all";
+  return SUBAGENT_TARGETS.find((known) => known === target) ?? null;
 }
 
 /** Canonical path separators and case-insensitive identity, preserving readable labels. */
@@ -97,6 +186,7 @@ function normalizedDomains(values: string[]): string[] {
 function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
   const library = readLibrary(home);
   const sources = new Map(library.map((entry) => [entry.slug, entry.sources]));
+  const grouping = loadTasks(home);
   const entries: GuiEntry[] = [];
   let skipped = 0;
   for (const entry of library) {
@@ -104,6 +194,7 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
       const content = fs.readFileSync(entry.oneshotPath, "utf8");
       const { title, body } = parseOneshot(content);
       const source = entry.sources;
+      const edited = Boolean(source.oneshot_hash && source.oneshot_hash !== oneshotHash(content));
       entries.push({
         slug: entry.slug,
         title: title || source.title || entry.slug,
@@ -113,8 +204,10 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
         sessions: source.members.length,
         confidence: source.confidence,
         rating: source.rating ?? null,
-        edited: Boolean(source.oneshot_hash && source.oneshot_hash !== oneshotHash(content)),
+        edited,
+        outcomeVerified: isOutcomeVerified(source),
         preferenceIds: [],
+        earlier: fromEarlierGrouping(entry, grouping, { edited }),
       });
     } catch {
       skipped++;
@@ -206,10 +299,7 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
       artifact.source_hash !==
         (artifact.version === 1 ? legacyFingerprint : preferencesFingerprint(consolidationInputs)),
   );
-  // Commands are copyable shell text, never executed by the browser or server.
-  const homeArg = `'${path.resolve(home).replaceAll("'", "'\\''")}'`;
-  const command = (name: string, flags = "") =>
-    `npx human-hindsight@latest ${name}${flags} --home ${homeArg}`;
+  const command = commandFor(home);
   return {
     entries,
     preferences,
@@ -244,6 +334,8 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
       : null,
     consolidationInvalid: invalid,
     commands: {
+      start: command(""),
+      gui: command("gui"),
       preferences: command("preferences"),
       consolidate: command("preferences", " --consolidate"),
       export: command("export"),
@@ -256,8 +348,267 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
 
 export interface GuiServer {
   server: Server;
+  /** The base address, without the session fragment. */
   url: string;
+  /** The session key every `/api` request must send in {@link SESSION_HEADER}. */
+  token: string;
   close(): Promise<void>;
+}
+
+/** One request as the handler sees it, independent of the HTTP server. */
+export interface GuiRequest {
+  method: string;
+  url: string;
+  headers: Readonly<Record<string, string | string[] | undefined>>;
+  /** The request body, or null when it exceeds the limit. Read only after every check passed. */
+  body(): Promise<string | null>;
+}
+
+export interface GuiResponse {
+  status: number;
+  headers: Record<string, string | number>;
+  /** Empty for HEAD; `Content-Length` still describes the full body. */
+  body: string | Uint8Array;
+}
+
+/** Sent on every response, including refusals. */
+export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
+  "Cache-Control": "no-store",
+  "X-Content-Type-Options": "nosniff",
+  "Referrer-Policy": "no-referrer",
+  "X-DNS-Prefetch-Control": "off",
+  "Cross-Origin-Resource-Policy": "same-origin",
+  "Content-Security-Policy":
+    "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+};
+
+const REVIEW_BODY_LIMIT = 16_384;
+const JSON_TYPE = "application/json; charset=utf-8";
+const TEXT_TYPE = "text/plain; charset=utf-8";
+const ORIGIN_REFUSED = "This library is available only from its local browser address.";
+const SESSION_REFUSED =
+  "This library needs the address printed in your terminal. Open that address again.";
+
+function header(req: GuiRequest, name: string): string | undefined {
+  const value = req.headers[name];
+  return Array.isArray(value) ? value[0] : value;
+}
+
+/** Constant-time comparison, so response timing does not reveal the key. */
+function sameToken(given: string | undefined, token: string): boolean {
+  if (!given) return false;
+  const a = Buffer.from(given);
+  const b = Buffer.from(token);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+/**
+ * The whole request policy, in one place and without a socket:
+ * 1. Host, Origin, and `sec-fetch-site` checks on every route (DNS rebinding
+ *    and cross-site requests);
+ * 2. the session key on every `/api` route, from the header only;
+ * 3. one same-origin JSON POST for preference reviews, everything else GET or HEAD;
+ * 4. a fixed route table, never a URL-to-filesystem mapping.
+ */
+export function createGuiHandler(opts: {
+  home: string;
+  token: string;
+  hosts: ReadonlySet<string>;
+  /** Called once, on the first request that carried the session key. */
+  onAuthenticated?: () => void;
+}): (req: GuiRequest) => Promise<GuiResponse> {
+  const { home, token } = opts;
+  let authenticated = false;
+  return async (req) => {
+    const head = req.method === "HEAD";
+    const reply = (
+      status: number,
+      body: string | Uint8Array,
+      type = TEXT_TYPE,
+      extra: Record<string, string | number> = {},
+    ): GuiResponse => ({
+      status,
+      headers: {
+        ...SECURITY_HEADERS,
+        "Content-Type": type,
+        "Content-Length": typeof body === "string" ? Buffer.byteLength(body) : body.byteLength,
+        ...extra,
+      },
+      body: head ? "" : body,
+    });
+    const json = (value: unknown) => reply(200, JSON.stringify(value), JSON_TYPE);
+    const host = header(req, "host") ?? "";
+    const origin = header(req, "origin");
+    const route = req.url.split("?")[0] ?? "";
+    // `gui` opens the browser on a local redirect file (the key stays off
+    // process arguments), and browsers mark a navigation from a file: address
+    // as cross-site. A top-level load of the page shell is served anyway: it
+    // is what typing the address does, and the shell holds no library data.
+    const pageLoad =
+      route === "/" &&
+      (req.method === "GET" || head) &&
+      header(req, "sec-fetch-mode") === "navigate" &&
+      header(req, "sec-fetch-dest") === "document";
+    // Loopback binding alone does not stop DNS rebinding or cross-site requests.
+    // Never grant CORS access or accept a Host supplied by an unrelated website.
+    if (
+      !opts.hosts.has(host) ||
+      (origin && origin !== `http://${host}`) ||
+      (header(req, "sec-fetch-site") === "cross-site" && !pageLoad)
+    ) {
+      return reply(403, ORIGIN_REFUSED);
+    }
+    if (route === "/api" || route.startsWith("/api/")) {
+      if (!sameToken(header(req, SESSION_HEADER), token)) return reply(403, SESSION_REFUSED);
+      if (!authenticated) {
+        authenticated = true;
+        opts.onAuthenticated?.();
+      }
+    }
+    if (route === "/api/preferences/review" && req.method === "POST") {
+      if (
+        origin !== `http://${host}` ||
+        header(req, "content-type")?.split(";")[0]?.trim() !== "application/json"
+      ) {
+        return reply(403, "Preference reviews require this library's browser session.");
+      }
+      let body: string | null;
+      try {
+        body = await req.body();
+      } catch {
+        return reply(400, "Could not read the preference review.");
+      }
+      if (body === null) return reply(413, "Preference review is too large.");
+      try {
+        const update = ReviewRequestSchema.parse(JSON.parse(body));
+        const preference = readObservedPreferences(home).find(
+          (candidate) => preferenceId(candidate) === update.id,
+        );
+        if (!preference) {
+          return reply(
+            404,
+            "This preference is no longer available. Choose Refresh to load the current library.",
+          );
+        }
+        if (preferenceReview(home, preference).revision !== update.revision) {
+          return reply(
+            409,
+            "This preference changed. Choose Refresh and review its current evidence.",
+          );
+        }
+        // A review changes the library, so it takes the writer lock every
+        // other writer takes. While a command holds it, nothing is saved and
+        // the reply names that command.
+        let writer: ReturnType<typeof acquireWriterLock>;
+        try {
+          writer = acquireWriterLock(home, "gui");
+        } catch (error) {
+          if (error instanceof WriterBusyError) return reply(423, error.message);
+          throw error;
+        }
+        try {
+          savePreferenceReview(home, preference, update, update.revision);
+        } finally {
+          writer.release();
+        }
+        return json(librarySnapshot(home, token));
+      } catch (error) {
+        return reply(
+          400,
+          error instanceof z.ZodError || error instanceof SyntaxError
+            ? "Invalid preference review."
+            : "Could not save this review. Choose Refresh and check the selected scope.",
+        );
+      }
+    }
+    if (req.method !== "GET" && !head) {
+      return reply(405, "Read-only library.", TEXT_TYPE, { Allow: "GET, HEAD" });
+    }
+    const failed = (message: string) => reply(500, JSON.stringify({ error: message }), JSON_TYPE);
+    switch (route) {
+      case "/":
+        return reply(200, GUI_HTML, "text/html; charset=utf-8");
+      case "/app.css":
+        return reply(200, GUI_CSS, "text/css; charset=utf-8");
+      case "/app.js":
+        return reply(200, GUI_JS, "text/javascript; charset=utf-8");
+      case "/api/library":
+        try {
+          return json(librarySnapshot(home, token));
+        } catch {
+          return failed("Could not read the library.");
+        }
+      case "/api/highlights":
+        try {
+          return json(readHighlights(home));
+        } catch {
+          return failed("Could not read the library highlights.");
+        }
+      case "/api/preferences/generalized":
+        try {
+          return json(savedAgreements(home));
+        } catch {
+          return failed("Could not read the saved working agreements.");
+        }
+      case "/api/subagents":
+        try {
+          return json(subagentsSnapshot(home));
+        } catch {
+          return failed("Could not read the suggested subagents.");
+        }
+      case "/api/subagents/export.zip": {
+        // Built in memory from the saved suggestion; nothing is written.
+        const target = exportTarget(req.url);
+        if (!target) {
+          return reply(
+            400,
+            `Unknown export target. Use one of: all, ${SUBAGENT_TARGETS.join(", ")}.`,
+          );
+        }
+        let saved: ReturnType<typeof readSuggestion>;
+        try {
+          saved = readSuggestion(home);
+        } catch (error) {
+          return reply(
+            500,
+            error instanceof SuggestionReadError
+              ? error.message
+              : "Could not read the suggested subagents.",
+          );
+        }
+        if (!saved) {
+          return reply(
+            404,
+            "No suggested subagents yet. Run suggest-subagents, then choose Refresh.",
+          );
+        }
+        const { artifact } = saved;
+        const zip = zipStore(renderSubagentTree(artifact, { target }), {
+          mtime: new Date(artifact.generated_at),
+        });
+        return reply(200, zip, "application/zip", {
+          "Content-Disposition": `attachment; filename="${exportFilename(artifact.generated_at, target)}"`,
+        });
+      }
+      default:
+        return reply(404, "Not found.");
+    }
+  };
+}
+
+/** The whole body as text, or null once it passes `limit` bytes (the rest is drained). */
+async function readLimitedBody(
+  stream: AsyncIterable<Buffer | string>,
+  limit: number,
+): Promise<string | null> {
+  const chunks: Buffer[] = [];
+  let bytes = 0;
+  for await (const chunk of stream) {
+    const buffer = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
+    bytes += buffer.byteLength;
+    if (bytes <= limit) chunks.push(buffer);
+  }
+  return bytes > limit ? null : Buffer.concat(chunks).toString("utf8");
 }
 
 const ReviewRequestSchema = z
@@ -271,131 +622,48 @@ const ReviewRequestSchema = z
   })
   .strict();
 
-/** Fixed library routes and one authenticated, local preference-review action. */
-export async function startGuiServer(opts: { home: string; port?: number }): Promise<GuiServer> {
+/** A loopback server around {@link createGuiHandler}. */
+export async function startGuiServer(opts: {
+  home: string;
+  port?: number;
+  token?: string;
+  /** Called once, on the first request that carried the session key. */
+  onAuthenticated?: () => void;
+}): Promise<GuiServer> {
   const port = opts.port ?? 0;
   if (!Number.isInteger(port) || port < 0 || port > 65535) {
     throw new Error("--port must be an integer between 0 and 65535 (0 chooses an available port).");
   }
   const hosts = new Set<string>();
-  const reviewToken = randomBytes(32).toString("hex");
+  const token = opts.token ?? randomBytes(32).toString("hex");
+  const handle = createGuiHandler({
+    home: opts.home,
+    token,
+    hosts,
+    onAuthenticated: opts.onAuthenticated,
+  });
   const server = http.createServer(
     { requestTimeout: 10_000, headersTimeout: 10_000 },
     (req, res) => {
-      res.setHeader("Cache-Control", "no-store");
-      res.setHeader("X-Content-Type-Options", "nosniff");
-      res.setHeader("Referrer-Policy", "no-referrer");
-      res.setHeader("X-DNS-Prefetch-Control", "off");
-      res.setHeader("Cross-Origin-Resource-Policy", "same-origin");
-      res.setHeader(
-        "Content-Security-Policy",
-        "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
-      );
-      const send = (status: number, text: string, type = "text/plain; charset=utf-8") => {
-        res.writeHead(status, { "Content-Type": type, "Content-Length": Buffer.byteLength(text) });
-        res.end(req.method === "HEAD" ? undefined : text);
-      };
-      // Loopback binding alone does not stop DNS rebinding or cross-site requests.
-      // Never grant CORS access or accept a Host supplied by an unrelated website.
-      if (
-        !hosts.has(req.headers.host ?? "") ||
-        (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) ||
-        req.headers["sec-fetch-site"] === "cross-site"
-      ) {
-        send(403, "This library is available only from its local browser address.");
-        return;
-      }
-      const route = req.url?.split("?")[0];
-      if (route === "/api/preferences/review" && req.method === "POST") {
-        if (
-          req.headers.origin !== `http://${req.headers.host}` ||
-          req.headers["x-hindsight-token"] !== reviewToken ||
-          req.headers["content-type"]?.split(";")[0]?.trim() !== "application/json"
-        ) {
-          send(403, "Preference reviews require this library's browser session.");
-          return;
-        }
-        let body = "";
-        let bytes = 0;
-        let rejected = false;
-        req.setEncoding("utf8");
-        req.on("data", (chunk: string) => {
-          bytes += Buffer.byteLength(chunk);
-          if (bytes > 16_384) {
-            if (!rejected) send(413, "Preference review is too large.");
-            rejected = true;
-            body = "";
-          } else if (!rejected) body += chunk;
+      let body: Promise<string | null> | undefined;
+      handle({
+        method: req.method ?? "GET",
+        url: req.url ?? "/",
+        headers: req.headers,
+        body: () => {
+          body ??= readLimitedBody(req, REVIEW_BODY_LIMIT);
+          return body;
+        },
+      })
+        .then((response) => {
+          res.writeHead(response.status, response.headers);
+          res.end(response.body);
+        })
+        .catch(() => {
+          if (!res.headersSent)
+            res.writeHead(500, { ...SECURITY_HEADERS, "Content-Type": TEXT_TYPE });
+          res.end("The library could not answer this request.");
         });
-        req.on("end", () => {
-          if (rejected) return;
-          try {
-            const update = ReviewRequestSchema.parse(JSON.parse(body));
-            const preference = readObservedPreferences(opts.home).find(
-              (candidate) => preferenceId(candidate) === update.id,
-            );
-            if (!preference) {
-              send(404, "This preference is no longer available. Refresh the library.");
-              return;
-            }
-            if (preferenceReview(opts.home, preference).revision !== update.revision) {
-              send(409, "This preference changed. Refresh and review its current evidence.");
-              return;
-            }
-            savePreferenceReview(opts.home, preference, update, update.revision);
-            send(
-              200,
-              JSON.stringify(librarySnapshot(opts.home, reviewToken)),
-              "application/json; charset=utf-8",
-            );
-          } catch (error) {
-            send(
-              400,
-              error instanceof z.ZodError || error instanceof SyntaxError
-                ? "Invalid preference review."
-                : "Could not save this review. Refresh and check the selected scope.",
-            );
-          }
-        });
-        req.on("error", () => {
-          if (!res.writableEnded) send(400, "Could not read the preference review.");
-        });
-        return;
-      }
-      if (req.method !== "GET" && req.method !== "HEAD") {
-        res.setHeader("Allow", "GET, HEAD");
-        send(405, "Read-only library.");
-        return;
-      }
-      // A fixed route table, never a URL-to-filesystem mapping.
-      switch (route) {
-        case "/":
-          send(200, GUI_HTML, "text/html; charset=utf-8");
-          break;
-        case "/app.css":
-          send(200, GUI_CSS, "text/css; charset=utf-8");
-          break;
-        case "/app.js":
-          send(200, GUI_JS, "text/javascript; charset=utf-8");
-          break;
-        case "/api/library":
-          try {
-            send(
-              200,
-              JSON.stringify(librarySnapshot(opts.home, reviewToken)),
-              "application/json; charset=utf-8",
-            );
-          } catch {
-            send(
-              500,
-              JSON.stringify({ error: "Could not read the library." }),
-              "application/json; charset=utf-8",
-            );
-          }
-          break;
-        default:
-          send(404, "Not found.");
-      }
     },
   );
   await new Promise<void>((resolve, reject) => {
@@ -413,6 +681,7 @@ export async function startGuiServer(opts: { home: string; port?: number }): Pro
   return {
     server,
     url: `http://127.0.0.1:${address.port}`,
+    token,
     close() {
       closing ??= new Promise<void>((resolve, reject) => {
         server.close((err) => (err ? reject(err) : resolve()));

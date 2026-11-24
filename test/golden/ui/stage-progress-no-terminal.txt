@@ -1,0 +1,5 @@
+Reading sessions  0/25
+Reading sessions  10/25 · 20s · about 30s left
+failed: session-13
+Reading sessions  20/25 · 1 failed · 40s · about 10s left
+Reading sessions  25/25 · 1 failed · 50s

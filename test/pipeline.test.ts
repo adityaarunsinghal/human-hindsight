@@ -3,14 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../src/claude/prompts/digest.js";
-import type { RunClaudeOptions } from "../src/claude/runner.js";
-import {
-  type Digest,
-  DigestResponseSchema,
-  type PreferenceCandidate,
-} from "../src/claude/schemas.js";
 import type { ManifestEntry } from "../src/commands/distill.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
 import {
   clearCheckpoints,
   countReusableDigests,
@@ -20,6 +14,16 @@ import {
   runDigestStage,
   saveDigests,
 } from "../src/distill/pipeline.js";
+import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../src/distill/prompts/digest.js";
+import {
+  type Digest,
+  DigestResponseSchema,
+  type PreferenceCandidate,
+} from "../src/distill/schemas.js";
+import type { RunClaudeOptions } from "../src/runners/claude.js";
+
+// Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
+setFileWriter(unflushedWriter);
 
 // --- helpers ---------------------------------------------------------------
 
@@ -148,6 +152,8 @@ describe("runDigestStage", () => {
       entries: [entry("a.md"), entry("b.md")],
       runner,
       output: sink(),
+      // Call order matters here: one in flight, so the second call sees the first save.
+      concurrency: 1,
     });
 
     expect(result.completed).toBe(2);
@@ -169,7 +175,7 @@ describe("runDigestStage", () => {
     const runner: RunnerFn = (async () => {
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 10));
+      await new Promise((r) => setImmediate(r));
       inFlight--;
       return DIGEST;
     }) as RunnerFn;
@@ -188,28 +194,42 @@ describe("runDigestStage", () => {
     expect(Object.keys(loadDigests(home)?.digests ?? {}).sort()).toEqual(names);
   });
 
-  it("stage default stays sequential (concurrency omitted → 1 in flight)", async () => {
+  it("stage default runs up to 10 at a time (concurrency omitted)", async () => {
     const home = tmpHome();
-    for (const n of ["a.md", "b.md", "c.md"]) writeExport(home, n);
+    const total = 11;
+    const names = Array.from({ length: total }, (_, i) => `s${i}.md`);
+    for (const n of names) writeExport(home, n);
 
+    // Hold each call until ten are in flight (or every call has started), so the
+    // count does not depend on timing. A default below ten never releases and
+    // the test times out.
     let inFlight = 0;
     let maxInFlight = 0;
+    let started = 0;
+    let waiting: (() => void)[] = [];
     const runner: RunnerFn = (async () => {
+      started++;
       inFlight++;
       maxInFlight = Math.max(maxInFlight, inFlight);
-      await new Promise((r) => setTimeout(r, 5));
+      await new Promise<void>((resolve) => {
+        waiting.push(resolve);
+        if (waiting.length === 10 || started === total) {
+          for (const go of waiting) go();
+          waiting = [];
+        }
+      });
       inFlight--;
       return DIGEST;
     }) as RunnerFn;
 
-    await runDigestStage({
+    const result = await runDigestStage({
       home,
-      entries: [entry("a.md"), entry("b.md"), entry("c.md")],
+      entries: names.map((n) => entry(n)),
       runner,
       output: sink(),
     });
-
-    expect(maxInFlight).toBe(1);
+    expect(maxInFlight).toBe(10);
+    expect(result.completed).toBe(total);
   });
 
   it("resumes: checkpointed sessions are skipped and never re-run", async () => {
@@ -492,7 +512,7 @@ describe("runDigestStage", () => {
       }) as RunnerFn,
     });
     expect(calls).toBe(2);
-    expect(result.failed[0]?.error).toContain("evidence failed validation");
+    expect(result.failed[0]?.error).toContain("preference evidence did not match the session");
     expect(loadDigests(home)?.digests["a.md"]).toBeUndefined();
   });
 
@@ -563,157 +583,83 @@ describe("runDigestStage", () => {
   // for a session-specific problem, but an unbroken streak of identical failures
   // is an environment problem: stop and say so while it is still cheap.
   describe("systemic-failure circuit breaker", () => {
-    it("stops the stage after a streak of identical failures", async () => {
-      const home = tmpHome();
-      const names = Array.from({ length: 20 }, (_, i) => `s${i}.md`);
-      for (const n of names) writeExport(home, n);
-
-      let calls = 0;
-      const runner: RunnerFn = (async () => {
-        calls++;
-        throw new Error("claude envelope missing a 'result' field");
-      }) as RunnerFn;
-
-      const result = await runDigestStage({
-        home,
-        entries: names.map(entry),
-        runner,
-        output: sink(),
-        concurrency: 1,
-      });
-
-      // Far fewer calls than sessions: the streak was cut short.
-      expect(calls).toBeLessThan(names.length);
-      expect(result.aborted).toBe(true);
-      expect(result.abortReason).toContain("identical");
-      // Everything not attempted is reported, never silently dropped.
-      expect(result.failed.length + result.notAttempted.length).toBe(names.length);
-      expect(result.notAttempted.length).toBeGreaterThan(0);
-    });
-
-    it("does NOT trip on failures with differing messages", async () => {
-      // Distinct errors read as per-session problems (a corrupt export, an
-      // oversized transcript), which is exactly what containment is for.
-      const home = tmpHome();
-      const names = Array.from({ length: 12 }, (_, i) => `s${i}.md`);
-      for (const n of names) writeExport(home, n);
-
-      let calls = 0;
-      const runner: RunnerFn = (async () => {
-        calls++;
-        throw new Error(`unique failure #${calls}`);
-      }) as RunnerFn;
-
-      const result = await runDigestStage({
-        home,
-        entries: names.map(entry),
-        runner,
-        output: sink(),
-        concurrency: 1,
-      });
-
-      expect(calls).toBe(names.length);
-      expect(result.aborted).toBeFalsy();
-      expect(result.failed).toHaveLength(names.length);
-      expect(result.notAttempted).toHaveLength(0);
-    });
-
-    it("does NOT trip when a success interrupts the streak", async () => {
-      const home = tmpHome();
-      const names = Array.from({ length: 15 }, (_, i) => `s${i}.md`);
-      for (const n of names) writeExport(home, n);
-
-      let calls = 0;
-      const runner: RunnerFn = (async () => {
-        calls++;
-        // Succeed every 3rd call: the environment is clearly usable.
-        if (calls % 3 === 0) return DIGEST;
-        throw new Error("same message every time");
-      }) as RunnerFn;
-
-      const result = await runDigestStage({
-        home,
-        entries: names.map(entry),
-        runner,
-        output: sink(),
-        concurrency: 1,
-      });
-
-      expect(calls).toBe(names.length);
-      expect(result.aborted).toBeFalsy();
-      expect(result.completed).toBeGreaterThan(0);
-    });
-
-    it("keeps successful digests checkpointed when it does trip", async () => {
-      // Aborting must never cost work already paid for.
-      const home = tmpHome();
-      const names = Array.from({ length: 20 }, (_, i) => `s${i}.md`);
-      for (const n of names) writeExport(home, n);
-
-      let calls = 0;
-      const runner: RunnerFn = (async () => {
-        calls++;
-        if (calls === 1) return DIGEST; // one real success, then a total outage
-        throw new Error("claude envelope missing a 'result' field");
-      }) as RunnerFn;
-
-      const result = await runDigestStage({
-        home,
-        entries: names.map(entry),
-        runner,
-        output: sink(),
-        concurrency: 1,
-      });
-
-      expect(result.aborted).toBe(true);
-      expect(result.completed).toBe(1);
-      expect(Object.keys(loadDigests(home)?.digests ?? {})).toHaveLength(1);
-    });
-
-    it("breaker:false (--no-breaker) attempts every session anyway", async () => {
-      // The abort message promises this escape hatch, so it has to exist.
-      const home = tmpHome();
-      const names = Array.from({ length: 20 }, (_, i) => `s${i}.md`);
-      for (const n of names) writeExport(home, n);
-
-      let calls = 0;
-      const runner: RunnerFn = (async () => {
-        calls++;
-        throw new Error("claude envelope missing a 'result' field");
-      }) as RunnerFn;
-
-      const result = await runDigestStage({
-        home,
-        entries: names.map(entry),
-        runner,
-        output: sink(),
-        concurrency: 1,
+    // One table for the stage wiring of the shared breaker. The unit rules and
+    // the five-session boundary are in test/engine.test.ts ("one breaker for every stage").
+    const IDENTICAL = "claude envelope missing a 'result' field";
+    it.each([
+      {
+        name: "stops after a streak of identical failures and accounts for every session",
+        total: 20,
+        fail: (_call: number) => IDENTICAL as string | null,
+        breaker: true,
+        aborted: true,
+      },
+      {
+        name: "does NOT trip on failures with differing messages",
+        total: 12,
+        fail: (call: number) => `unique failure #${call}`,
+        breaker: true,
+        aborted: false,
+      },
+      {
+        name: "does NOT trip when a success interrupts the streak",
+        total: 15,
+        fail: (call: number) => (call % 3 === 0 ? null : "same message every time"),
+        breaker: true,
+        aborted: false,
+      },
+      {
+        name: "keeps successful digests checkpointed when it does trip",
+        total: 20,
+        fail: (call: number) => (call === 1 ? null : IDENTICAL),
+        breaker: true,
+        aborted: true,
+      },
+      {
+        name: "breaker:false (--no-breaker) attempts every session anyway",
+        total: 20,
+        fail: (_call: number) => IDENTICAL,
         breaker: false,
-      });
-
-      expect(calls).toBe(names.length);
-      expect(result.aborted).toBeFalsy();
-      expect(result.failed).toHaveLength(names.length);
-      expect(result.notAttempted).toHaveLength(0);
-    });
-
-    it("never trips on a small run (nothing to protect)", async () => {
+        aborted: false,
+      },
+    ])("$name", async ({ total, fail, breaker, aborted }) => {
       const home = tmpHome();
-      for (const n of ["a.md", "b.md"]) writeExport(home, n);
+      const names = Array.from({ length: total }, (_, i) => `s${i}.md`);
+      for (const n of names) writeExport(home, n);
+      let calls = 0;
+      let succeeded = 0;
       const runner: RunnerFn = (async () => {
-        throw new Error("identical");
+        calls++;
+        const message = fail(calls);
+        if (message === null) {
+          succeeded++;
+          return DIGEST;
+        }
+        throw new Error(message);
       }) as RunnerFn;
 
       const result = await runDigestStage({
         home,
-        entries: [entry("a.md"), entry("b.md")],
+        entries: names.map(entry),
         runner,
         output: sink(),
         concurrency: 1,
+        breaker,
       });
 
-      expect(result.aborted).toBeFalsy();
-      expect(result.failed).toHaveLength(2);
+      expect(Boolean(result.aborted)).toBe(aborted);
+      // Never a silent drop: every session is done, failed, or listed as not attempted.
+      expect(result.completed + result.failed.length + result.notAttempted.length).toBe(total);
+      expect(result.completed).toBe(succeeded);
+      expect(Object.keys(loadDigests(home)?.digests ?? {})).toHaveLength(succeeded);
+      if (aborted) {
+        expect(calls).toBeLessThan(total);
+        expect(result.abortReason).toContain("identical");
+        expect(result.notAttempted.length).toBeGreaterThan(0);
+      } else {
+        expect(calls).toBe(total);
+        expect(result.notAttempted).toHaveLength(0);
+      }
     });
   });
 
@@ -776,7 +722,40 @@ describe("runDigestStage", () => {
     });
     const runner: RunnerFn = (async () => DIGEST) as RunnerFn;
     await runDigestStage({ home, entries: [entry("a.md")], runner, output: out });
-    expect(chunks.join("")).toContain("produced by prompt v");
+    // One plain line for the stage says why, with no version numbers or per-session lines.
+    const lines = chunks.join("").split("\n");
+    const why = lines.filter((line) => line.includes("this version reads them differently"));
+    expect(why).toEqual([
+      "  Reading saved sessions again because this version reads them differently.",
+    ]);
+    expect(lines.join("\n")).not.toMatch(/\bv\d+\b|stale|regenerat/);
+  });
+
+  it("says once, in plain words, why changed sessions are read again", async () => {
+    const home = tmpHome();
+    for (const name of ["a.md", "b.md", "c.md"]) writeExport(home, name);
+    const entries = ["a.md", "b.md", "c.md"].map(entry);
+    const runner: RunnerFn = (async () => DIGEST) as RunnerFn;
+    await runDigestStage({
+      home,
+      entries,
+      runner,
+      output: new Writable({ write: (_c, _e, cb) => cb() }),
+    });
+    const chunks: string[] = [];
+    const out = new Writable({
+      write(c, _e, cb) {
+        chunks.push(c.toString());
+        cb();
+      },
+    });
+    // A different model makes every saved read stale.
+    await runDigestStage({ home, entries, runner, model: "another-model", output: out });
+    const lines = chunks.join("").split("\n");
+    expect(lines.filter((line) => line.includes("again"))).toEqual([
+      "  Reading sessions again whose text or settings changed since they were last read.",
+    ]);
+    expect(lines.join("\n")).not.toMatch(/stale|regenerat|digest/);
   });
 
   it("blocks an over-budget session under --truncate=never without a runner call", async () => {
@@ -834,8 +813,10 @@ describe("runDigestStage", () => {
 
     expect(result.completed).toBe(1);
     expect(result.blocked).toHaveLength(0);
-    // The prompt carried the cut content (plus fixed prompt scaffolding).
-    expect(promptLen).toBeLessThan(5_000);
+    // The prompt carried the cut content, not all 5,000 characters: its length
+    // is the fixed instructions plus about the 1,000-character budget.
+    const instructions = buildDigestPrompt({ exportName: "big.md", content: "" }).length;
+    expect(promptLen).toBeLessThan(instructions + 1_500);
     expect(loadDigests(home)?.digests["big.md"]).toBeDefined();
   });
 

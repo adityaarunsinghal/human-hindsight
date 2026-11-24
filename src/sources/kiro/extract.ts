@@ -1,25 +1,32 @@
+import { dedupeKey } from "../../core/dedupe.js";
+import { isRecord, snippet } from "../read.js";
 import type { Drop, ExtractedMessage, ExtractResult, TimelineEvent } from "../types.js";
+import { leadingWrappers } from "../wrappers.js";
 import type { KiroSessionMeta } from "./discover.js";
 
 /**
- * sources/kiro/extract.ts — the kiro-cli extractor (rules K1–K13).
+ * sources/kiro/extract.ts: the kiro-cli extractor (rules K1 to K13).
  *
  * kiro's v2 log is one `{version, kind, data}` JSON object per line. Only
  * `Prompt` entries carry the human's verbatim text; `AssistantMessage` and
  * `ToolResults` are the machine side. Unlike Claude Code there is no per-entry
- * human/automation flag — that decision is SESSION-level (see {@link classifyKiroSession},
+ * human/automation flag: that decision is SESSION-level (see {@link classifyKiroSession},
  * K2), driven by store metadata (`.history` presence, `parent_session_id`, and
  * automation-marker first prompts). This module handles the per-piece rules and
  * the timeline; the session gate runs first, in the source's `classify`.
  *
  * As with the Claude extractor, parsing is tolerant: unknown `kind`s and fields
  * are ignored, and corrupt lines are counted in `badLines` rather than aborting.
+ *
+ * Rules kept elsewhere: K14 (live-steering recovery) is below; K15 (a Kiro Crew
+ * run copied into the v3 store is excluded and handed to the Kiro Crew store)
+ * lives in extract-v3.ts, see `isKirocrewDrivenV3`.
  */
 
 // --- K-rule constants ------------------------------------------------------
 
 /**
- * K13 — self-recognition sentinel. human-hindsight's own distill runner spawns
+ * K13: self-recognition sentinel. human-hindsight's own distill runner spawns
  * kiro sessions whose prompt begins with this marker; every headless run
  * persists a session in the flat store, so extraction must reject them or the
  * corpus would ingest its own distillation prompts on the next export.
@@ -33,7 +40,7 @@ export function isHindsightDistillPrompt(prompt: string | null): boolean {
   );
 }
 
-/** K6 — bracketed machine-injection markers dropped wherever they lead a piece. */
+/** K6: bracketed machine-injection markers dropped wherever they lead a piece. */
 const BRACKET_MARKERS: readonly string[] = [
   "[AGENT SYSTEM PROMPT]",
   "[Recent channel messages for context:]",
@@ -42,7 +49,14 @@ const BRACKET_MARKERS: readonly string[] = [
 ];
 
 /**
- * K14 — live-steering recovery. A message the human types WHILE the agent is
+ * K6: kiro's known wrapper tags, matched case-sensitively. Any other lowercase
+ * tag with `-` or `_` is treated the same way (see sources/wrappers.ts); being
+ * on the list also means an unclosed copy drops the whole piece.
+ */
+const KIRO_WRAPPERS: ReadonlySet<string> = new Set(["agent-sop", "steering", "EnvironmentContext"]);
+
+/**
+ * K14: live-steering recovery. A message the human types WHILE the agent is
  * working arrives wrapped in a harness envelope, not as its own Prompt:
  *
  *   [LIVE STEERING - New message from user]
@@ -63,7 +77,10 @@ const BRACKET_MARKERS: readonly string[] = [
  * messages, ~13.6k chars.
  */
 const LIVE_STEERING_MARKER = "[LIVE STEERING - New message from user]";
-const USER_MESSAGE_RE = /<user_message\b[^>]*>([\s\S]*?)<\/user_message>/;
+// The body ends at the LAST closer: the person may type `</user_message>`
+// (asking about this very envelope), and the harness text after the body
+// holds none.
+const USER_MESSAGE_RE = /<user_message\b[^>]*>([\s\S]*)<\/user_message>/;
 
 /** Pull the human words out of a live-steering envelope; null if there are none. */
 function recoverSteeringText(text: string): string | null {
@@ -73,7 +90,7 @@ function recoverSteeringText(text: string): string | null {
 }
 
 /**
- * K14 — steering messages recovered from a `ToolResults` entry.
+ * K14: steering messages recovered from a `ToolResults` entry.
  *
  * In real sessions the harness delivers a mid-run steering message by appending
  * it to the NEXT `ToolResults` entry's `content`, not as its own `Prompt`. Since
@@ -100,7 +117,7 @@ function steeringFromToolResults(data: unknown): string[] {
 }
 
 /**
- * K6 / K2 — harness nudge strings. As a leading substring they mark a
+ * K6 / K2: harness nudge strings. As a leading substring they mark a
  * machine-injected retry prompt (drop the piece); as a whole-session's only
  * "human-looking" prompt they are the sole false-positive class the `.history`
  * signal misses (so classify filters them too).
@@ -112,25 +129,15 @@ export const KIRO_HARNESS_NUDGES: readonly string[] = [
 ];
 
 /**
- * K2 — automation-agent boilerplate first lines. A session whose first prompt
+ * K2: automation-agent boilerplate first lines. A session whose first prompt
  * begins with one of these is a machine harness (naming/consolidation/suggestion
- * agents), not a human — excluded at the session level.
+ * agents), not a human, so excluded at the session level.
  */
 export const KIRO_AUTOMATION_FIRST_LINES: readonly string[] = [
   "You are a session naming agent",
   "You are a memory consolidation agent",
   "You are generating contextual prompt suggestions",
 ];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-/** Collapse whitespace and cap at 120 chars for a Drop snippet. */
-function snippet(text: string): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  return oneLine.length > 120 ? `${oneLine.slice(0, 117)}...` : oneLine;
-}
 
 /** Normalize kiro's unix-seconds timestamp into an ISO-8601 UTC string. */
 function normalizeTimestamp(meta: unknown): string {
@@ -142,11 +149,11 @@ function normalizeTimestamp(meta: unknown): string {
 }
 
 /**
- * K1/K4/K6 — collect the surviving human pieces of ONE `Prompt` entry.
+ * K1/K4/K6: collect the surviving human pieces of ONE `Prompt` entry.
  *
  * `Prompt.data.content[]` items are `{kind:"text", data:<string>}` (K4). Each
- * text piece is cleaned per K6: drop empties; drop pieces whose first char is
- * `<` (e.g. `<agent-sop>` machine framing); drop bracket markers; drop harness
+ * text piece is cleaned per K6: drop empties, complete leading harness
+ * wrappers, bracket markers and harness
  * nudges. `meta.additionalContext` is NEVER read (always machine-injected
  * context, verified never to contain the human's own message). Returns the
  * joined text (blank-line separated) or null when nothing human survived.
@@ -163,7 +170,7 @@ function promptText(data: unknown, drops: Drop[], ts: string): string | null {
   for (const block of content) {
     if (!isRecord(block)) continue;
     if (block.kind !== "text") {
-      // K11 — no non-text Prompt block was ever observed (0/410 in the census),
+      // K11: no non-text Prompt block was ever observed (0/410 in the census),
       // but format drift must stay visible (fidelity contract): an image block
       // becomes the same placeholder Claude Code's R11 renders; any other kind
       // is recorded as an observable Drop rather than vanishing silently.
@@ -180,45 +187,65 @@ function promptText(data: unknown, drops: Drop[], ts: string): string | null {
       continue;
     }
     const raw = typeof block.data === "string" ? block.data : "";
-    const text = raw.trim();
-    if (text === "") {
-      drops.push({ reason: "K6: empty piece", snippet: snippet(raw), timestamp: ts || undefined });
-      continue;
-    }
-    // K14 — recover a live-steering message BEFORE the bracket-marker drop below
-    // would discard the envelope (and the human's words inside it).
-    const steered = recoverSteeringText(text);
-    if (steered !== null) {
-      pieces.push(steered);
-      continue;
-    }
-    if (text.startsWith("<")) {
+    const { blocks, text, unclosed } = leadingWrappers(raw, KIRO_WRAPPERS);
+    for (const wrapper of blocks) {
       drops.push({
         reason: "K6: machine block (leading <)",
-        snippet: snippet(text),
+        snippet: snippet(wrapper.raw),
         timestamp: ts || undefined,
       });
-      continue;
     }
-    if (BRACKET_MARKERS.some((m) => text.startsWith(m))) {
+    if (unclosed !== undefined) {
       drops.push({
-        reason: "K6: bracket marker",
-        snippet: snippet(text),
+        reason: "K6: unclosed machine block",
+        snippet: snippet(unclosed),
         timestamp: ts || undefined,
       });
       continue;
     }
-    if (KIRO_HARNESS_NUDGES.some((m) => text.startsWith(m))) {
-      drops.push({
-        reason: "K6: harness nudge",
-        snippet: snippet(text),
-        timestamp: ts || undefined,
-      });
+    if (text === "") {
+      if (!blocks.length) {
+        drops.push({
+          reason: "K6: empty piece",
+          snippet: snippet(raw),
+          timestamp: ts || undefined,
+        });
+      }
       continue;
     }
-    pieces.push(text);
+    const kept = harnessEnvelope(text, drops, ts);
+    if (kept !== null) pieces.push(kept);
   }
   return pieces.length > 0 ? pieces.join("\n\n") : null;
+}
+
+/**
+ * K14/K6 over one piece whose leading wrappers are already removed: the
+ * person's words, or null when the piece is a harness envelope with none.
+ *   - K14 first: a live-steering envelope keeps only its `<user_message>` body
+ *     (the bracket-marker drop below would otherwise discard the human's words);
+ *   - K6: a piece opening with a bracket marker (`[Subagent completion event]`,
+ *     a steering envelope with no body, ...) or a harness nudge is dropped with
+ *     a record.
+ * Shared by the v2 extractor and the v3 one (extract-v3.ts), so a steering
+ * message is read the same way in both stores.
+ */
+export function harnessEnvelope(text: string, drops: Drop[], ts: string): string | null {
+  const steered = recoverSteeringText(text);
+  if (steered !== null) return steered;
+  if (BRACKET_MARKERS.some((m) => text.startsWith(m))) {
+    drops.push({
+      reason: "K6: bracket marker",
+      snippet: snippet(text),
+      timestamp: ts || undefined,
+    });
+    return null;
+  }
+  if (KIRO_HARNESS_NUDGES.some((m) => text.startsWith(m))) {
+    drops.push({ reason: "K6: harness nudge", snippet: snippet(text), timestamp: ts || undefined });
+    return null;
+  }
+  return text;
 }
 
 /** Buffer an `AssistantMessage`'s text blocks into one assistant timeline event. */
@@ -229,7 +256,7 @@ function assistantText(data: unknown): string {
   const parts: string[] = [];
   for (const block of content) {
     if (!isRecord(block)) continue;
-    // toolUse / thinking blocks are skipped — only assistant prose is an
+    // toolUse / thinking blocks are skipped; only assistant prose is an
     // antecedent candidate (mirrors the Claude timeline's text-only buffer).
     if (block.kind === "text" && typeof block.data === "string") parts.push(block.data);
   }
@@ -240,7 +267,7 @@ function assistantText(data: unknown): string {
  * Extract human-authored messages from one kiro session's raw JSONL lines.
  *
  * K1: only `Prompt` entries are candidates. K12: `Clear`/`Compaction`/
- * `AssistantMessage`/`ToolResults` are never human text — `Compaction`'s
+ * `AssistantMessage`/`ToolResults` are never human text; `Compaction`'s
  * `messages_snapshot` duplicates same-file entries and must be ignored (not
  * deduped). Timestamps come only from `Prompt.meta.timestamp` (normalized to
  * ISO); missing → "" (tolerated exactly like the Claude path).
@@ -253,7 +280,7 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
   // K12 observability: live Prompt keys vs user-role Compaction-snapshot items.
   // A snapshot normally duplicates earlier same-file entries (ignored); a
   // snapshot prompt that never appears live (e.g. `/chat load`-imported
-  // pre-compaction history) would otherwise be INVISIBLY absent — record it as
+  // pre-compaction history) would otherwise be INVISIBLY absent; record it as
   // a Drop so the fidelity ledger shows it.
   const liveKeys = new Set<string>();
   const snapshotPrompts: { ts: string; text: string }[] = [];
@@ -276,7 +303,7 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
 
     const data = parsed.data;
 
-    // K12 — Compaction is never re-extracted, but its user-role snapshot items
+    // K12: Compaction is never re-extracted, but its user-role snapshot items
     // are checked (post-loop) against the live prompts of this same file.
     if (parsed.kind === "Compaction") {
       const snapshot = isRecord(data) ? data.messages_snapshot : undefined;
@@ -291,30 +318,30 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
       continue;
     }
 
-    // K14 — a mid-run steering message rides along on the next ToolResults
+    // K14: a mid-run steering message rides along on the next ToolResults
     // entry rather than arriving as its own Prompt. Admitted BEFORE the K1
     // Prompt-only gate below, which would otherwise skip the entry entirely.
     if (parsed.kind === "ToolResults") {
       const ts = normalizeTimestamp(isRecord(data) ? data.meta : undefined);
       for (const steered of steeringFromToolResults(data)) {
         messages.push({ timestamp: ts, text: steered });
-        liveKeys.add(`${ts}\u0000${steered}`);
+        liveKeys.add(dedupeKey(ts, steered));
       }
       continue;
     }
-    // K1 — only Prompt entries are candidate human input.
+    // K1: only Prompt entries are candidate human input.
     if (parsed.kind !== "Prompt") continue;
 
     const ts = normalizeTimestamp(isRecord(data) ? data.meta : undefined);
     const text = promptText(data, drops, ts);
     if (text !== null) {
       messages.push({ timestamp: ts, text });
-      liveKeys.add(`${ts}\u0000${text}`);
+      liveKeys.add(dedupeKey(ts, text));
     }
   }
 
   for (const snap of snapshotPrompts) {
-    if (!liveKeys.has(`${snap.ts}\u0000${snap.text}`)) {
+    if (!liveKeys.has(dedupeKey(snap.ts, snap.text))) {
       drops.push({
         reason: "K12: snapshot-only prompt",
         snippet: snippet(snap.text),
@@ -328,10 +355,10 @@ export function extractKiroMessages(lines: string[]): ExtractResult {
 
 /**
  * Build a kiro session's linear timeline: `human` turns from `Prompt` text (via
- * the SAME {@link promptText} the exporter uses — so human turns align 1:1 with
+ * the SAME {@link promptText} the exporter uses, so human turns align 1:1 with
  * the corpus), `assistant` turns from `AssistantMessage` text, and `boundary`
  * events for `Clear`/`Compaction` (a `/clear` or `/compact` is a hard context
- * reset — an antecedent must not resolve across it). There is no kiro
+ * reset: an antecedent must not resolve across it). There is no kiro
  * equivalent of ExitPlanMode / AskUserQuestion, so no `plan`/`question` events.
  */
 export function kiroTimeline(lines: string[]): TimelineEvent[] {
@@ -359,7 +386,7 @@ export function kiroTimeline(lines: string[]): TimelineEvent[] {
       const text = assistantText(data);
       if (text !== "") events.push({ kind: "assistant", timestamp: "", text });
     } else if (kind === "ToolResults") {
-      // K14 — a steering message delivered on a ToolResults entry is a HUMAN
+      // K14: a steering message delivered on a ToolResults entry is a HUMAN
       // turn and must appear here too, or the SessionSource law breaks and
       // anaphora attributes context to the wrong turn. Everything else in a
       // ToolResults entry stays machine output and is not an event.
@@ -368,7 +395,7 @@ export function kiroTimeline(lines: string[]): TimelineEvent[] {
         events.push({ kind: "human", timestamp: ts, text: steered });
       }
     } else if (kind === "Clear" || kind === "Compaction") {
-      // Hard context reset — closes antecedent/decision windows (K12).
+      // Hard context reset: closes antecedent/decision windows (K12).
       events.push({ kind: "boundary", timestamp: "", text: kind });
     }
     // Unknown kinds are not timeline events.
@@ -401,22 +428,22 @@ function firstPromptText(lines: string[]): string | null {
 }
 
 /**
- * K2 — session-level human-vs-automation classification, with EXPLICIT
+ * K2: session-level human-vs-automation classification, with EXPLICIT
  * precedence (recall-oriented: a real human session must never be dropped):
  *
  *   1. `.history` exists → INCLUDE. A human typed here; this overrides every
  *      exclusion below and covers HYBRID sessions (agent-spawned or rewind
  *      children a human later steered).
  *   2. else `parent_session_id` set → EXCLUDE (a spawned child with no human).
- *   3. else the first Prompt is an automation marker — `[AGENT SYSTEM PROMPT]`,
+ *   3. else the first Prompt is an automation marker: `[AGENT SYSTEM PROMPT]`,
  *      an automation-agent boilerplate first line, or a lone harness nudge →
  *      EXCLUDE.
  *   4. else INCLUDE (recall-oriented default).
  *
- * `session_created_reason` is deliberately NOT used — it reports "subagent"
+ * `session_created_reason` is deliberately NOT used: it reports "subagent"
  * even for interactive human sessions (verified on-machine).
  *
- * K13 — a session whose first prompt is human-hindsight's own distill sentinel is
+ * K13: a session whose first prompt is human-hindsight's own distill sentinel is
  * always excluded (self-recognition), regardless of the above.
  */
 export function classifyKiroSession(

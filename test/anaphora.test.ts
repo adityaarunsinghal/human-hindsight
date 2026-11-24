@@ -8,8 +8,9 @@ import {
   wordCount,
 } from "../src/core/anaphora.js";
 import { buildCorpus, type CorpusSession, type DedupeInput } from "../src/core/dedupe.js";
-import { extractMessages, extractTimeline, type TimelineEvent } from "../src/core/extract.js";
 import { renderExport } from "../src/core/render.js";
+import { extractMessages, extractTimeline } from "../src/sources/claude/extract.js";
+import type { TimelineEvent } from "../src/sources/types.js";
 
 // ---- JSONL line builders (synthetic; never the real ~/.claude) ----------
 
@@ -74,7 +75,7 @@ function anaphoraFor(lines: string[]): AnaphoraRecord[] {
 
 // ---- short-turn detection ---------------------------------------------------
 
-describe("anaphora — short-turn detection (recall-oriented)", () => {
+describe("anaphora: short-turn detection (recall-oriented)", () => {
   it("counts whitespace-split tokens", () => {
     expect(wordCount("")).toBe(0);
     expect(wordCount("   ")).toBe(0);
@@ -107,7 +108,7 @@ describe("anaphora — short-turn detection (recall-oriented)", () => {
 
 // ---- antecedent capture -----------------------------------------------------
 
-describe("anaphora — antecedent (immediately preceding assistant text)", () => {
+describe("anaphora: antecedent (immediately preceding assistant text)", () => {
   it("keeps a short antecedent whole", () => {
     const records = anaphoraFor([assistantText(T1, "short answer"), userLine(T2, "yes")]);
     expect(records[0]?.antecedent).toBe("short answer");
@@ -135,7 +136,7 @@ describe("anaphora — antecedent (immediately preceding assistant text)", () =>
 
 // ---- plan / question surfacing ---------------------------------------------
 
-describe("anaphora — pending decision surfacing", () => {
+describe("anaphora: pending decision surfacing", () => {
   it("surfaces an ExitPlanMode plan a bare 'yes' approved", () => {
     const records = anaphoraFor([
       userLine(T1, "plan it"),
@@ -220,7 +221,7 @@ function parseRenderedBlocks(markdown: string): { timestamp: string; text: strin
   });
 }
 
-describe("anaphora — index alignment with rendered export", () => {
+describe("anaphora: index alignment with rendered export", () => {
   it("every record.index maps to the correct rendered '### <ts>' heading + text", () => {
     const lines = [
       userLine(T0, "kick things off"),
@@ -281,9 +282,27 @@ describe("anaphora — index alignment with rendered export", () => {
   });
 });
 
+describe("anaphora: repeated replies without a timestamp", () => {
+  it("gives each untimed reply its own record at its own index", () => {
+    const untimed = (text: string) =>
+      JSON.stringify({ type: "user", message: { role: "user", content: text } });
+    const lines = [
+      assistantText("", "Shall I add the tests?"),
+      untimed("yes"),
+      assistantText("", "Shall I update the docs too?"),
+      untimed("yes"),
+    ];
+    const records = anaphoraFor(lines);
+    expect(records.map((r) => [r.index, r.human_text, r.antecedent])).toEqual([
+      [0, "yes", "Shall I add the tests?"],
+      [1, "yes", "Shall I update the docs too?"],
+    ]);
+  });
+});
+
 // ---- v1 branching limitation -----------------------------------------------
 
-describe("anaphora — v1 branching limitation (documented)", () => {
+describe("anaphora: v1 branching limitation (documented)", () => {
   // v1 uses a linear file-order scan for antecedent/decision selection, which can
   // pick the wrong branch on forked/regenerated conversations. parentUuid walking
   // is the planned v1.1 fix. Placeholder until then.
@@ -333,7 +352,7 @@ describe("boundary events close the antecedent and decision windows", () => {
   });
 
   it("a boundary between them yields NO antecedent and NO pending decision", () => {
-    // The model never saw pre-boundary text after a /clear — so a bare "yes"
+    // The model never saw pre-boundary text after a /clear, so a bare "yes"
     // cannot be answering the pre-boundary plan, and the assistant essay
     // before the reset is not its antecedent.
     const timeline: TimelineEvent[] = [

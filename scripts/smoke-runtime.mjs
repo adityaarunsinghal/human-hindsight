@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -48,12 +48,23 @@ try {
     };
     const run = (args) =>
       execFileSync(process.execPath, [binary, ...args], { env, encoding: "utf8", timeout: 10000 });
+    // `preferences` writes only the instruction block to stdout and every note
+    // to stderr, so a redirect gives a clean file. Read the two apart.
+    const streams = (args) => {
+      const result = spawnSync(process.execPath, [binary, ...args], {
+        env,
+        encoding: "utf8",
+        timeout: 10000,
+      });
+      assert.equal(result.status, 0, result.stderr);
+      return result;
+    };
     const installed = JSON.parse(
       fs.readFileSync(path.resolve(prefix, "node_modules/human-hindsight/package.json"), "utf8"),
     );
     assert(run(["--version"]).includes(installed.version));
     const source = ["--source", "opencode", "--opencode-dir", root, "--opencode-db", file];
-    assert(run(["scan", ...source]).includes("1 sessions"));
+    assert(run(["scan", ...source]).includes("1 project, 1 session\n"));
     run(["export", ...source]);
     const manifest = JSON.parse(
       fs.readFileSync(path.join(libraryHome, "exports/manifest.json"), "utf8"),
@@ -84,10 +95,12 @@ try {
       `# Packaged prompt\n\n${prompt}\n`,
     );
     assert(run(["show", "packaged-prompt", "--raw"]).includes(prompt));
-    assert(run(["preferences", "--target", "opencode"]).includes("No accepted preferences"));
-    assert(
-      run(["preferences", "--target", "opencode", "--include-unreviewed"]).includes("AGENTS.md"),
-    );
+    const none = streams(["preferences", "--target", "opencode"]);
+    assert.equal(none.stdout, "");
+    assert(none.stderr.includes("No accepted preferences"));
+    const unreviewed = streams(["preferences", "--target", "opencode", "--include-unreviewed"]);
+    assert(unreviewed.stdout.includes("Keep changes focused."));
+    assert(unreviewed.stderr.includes("AGENTS.md"));
     const before = fs.readFileSync(file);
     assert(run(["retention", ...source, "--apply", "--yes"]).includes("No changes needed"));
     assert.deepEqual(fs.readFileSync(file), before);
@@ -101,16 +114,20 @@ try {
         stdio: ["ignore", "pipe", "pipe"],
       });
       const processHandle = gui;
-      const url = await new Promise((resolve, reject) => {
+      // The printed address carries the session key in its fragment. Every
+      // /api route needs that key in a header, so read both from the output.
+      const { url, key } = await new Promise((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error("GUI startup timed out")), 10000);
         let stdout = "";
         processHandle.stdout.setEncoding("utf8");
         processHandle.stdout.on("data", (text) => {
           stdout += text;
-          const url = stdout.match(/http:\/\/127\.0\.0\.1:\d+/)?.[0];
-          if (url) {
+          const printed = stdout.match(
+            /(http:\/\/127\.0\.0\.1:\d+)\/?#(?:[^\s]*&)?token=([0-9a-f]{64})/,
+          );
+          if (printed) {
             clearTimeout(timer);
-            resolve(url);
+            resolve({ url: printed[1], key: printed[2] });
           }
         });
         processHandle.once("exit", () => {
@@ -122,7 +139,12 @@ try {
           reject(error);
         });
       });
-      const data = await (await fetch(`${url}/api/library`)).json();
+      // Without the key the library is refused, so another local user on a
+      // shared machine cannot read it through the port.
+      assert.equal((await fetch(`${url}/api/library`)).status, 403);
+      const data = await (
+        await fetch(`${url}/api/library`, { headers: { "X-Hindsight-Token": key } })
+      ).json();
       assert.equal(data.entries[0].body, prompt);
       assert.equal(data.preferences[0].review.status, "pending");
       assert.equal(data.acceptedMarkdown, "");
@@ -143,7 +165,9 @@ try {
       const accepted = await reviewed.json();
       assert.equal(accepted.preferences[0].review.status, "accepted");
       assert(accepted.acceptedMarkdown.includes("Keep changes focused."));
-      assert(run(["preferences", "--target", "opencode"]).includes("AGENTS.md"));
+      const afterReview = streams(["preferences", "--target", "opencode"]);
+      assert(afterReview.stdout.includes("Keep changes focused."));
+      assert(afterReview.stderr.includes("AGENTS.md"));
       const stopped = new Promise((resolve) => processHandle.once("exit", resolve));
       processHandle.kill("SIGTERM");
       await stopped;

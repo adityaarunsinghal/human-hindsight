@@ -1,17 +1,21 @@
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough, type Readable, Writable } from "node:stream";
-import { afterEach, describe, expect, it } from "vitest";
-import type { RunClaudeOptions } from "../src/claude/runner.js";
-import { DEFAULT_TIMEOUT_MS } from "../src/claude/runner.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS,
+  KIRO_CREW_STEERING_NOTE,
+  preferenceStory,
+  preferenceStoryText,
+  resolveTarget,
   runPreferences,
 } from "../src/commands/preferences.js";
 import {
   CONSOLIDATED_PREFERENCES_FILE,
   readConsolidatedPreferences,
+  savedTarget,
 } from "../src/core/consolidated-preferences.js";
 import type { LibraryEntry } from "../src/core/library.js";
 import { savePreferenceReview } from "../src/core/preference-review.js";
@@ -24,6 +28,9 @@ import {
   renderPreferencesBlock,
 } from "../src/core/preferences.js";
 import type { RunnerFn } from "../src/distill/pipeline.js";
+import type { RunClaudeOptions } from "../src/runners/claude.js";
+import { DEFAULT_TIMEOUT_MS } from "../src/runners/shared.js";
+import { fakeInput, fakeOutput } from "./support/tty.js";
 
 // --- helpers ---------------------------------------------------------------
 
@@ -188,7 +195,7 @@ describe("renderClaudeMdBlock", () => {
   });
 });
 
-describe("renderPreferencesBlock — targets", () => {
+describe("renderPreferencesBlock targets", () => {
   const prefs = [
     {
       text: "diagnose before acting",
@@ -210,7 +217,7 @@ describe("renderPreferencesBlock — targets", () => {
     expect(block).toContain("~/.kiro/steering/hindsight-preferences.md");
     expect(block).toContain("## Working preferences");
     expect(block).toContain("- diagnose before acting");
-    // Same body as claude — only the leading comment differs.
+    // Same body as claude; only the leading comment differs.
     const claudeBody = renderClaudeMdBlock(prefs, 1, NOW).split("\n").slice(1).join("\n");
     expect(block.split("\n").slice(1).join("\n")).toBe(claudeBody);
   });
@@ -230,7 +237,7 @@ describe("runPreferences", () => {
     const cap = capture();
     const code = await runPreferences({ home: tmpHome() }, { output: cap.out });
     expect(code).toBe(1);
-    expect(cap.text()).toContain("library is empty");
+    expect(cap.text()).toMatch(/library is empty/i);
     expect(cap.text()).toContain("human-hindsight distill");
   });
 
@@ -288,6 +295,10 @@ describe("runPreferences", () => {
     expect(code).toBe(0);
     expect(prompt).toContain("Keep replies concise.");
     expect(prompt).not.toContain("Use tables.");
+    // Once merged, the closing lines do not offer the merge again.
+    expect(cap.text()).toContain("CLAUDE.md");
+    expect(cap.text()).not.toContain("--consolidate");
+    expect(cap.text()).toContain("Refresh the browser view");
     expect(readConsolidatedPreferences(home).artifact).toMatchObject({
       version: 2,
       include_unreviewed: false,
@@ -344,10 +355,20 @@ describe("runPreferences", () => {
       { output: cap.out, runner },
     );
     expect(code).toBe(0);
-    expect(cap.text()).toContain("1 preference(s) across 2 task(s)");
+    expect(cap.text()).toContain("1 preference across 2 tasks");
     expect(cap.text()).toContain("- be terse");
     expect(cap.text()).toContain("stated in 2 of 2 tasks");
     expect(readConsolidatedPreferences(home)).toEqual({ artifact: null, invalid: false });
+  });
+
+  it("ends with the suggest-subagents preview hint after a rendered block", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    await runPreferences({ home, "include-unreviewed": true }, { output: cap.out });
+    expect(cap.text().trimEnd().split("\n").at(-1)).toContain(
+      `→ next: human-hindsight suggest-subagents --home=${home} --dry-run`,
+    );
   });
 
   it("--target kiro renders the steering-file block and footer", async () => {
@@ -390,7 +411,39 @@ describe("runPreferences", () => {
     );
     expect(code).toBe(2);
     expect(called).toBe(false);
-    expect(cap.text()).toContain("declined");
+    expect(cap.text()).toMatch(/declined\. nothing was sent/i);
+  });
+
+  it.each([
+    ["y\n", 2, false],
+    ["yes\n", 2, false],
+    ["\n", 2, false],
+    ["s\n", 0, true],
+  ])("the consolidation Start question: %j exits %i", async (answer, expected, sent) => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    let called = false;
+    const runner: RunnerFn = (async () => {
+      called = true;
+      return {
+        preferences: [
+          { text: "be terse", source_ids: readObservedPreferences(home).map(preferenceId) },
+        ],
+      };
+    }) as RunnerFn;
+    const code = await runPreferences(
+      { home, "include-unreviewed": true, consolidate: true },
+      {
+        output: cap.out,
+        input: inputWith(answer),
+        runner,
+        clipboard: fakeClipboard().copy,
+      },
+    );
+    expect(code).toBe(expected);
+    expect(called).toBe(sent);
+    expect(cap.text()).toContain("Choose [1/2/s/q]");
   });
 
   it("--consolidate with --yes runs one call and prints the merged block", async () => {
@@ -418,7 +471,7 @@ describe("runPreferences", () => {
     expect(prompt).toContain("Merge semantic duplicates");
     expect(prompt).toContain('"text":"be terse"');
     expect(prompt).toContain('"count":1');
-    expect(cap.text()).toContain("consolidated 2 → 1 preference(s).");
+    expect(cap.text()).toContain("consolidated 2 → 1 preference.");
     expect(cap.text()).toContain("- be terse");
     // Counts are derived from the retained source occurrences.
     expect(cap.text()).toContain("stated in 2 of 2");
@@ -456,6 +509,21 @@ describe("runPreferences", () => {
     expect(code).toBe(0);
     // 2 aggregated preferences → base + 2 × per-preference allowance.
     expect(seen).toBe(DEFAULT_TIMEOUT_MS + CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS * 2);
+  });
+
+  it("a wrong --timeout is an error before anything is read or sent", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    const runner = vi.fn();
+    await expect(
+      runPreferences(
+        { home, "include-unreviewed": true, consolidate: true, yes: true, timeout: "0" },
+        { output: cap.out, runner: runner as unknown as RunnerFn, clipboard: fakeClipboard().copy },
+      ),
+    ).rejects.toThrow('--timeout takes a whole number of seconds, 1 or more, not "0".');
+    expect(runner).not.toHaveBeenCalled();
+    expect(cap.text()).toBe("");
   });
 
   it("passes an explicit --timeout (seconds) through to the consolidation call unscaled", async () => {
@@ -642,6 +710,227 @@ describe("runPreferences", () => {
     // The consolidated block retains source evidence counts.
     expect(clip.calls[0]).toContain("- be terse");
     expect(clip.calls[0]).toContain("stated in 2 of 2");
-    expect(cap.text()).toContain("copied (1 preference(s)");
+    expect(cap.text()).toContain("copied (1 preference,");
+  });
+});
+
+// --- the kirocrew target -----------------------------------------------------
+
+describe("preferences --target kirocrew", () => {
+  const STEERING = "~/.kiro/steering/hindsight-preferences.md";
+  const CREW_LINE =
+    "Kiro Crew agents load every file in ~/.kiro/steering/, so the same file reaches them.";
+
+  it("resolveTarget accepts kirocrew explicitly, in any case", () => {
+    expect(resolveTarget("kirocrew", "auto")).toBe("kirocrew");
+    expect(resolveTarget("KiroCrew", "claude")).toBe("kirocrew");
+  });
+
+  it("resolveTarget infers kirocrew from --source kirocrew, and kiro still from --source kiro", () => {
+    expect(resolveTarget(undefined, "kirocrew")).toBe("kirocrew");
+    expect(resolveTarget(undefined, "kiro")).toBe("kiro");
+    expect(resolveTarget(undefined, "auto")).toBe("claude");
+  });
+
+  it("the unknown-target error lists kirocrew among the accepted values", () => {
+    expect(() => resolveTarget("cursor", "auto")).toThrow(
+      'unknown --target "cursor" (expected claude, codex, kiro, kirocrew, opencode, or agents)',
+    );
+  });
+
+  it("renders byte for byte the same block as the kiro target", () => {
+    const prefs = [
+      {
+        text: "diagnose before acting",
+        count: 1,
+        occurrences: [{ slug: "t", evidence: "e" }],
+        lastAuthoredAt: "",
+      },
+    ];
+    const NOW = new Date("2026-11-21T00:00:00Z");
+    expect(renderPreferencesBlock(prefs, 1, "kirocrew", NOW)).toBe(
+      renderPreferencesBlock(prefs, 1, "kiro", NOW),
+    );
+  });
+
+  for (const target of ["kiro", "kirocrew"] as const) {
+    it(`--target ${target}: the footer says Kiro Crew agents load the steering file`, async () => {
+      const home = tmpHome();
+      writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+      const cap = capture();
+      const code = await runPreferences(
+        { home, "include-unreviewed": true, target },
+        { output: cap.out },
+      );
+      expect(code).toBe(0);
+      expect(cap.text()).toContain(STEERING);
+      expect(cap.text()).toContain(CREW_LINE);
+      expect(KIRO_CREW_STEERING_NOTE).toBe(CREW_LINE);
+    });
+  }
+
+  it("--source kirocrew with no --target renders the steering block and Crew footer", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    const cap = capture();
+    const code = await runPreferences(
+      { home, "include-unreviewed": true, source: "kirocrew" },
+      { output: cap.out },
+    );
+    expect(code).toBe(0);
+    expect(cap.text()).toContain(STEERING);
+    expect(cap.text()).toContain(CREW_LINE);
+    expect(cap.text()).not.toContain("CLAUDE.md");
+  });
+
+  it("other targets carry no Kiro Crew line", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("t-one-a", [{ text: "be terse", evidence: "e" }]));
+    for (const target of ["claude", "agents"]) {
+      const cap = capture();
+      await runPreferences({ home, "include-unreviewed": true, target }, { output: cap.out });
+      expect(cap.text()).not.toContain("Kiro Crew");
+    }
+  });
+
+  it("a consolidation saved under --target kirocrew records the rendered format, kiro", async () => {
+    const home = tmpHome();
+    writeLibraryEntry(home, entry("one-task", [{ text: "Be terse.", evidence: "Keep it short." }]));
+    const candidate = readObservedPreferences(home)[0];
+    if (!candidate) throw new Error("Missing fixture candidate");
+    savePreferenceReview(home, candidate, { status: "accepted" });
+    const code = await runPreferences(
+      { home, yes: true, consolidate: true, target: "kirocrew" },
+      {
+        output: capture().out,
+        clipboard: fakeClipboard().copy,
+        runner: (async () => ({
+          preferences: [{ text: "Be terse.", source_ids: [preferenceId(candidate)] }],
+        })) as RunnerFn,
+      },
+    );
+    expect(code).toBe(0);
+    const { artifact, invalid } = readConsolidatedPreferences(home);
+    expect(invalid).toBe(false);
+    expect(artifact?.target).toBe("kiro");
+    expect(artifact?.markdown).toContain(STEERING);
+    expect(savedTarget("kirocrew")).toBe("kiro");
+    expect(savedTarget("agents")).toBe("agents");
+  });
+});
+
+describe("preferences tells one story on two streams", () => {
+  function threeCandidates(): string {
+    const home = tmpHome();
+    writeLibraryEntry(
+      home,
+      entry("one-task", [
+        { text: "Be terse.", evidence: "Keep it short." },
+        { text: "Use tables.", evidence: "A table would help here." },
+        { text: "Run the tests.", evidence: "Run the tests first." },
+      ]),
+    );
+    return home;
+  }
+
+  it.each([
+    [
+      "nothing reviewed",
+      [],
+      { observed: 3, waiting: 3, accepted: 0, dismissed: 0 },
+      "3 preferences observed: 3 waiting for your review, none accepted yet.",
+    ],
+    [
+      "one of each",
+      ["accepted", "dismissed"],
+      { observed: 3, waiting: 1, accepted: 1, dismissed: 1 },
+      "3 preferences observed: 1 waiting for your review, 1 accepted, 1 dismissed.",
+    ],
+    [
+      "all accepted",
+      ["accepted", "accepted", "accepted"],
+      { observed: 3, waiting: 0, accepted: 3, dismissed: 0 },
+      "3 preferences observed: 3 accepted.",
+    ],
+  ] as const)("counts by review status: %s", (_name, statuses, counts, sentence) => {
+    const home = threeCandidates();
+    const observed = readObservedPreferences(home);
+    statuses.forEach((status, i) => {
+      const preference = observed[i];
+      if (preference) savePreferenceReview(home, preference, { status });
+    });
+    const story = preferenceStory(home);
+    expect(story).toEqual(counts);
+    expect(preferenceStoryText(story)).toBe(sentence);
+  });
+
+  it("with nothing accepted, says how many wait and names both ways forward, and writes nothing to stdout", async () => {
+    const home = threeCandidates();
+    const stdout = capture();
+    const stderr = capture();
+    const code = await runPreferences({ home }, { output: stdout.out, errorOutput: stderr.out });
+    expect(code).toBe(0);
+    expect(stdout.text()).toBe("");
+    const text = stderr.text();
+    expect(text).toContain(
+      "No accepted preferences yet. 3 preferences observed: 3 waiting for your review, none accepted yet.",
+    );
+    expect(text).toMatch(
+      /Review them in your browser:\n {2}human-hindsight gui --home=\S+ --tab=preferences\n/,
+    );
+    expect(text).toMatch(
+      /Or print them without a review:\n {2}human-hindsight preferences --home=\S+.* --include-unreviewed\n/,
+    );
+  });
+
+  it("puts only the instruction block on stdout, so a redirect gives a clean file", async () => {
+    const home = threeCandidates();
+    const stdout = capture();
+    const stderr = capture();
+    const code = await runPreferences(
+      { home, "include-unreviewed": true },
+      { output: stdout.out, errorOutput: stderr.out },
+    );
+    expect(code).toBe(0);
+    const file = stdout.text();
+    expect(file.startsWith("<!-- human-hindsight preferences")).toBe(true);
+    expect(file).toContain("- Be terse.");
+    expect(file).not.toMatch(/next:|paste the block|Including|across/);
+    expect(file).not.toContain(String.fromCharCode(27));
+    expect(stderr.text()).toContain("Including suggestions you have not reviewed");
+    expect(stderr.text()).toContain("paste the block into your");
+    expect(stderr.text()).toMatch(/next:\s+human-hindsight suggest-subagents/);
+    expect(stderr.text()).not.toContain("- Be terse.");
+  });
+
+  it("Ctrl-C at the consolidation question exits 130 after one line and calls nothing", async () => {
+    const home = threeCandidates();
+    for (const preference of readObservedPreferences(home)) {
+      savePreferenceReview(home, preference, { status: "accepted" });
+    }
+    const host = Object.assign(new EventEmitter(), { pid: 1, kill: () => true });
+    const input = fakeInput({ isTTY: true });
+    const output = fakeOutput({ isTTY: true, columns: 80 });
+    let calls = 0;
+    const done = runPreferences(
+      { home, consolidate: true },
+      {
+        output,
+        input,
+        host: host as never,
+        runner: (async () => {
+          calls++;
+          return {};
+        }) as RunnerFn,
+      },
+    );
+    for (let i = 0; i < 50 && !output.text().includes("Start?"); i++) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+    host.emit("SIGINT");
+    expect(await done).toBe(130);
+    expect(calls).toBe(0);
+    // The question itself prints the one line; the command adds nothing.
+    expect(output.text().match(/Interrupted\./g)?.length).toBe(1);
   });
 });

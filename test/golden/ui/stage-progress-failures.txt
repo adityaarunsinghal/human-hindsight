@@ -1,0 +1,3 @@
+failed: session-3
+blocked: session-4 waits for a retry
+│ Reading sessions  6/6 · 1 failed · 1 blocked · 10s

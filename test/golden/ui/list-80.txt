@@ -1,0 +1,7 @@
+Name                    Title                   Sessions  Written     Notes
+----------------------  ----------------------  --------  ----------  ----------
+cli-test-hardening      Harden the CLI tests    1         2026-01-02
+landing-page-polish     Polish the landing pa…  1         2026-01-02  ▲ rated up
+release-notes-workflow  Improve the release n…  1         2026-01-02
+
+3 prompts

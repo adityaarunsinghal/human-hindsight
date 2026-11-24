@@ -401,11 +401,6 @@ export function renderDomainContext(
       breadcrumb.append(button);
     }
     root.append(breadcrumb);
-  } else {
-    const label = document.createElement("span");
-    label.className = "domain-context-label";
-    label.textContent = "Domains";
-    root.append(label);
   }
 
   if (context.additional) {
@@ -415,7 +410,11 @@ export function renderDomainContext(
     summary.className = "domain-context-summary";
     summary.setAttribute("aria-label", `Show all ${context.paths.length} domain paths`);
     const count = document.createElement("span");
-    count.textContent = `+${context.additional}`;
+    // Without a shared path the summary names how many domains there are;
+    // beside one it says how many more.
+    count.textContent = context.breadcrumb.length
+      ? `and ${context.additional} more ${context.additional === 1 ? "domain" : "domains"}`
+      : `${context.paths.length} ${context.paths.length === 1 ? "domain" : "domains"}`;
     summary.append(count, chevron(false));
     const content = document.createElement("div");
     content.className = "domain-context-tree";

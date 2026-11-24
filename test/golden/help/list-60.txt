@@ -1,0 +1,24 @@
+human-hindsight list
+List saved prompts and the names you can use to open them.
+
+Examples
+  human-hindsight list
+    Find a prompt by title and the name that opens it.
+
+  human-hindsight list --no-follow-up
+    Print the library table and finish.
+
+Common options
+  --home <dir>  Data directory (env HUMAN_HINDSIGHT_HOME;
+                legacy CC_HINDSIGHT_HOME is also supported)
+  --follow-up   Offer next steps in a terminal (disable with
+                --no-follow-up)
+
+More help
+  human-hindsight list --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

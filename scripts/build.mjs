@@ -61,7 +61,7 @@ function collect(name, parent) {
         fs.statSync(path.join(dir, file)).isFile(),
     );
   if (!licenses.length) throw new Error(`Missing license text for ${key}`);
-  notices.push(`\n${"=".repeat(72)}\n${key} — ${info.license}\n`);
+  notices.push(`\n${"=".repeat(72)}\n${key}: ${info.license}\n`);
   for (const file of licenses) notices.push(fs.readFileSync(path.join(dir, file), "utf8"));
   for (const dependency of Object.keys(info.dependencies ?? {}).sort()) collect(dependency, dir);
 }

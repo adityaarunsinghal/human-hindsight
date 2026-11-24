@@ -1,4 +1,4 @@
-import type { PreferenceCandidate } from "../claude/schemas.js";
+import type { PreferenceCandidate } from "../distill/schemas.js";
 
 /** Shared across model stages; historical text never supplies current instructions. */
 export const HISTORICAL_DATA_INSTRUCTION =

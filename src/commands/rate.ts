@@ -1,18 +1,21 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { Writable } from "node:stream";
 import { defineCommand } from "citty";
-import { writeFilePrivate } from "../core/fsutil.js";
+import { atomicWriteFilePrivate } from "../core/fsutil.js";
 import { findEntry } from "../core/library.js";
+import { acquireWriterLock, WriterBusyError } from "../distill/operations.js";
+import { glyph } from "../ui/mode.js";
 import { green, hint } from "../ui/style.js";
-import { resolvePaths, sharedArgs } from "./_shared.js";
+import { promptNameArg, resolvePaths, sharedArgs, unknownPromptMessage } from "./_shared.js";
 import { nextCommandText, offerNext } from "./next.js";
 
 /**
- * commands/rate.ts — record a verdict on a oneshot.
+ * commands/rate.ts: record a verdict on a saved prompt.
  *
  * `rating: up|down` + `rated_at` land in `sources.json` (declared optional in
  * its schema). `list` shows the badge; a rating is feedback for the user's
- * own curation — it never changes pipeline behavior.
+ * own curation; it never changes pipeline behavior.
  */
 
 export interface RateArgs {
@@ -39,20 +42,33 @@ export function runRate(args: RateArgs, deps: RateDeps = {}): number {
     return 1;
   }
 
-  const entry = findEntry(home, slug);
-  if (!entry) {
-    write(`no library entry "${slug}" — try \`human-hindsight list\`.`);
+  // The lock keeps a running distill from publishing between the read and the
+  // write below, which would bring back the old prompt hash.
+  let writer: ReturnType<typeof acquireWriterLock>;
+  try {
+    writer = acquireWriterLock(home, "rate");
+  } catch (error) {
+    if (!(error instanceof WriterBusyError)) throw error;
+    write(error.message);
     return 1;
   }
+  try {
+    const entry = findEntry(home, slug);
+    if (!entry) {
+      write(unknownPromptMessage(home, slug));
+      return 1;
+    }
+    // Change only the two rating fields of the file as it is, so every other
+    // field keeps its exact bytes (the parsed copy fills in defaults).
+    const file = path.join(entry.dir, "sources.json");
+    const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, unknown>;
+    const sources = { ...raw, rating, rated_at: new Date().toISOString() };
+    atomicWriteFilePrivate(file, `${JSON.stringify(sources, null, 2)}\n`);
+  } finally {
+    writer.release();
+  }
 
-  const sources = {
-    ...entry.sources,
-    rating: rating as "up" | "down",
-    rated_at: new Date().toISOString(),
-  };
-  writeFilePrivate(path.join(entry.dir, "sources.json"), `${JSON.stringify(sources, null, 2)}\n`);
-
-  write(green(`${rating === "up" ? "▲" : "▼"} ${slug} rated ${rating}.`));
+  write(green(`${rating === "up" ? glyph("▲", "+") : glyph("▼", "-")} ${slug} rated ${rating}.`));
   write(hint(nextCommandText("list", args)));
   return 0;
 }
@@ -60,15 +76,10 @@ export function runRate(args: RateArgs, deps: RateDeps = {}): number {
 export default defineCommand({
   meta: {
     name: "rate",
-    description: "Rate a oneshot up or down (recorded in its provenance)",
   },
   args: {
     ...sharedArgs,
-    slug: {
-      type: "positional",
-      description: "Library entry slug",
-      required: true,
-    },
+    name: promptNameArg,
     rating: {
       type: "positional",
       description: "up or down",
@@ -76,7 +87,7 @@ export default defineCommand({
     },
   },
   async run({ args }) {
-    const code = runRate(args as unknown as RateArgs);
+    const code = runRate({ ...args, slug: args.name } as unknown as RateArgs);
     if (code !== 0) process.exitCode = code;
     else await offerNext("list", args, { hintPrinted: true });
   },

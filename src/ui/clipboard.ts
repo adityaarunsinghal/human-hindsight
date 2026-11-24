@@ -1,10 +1,6 @@
 import { spawn as nodeSpawn } from "node:child_process";
-
-/**
- * ui/clipboard.ts — the ~10-line clipboard helper: pick the platform's
- * clipboard tool, pipe text to it. All process interaction is injectable so
- * tests never touch a real clipboard.
- */
+import type { Writable } from "node:stream";
+import type { TerminalOutput } from "./mode.js";
 
 /** The clipboard command for a platform (Wayland preferred over X11 on Linux). */
 export function clipboardCommand(
@@ -65,9 +61,36 @@ const defaultSpawn: ClipboardSpawn = (cmd, args, input) =>
  * long after all the work is saved. Copying is a convenience, so a short bound is
  * the right trade: the block is already printed on screen either way.
  */
-export const CLIPBOARD_TIMEOUT_MS = 5_000;
+const CLIPBOARD_TIMEOUT_MS = 5_000;
 
-/** Copy text to the system clipboard. Reports which tool was used, or why not. */
+export interface ClipboardResult {
+  ok: boolean;
+  tool: string;
+  error?: string;
+  /** OSC 52 has no acknowledgement. The caller also prints the text for manual copying. */
+  terminalAttempted?: boolean;
+}
+
+/** An SSH session: a clipboard tool found here belongs to the remote machine, not the person's. */
+export function isSshSession(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.SSH_TTY || env.SSH_CONNECTION || env.SSH_CLIENT);
+}
+
+/** The terminal clipboard request (OSC 52): the person's own terminal sets its clipboard. */
+function terminalClipboardRequest(text: string): string {
+  return `\u001b]52;c;${Buffer.from(text, "utf8").toString("base64")}\u0007`;
+}
+
+/**
+ * Copy text to the clipboard. Reports which way was used, or why not.
+ *
+ * Over SSH the local clipboard tool would copy on the remote machine and
+ * report success for a clipboard the person cannot paste from, so it is never
+ * used there. Instead, when stdout is a terminal, the terminal clipboard
+ * request is sent; it has no acknowledgement, so the result says it was
+ * attempted and the caller prints the text as well. Outside SSH the platform
+ * tool is used, bounded by a timeout.
+ */
 export async function copyToClipboard(
   text: string,
   io: {
@@ -75,11 +98,37 @@ export async function copyToClipboard(
     env?: NodeJS.ProcessEnv;
     spawn?: ClipboardSpawn;
     timeoutMs?: number;
+    output?: Writable;
   } = {},
-): Promise<{ ok: boolean; tool: string; error?: string }> {
-  const { cmd, args } = clipboardCommand(io.platform, io.env);
+): Promise<ClipboardResult> {
+  const platform = io.platform ?? process.platform;
+  const env = io.env ?? process.env;
+  const output: TerminalOutput = io.output ?? process.stdout;
+  const { cmd, args } = clipboardCommand(platform, env);
   const spawn = io.spawn ?? defaultSpawn;
   const timeoutMs = io.timeoutMs ?? CLIPBOARD_TIMEOUT_MS;
+
+  if (isSshSession(env)) {
+    const terminal =
+      output.isTTY === true &&
+      env.TERM !== "dumb" &&
+      env.HUMAN_HINDSIGHT_PLAIN !== "1" &&
+      (!env.CI || /^(0|false)$/i.test(env.CI));
+    if (!terminal) {
+      return {
+        ok: false,
+        tool: "OSC 52",
+        error: "this SSH session has no terminal to pass a clipboard request to",
+      };
+    }
+    output.write(terminalClipboardRequest(text));
+    return {
+      ok: false,
+      tool: "OSC 52",
+      terminalAttempted: true,
+      error: "terminal clipboard request sent",
+    };
+  }
 
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<{ code: null; error: string }>((resolve) => {
@@ -87,7 +136,6 @@ export async function copyToClipboard(
       () => resolve({ code: null, error: `${cmd} timed out after ${timeoutMs}ms` }),
       timeoutMs,
     );
-    timer.unref?.(); // never hold the event loop open on our account
   });
 
   try {
@@ -98,6 +146,8 @@ export async function copyToClipboard(
       tool: cmd,
       error: result.error ?? `${cmd} exited with code ${result.code}`,
     };
+  } catch (error) {
+    return { ok: false, tool: cmd, error: error instanceof Error ? error.message : String(error) };
   } finally {
     if (timer) clearTimeout(timer);
   }

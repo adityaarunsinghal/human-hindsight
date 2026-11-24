@@ -1,0 +1,32 @@
+  -r, --resume
+      --resume-id <SESSION_ID>
+      --resume-picker
+      --sessions
+      --agent <AGENT>
+      --model <MODEL>
+      --effort <EFFORT>
+  -a, --trust-all-tools
+      --trust-tools <TOOL_NAMES>
+      --no-interactive
+      --trust-workspace
+  -l, --list-sessions
+      --all-cwds
+      --list-models
+  -f, --format <FORMAT>
+      --output-format <OUTPUT_FORMAT>
+  -d, --delete-session <SESSION_ID>
+      --session-source <v1|v2>
+  -w, --wrap <WRAP>
+      --require-mcp-startup
+          --cloud it checks the sandbox's own servers: local MCP config is not uploaded
+      --tui
+      --legacy-ui
+      --agent-engine <ENGINE>
+      --v3
+      --v2
+      --mode <MODE>
+          --agent, or the chat.defaultAgent setting on a new session
+      --cloud
+  -v, --verbose...
+      --repo <REPO>
+  -h, --help

@@ -1,34 +1,31 @@
 import fs from "node:fs";
 import { defineCommand } from "citty";
-import { findEntry, parseOneshot } from "../core/library.js";
+import { findEntry, isOutcomeVerified, parseOneshot } from "../core/library.js";
 import { renderMarkdownAnsi } from "../ui/markdown.js";
+import { canColor, glyph, lineWidth } from "../ui/mode.js";
 import { bold, dim } from "../ui/style.js";
-import { resolvePaths, sharedArgs } from "./_shared.js";
+import { fitLines } from "../ui/wrap.js";
+import { promptNameArg, resolvePaths, sharedArgs, unknownPromptMessage } from "./_shared.js";
 import { offerNext } from "./next.js";
 
 export default defineCommand({
   meta: {
     name: "show",
-    description: "Render a oneshot prompt to the terminal",
   },
   args: {
     ...sharedArgs,
-    slug: {
-      type: "positional",
-      description: "Library entry slug",
-      required: true,
-    },
+    name: promptNameArg,
     raw: {
       type: "boolean",
-      description: "Print the oneshot as raw markdown (no styling or wrapping)",
+      description: "Print the prompt as plain Markdown, without styling or wrapping",
     },
   },
   async run({ args }) {
     const { home } = resolvePaths(args);
-    const slug = String(args.slug);
+    const slug = String(args.name);
     const entry = findEntry(home, slug);
     if (!entry) {
-      console.error(`no library entry "${slug}" — try \`human-hindsight list\`.`);
+      console.error(unknownPromptMessage(home, slug));
       process.exitCode = 1;
       return;
     }
@@ -37,29 +34,33 @@ export default defineCommand({
     try {
       content = fs.readFileSync(entry.oneshotPath, "utf8");
     } catch {
-      console.error(`entry "${slug}" has no oneshot file (${entry.oneshotPath}).`);
+      console.error(`The prompt "${slug}" has no prompt file (${entry.oneshotPath}).`);
       process.exitCode = 1;
       return;
     }
 
     const { title, body } = parseOneshot(content);
     const s = entry.sources;
+    const separator = ` ${glyph("·", "|")} `;
     const coverage =
       typeof s.input_coverage === "number" && s.input_coverage < 1
-        ? ` · ${(s.input_coverage * 100).toFixed(1)}% of sources (truncated)`
+        ? `${separator}${(s.input_coverage * 100).toFixed(1)}% of sources (truncated)`
         : "";
     console.log(bold(`# ${title ?? s.title ?? slug}`));
-    console.log(
-      dim(
-        `${s.members?.length ?? 0} session(s) · ${s.outcome_summary ?? "?"} · ` +
-          `confidence ${s.confidence ?? "?"} · authored ${(s.authored_at ?? "").slice(0, 10)}` +
-          (s.domains?.length ? ` · domain: ${s.domains.join(", ")}` : "") +
-          coverage,
-      ),
-    );
+    const facts =
+      `${s.members?.length ?? 0} ${s.members?.length === 1 ? "session" : "sessions"}${separator}${s.outcome_summary ?? "?"}${separator}` +
+      `confidence ${s.confidence ?? "?"}${separator}written ${(s.authored_at ?? "").slice(0, 10)}` +
+      (s.domains?.length ? `${separator}domain: ${s.domains.join(", ")}` : "") +
+      coverage;
+    const width = lineWidth();
+    for (const line of fitLines([facts], width)) console.log(dim(line));
+    // Said near the title, in plain words; --raw output is only the prompt's header and body.
+    if (!args.raw && !isOutcomeVerified(s))
+      console.log("Outcome not verified: none of its sessions was seen to reach a result.");
     console.log();
-    if (args.raw || !process.stdout.isTTY) {
-      // Raw markdown for piping (`show x | pbcopy`) and for --raw.
+    // Raw Markdown for --raw and wherever styling is not allowed (`show x | pbcopy`,
+    // NO_COLOR, TERM=dumb). Whether stdin is a terminal does not matter here.
+    if (args.raw || !canColor()) {
       console.log(body);
     } else {
       console.log(renderMarkdownAnsi(body));

@@ -1,0 +1,10 @@
+| Tool         History             Command         Sign-in
+| Claude Code  4 projects, 128     + claude 9.9.9  + ready
+|              sessions
+| Codex        1 project, 3        + codex 0.0.1   checking
+|              sessions
+| Kiro         2 projects, 40      + kiro-cli      ! run kiro-cli login
+|              sessions (checking  (checking)      --use-device-flow
+|              Crew)
+| Kiro Crew    counting            uses kiro-cli
+| OpenCode     no history yet      ! missing

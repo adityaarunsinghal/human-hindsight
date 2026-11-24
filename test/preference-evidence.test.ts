@@ -2,8 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildDigestPrompt } from "../src/claude/prompts/digest.js";
-import type { PreferenceCandidate } from "../src/claude/schemas.js";
 import { digestSourceFingerprint } from "../src/core/fingerprint.js";
 import {
   exportMessages,
@@ -11,6 +9,8 @@ import {
   validatePreferenceCandidates,
 } from "../src/core/preference-evidence.js";
 import { preferenceId, readObservedPreferences } from "../src/core/preferences.js";
+import { buildDigestPrompt } from "../src/distill/prompts/digest.js";
+import type { PreferenceCandidate } from "../src/distill/schemas.js";
 
 const roots: string[] = [];
 function home() {

@@ -1,0 +1,320 @@
+Human Hindsight 2.0.0
+Turn your coding sessions into reusable prompts and working agreements.
+
+Global options
+Usage
+  human-hindsight [OPTIONS]
+
+Options
+
+  --quality balanced|best  Model plan for reading and writing (default:
+                           balanced)
+  --recent 25              Start with this many of your most recent sessions
+  --plain                  Use numbered prompts and static progress (env
+                           HUMAN_HINDSIGHT_PLAIN=1)
+  --follow-up              Offer next steps in a terminal (disable with
+                           --no-follow-up)
+  --runner <cli>           Coding CLI for model calls: claude, codex, kiro,
+                           opencode, or auto (default)
+  --model <name>           Model for every distill step, in place of the
+                           --quality plan
+  --cluster-model <name>   Model for grouping sessions into tasks only (default:
+                           --model)
+  --author-model <name>    Model for writing prompts only (default: --model)
+  --project <name>         Only projects whose name contains this text, kept
+                           through every step
+  --home <dir>             Data directory (env HUMAN_HINDSIGHT_HOME; legacy
+                           CC_HINDSIGHT_HOME is also supported)
+  --claude-dir <dir>       Claude Code config directory (env CLAUDE_CONFIG_DIR;
+                           default ~/.claude)
+  --codex-dir <dir>        Codex data directory (env CODEX_HOME; default
+                           ~/.codex)
+  --kiro-dir <dir>         Kiro CLI config directory (env KIRO_CONFIG_DIR;
+                           default ~/.kiro)
+  --kirocrew-dir <dir>     Kiro Crew data directory (env
+                           HUMAN_HINDSIGHT_KIROCREW_DIR; default ~/.kiro/crew)
+  --opencode-dir <dir>     OpenCode data directory (env
+                           HUMAN_HINDSIGHT_OPENCODE_DIR; honors XDG_DATA_HOME)
+  --opencode-db <file>     OpenCode database (env OPENCODE_DB; relative to
+                           --opencode-dir)
+  --source <tool>          History to read: claude, codex, kiro, kirocrew,
+                           opencode, or auto (default)
+  -h, --help               Show examples and common options
+  --all                    Show the full reference when requesting help
+  -v, --version            Print the installed version
+
+human-hindsight (no command)
+Show your setup and a menu of next steps.
+Usage
+  human-hindsight [OPTIONS]
+
+Options
+
+  --dry-run  Print the setup summary and the next command; nothing runs
+  --yes      Print the setup summary and the next command without asking
+             anything
+
+human-hindsight scan
+Find projects and sessions on this machine.
+Usage
+  human-hindsight scan
+
+human-hindsight doctor
+Check your history, installed tools, and sign-in hints.
+Usage
+  human-hindsight doctor
+
+human-hindsight help
+Read examples or look up every command and option.
+Usage
+  human-hindsight help [OPTIONS] [COMMAND]
+
+Arguments
+
+  COMMAND  Command to look up
+
+Options
+
+  --all  Show the full reference when requesting help
+
+human-hindsight export
+Save your messages from coding sessions as Markdown.
+Usage
+  human-hindsight export [OPTIONS]
+
+Options
+
+  --project <name>    Only export sessions from this project
+  --min-messages <n>  Minimum human messages for a session to be exported
+                      (Default: 1)
+  --verbose           Also show what was left out of each session and how its
+                      evidence was gathered
+
+human-hindsight distill
+Build a prompt library from your exported sessions.
+Usage
+  human-hindsight distill [OPTIONS]
+
+Options
+
+  --runner <cli>                           Which local CLI distills: claude,
+                                           codex, kiro, opencode, or auto
+                                           (default: auto)
+  --model <name>                           Model for every step, as your CLI
+                                           names it
+  --cluster-model <name>                   Model for grouping sessions only
+                                           (defaults to --model)
+  --author-model <name>                    Model for writing prompts only
+                                           (defaults to --model)
+  --project <name>                         Only distill sessions from this
+                                           project
+  --group                                  Group sessions into tasks (use
+                                           --no-group for one prompt per
+                                           session)
+  --breaker                                Stop a parallel stage after 5
+                                           consecutive identical failures (use
+                                           --no-breaker to attempt every
+                                           session) (Default: true)
+  --no-breaker                             Turn off --breaker
+  --generalize                             Summarize working preferences after
+                                           writing prompts (skip with
+                                           --no-generalize) (Default: true)
+  --no-generalize                          Turn off --generalize
+  --min-substance <n>                      Minimum human messages for a session
+                                           to be eligible
+  --cluster-batch-size <n>                 Maximum sessions per grouping call
+                                           (positive integer; not with
+                                           --retry-failed)
+  --fresh                                  Discard saved session reads and
+                                           grouping, then rebuild
+  --dry-run                                Print the plan and exit; nothing is
+                                           sent
+  --yes                                    Approve the plan without asking (for
+                                           scripting)
+  --input-budget <characters>              Max characters of session content per
+                                           call (default 400000)
+  --truncate never|extreme                 Sessions over the size limit per
+                                           call: never (default, skip and
+                                           report) or extreme (shorten to fit)
+  --timeout <seconds>                      Per-call timeout in seconds (default
+                                           900; calls over many sessions scale)
+  --concurrency <n>                        Session reads, prompt writes, and
+                                           preference summaries run in parallel
+                                           (default 10)
+  --force                                  Rewrite prompts you edited by hand
+                                           (default: keep your edits)
+  --retry-failed                           Retry only the calls that failed;
+                                           keep the saved grouping and every
+                                           finished result
+  --retry-stage all|digest|cluster|author  Retry one step only: digest (reading
+                                           sessions), cluster (grouping), author
+                                           (writing), or all (default)
+  --recover-tasks <names>                  Explicitly recover named saved tasks
+                                           from older runs (comma-separated
+                                           names)
+  --verbose                                Show which sessions and prompts are
+                                           being worked on, and per-item detail
+
+human-hindsight list
+List saved prompts and the names you can use to open them.
+Usage
+  human-hindsight list
+
+human-hindsight show
+Read a saved prompt in your terminal.
+Usage
+  human-hindsight show [OPTIONS] <NAME>
+
+Arguments
+
+  NAME  Prompt name, as `list` shows it in the Name column (Required)
+
+Options
+
+  --raw  Print the prompt as plain Markdown, without styling or wrapping
+
+human-hindsight copy
+Copy a prompt to paste into a new coding session.
+Usage
+  human-hindsight copy [OPTIONS] <NAME>
+
+Arguments
+
+  NAME  Prompt name, as `list` shows it in the Name column (Required)
+
+human-hindsight edit
+Edit a saved prompt in your preferred text editor.
+Usage
+  human-hindsight edit [OPTIONS] <NAME>
+
+Arguments
+
+  NAME  Prompt name, as `list` shows it in the Name column (Required)
+
+human-hindsight rate
+Record whether a saved prompt worked for you.
+Usage
+  human-hindsight rate [OPTIONS] <NAME> <RATING>
+
+Arguments
+
+  NAME    Prompt name, as `list` shows it in the Name column (Required)
+  RATING  up or down (Required)
+
+human-hindsight prune
+Remove library entries left behind when sessions were regrouped.
+Usage
+  human-hindsight prune [OPTIONS]
+
+Options
+
+  --yes      Skip the confirmation prompt
+  --force    Also remove entries you edited by hand
+  --dry-run  List what would be removed; remove nothing
+
+human-hindsight status
+See what has finished and what to run next.
+Usage
+  human-hindsight status [OPTIONS]
+
+Options
+
+  --verbose  Also show generation ids and the bookkeeping of unfinished calls
+
+human-hindsight preferences
+Print accepted working preferences for your instruction file.
+Usage
+  human-hindsight preferences [OPTIONS]
+
+Options
+
+  --runner <cli>        Which local CLI consolidates: claude, codex, kiro,
+                        opencode, or auto (default: auto)
+  --model <name>        Model for --consolidate, passed to the CLI's --model
+  --project <name>      Include accepted instructions for this exact project,
+                        alongside global instructions
+  --include-unreviewed  Explicitly include unreviewed suggestions instead of
+                        only accepted instructions
+  --target <tool>       Output target: claude (CLAUDE.md), codex/opencode/agents
+                        (AGENTS.md), or kiro/kirocrew (steering file, also
+                        loaded by Kiro Crew). Default: inferred from --source
+  --consolidate         Merge near-duplicates with one model call through your
+                        CLI and save in the library (asks first)
+  --timeout <seconds>   Consolidation call timeout in seconds (default scales
+                        with the preference count)
+  --yes                 Approve the plan without asking (for scripting)
+
+human-hindsight suggest-subagents
+Generate specialist subagents from your working preferences.
+Usage
+  human-hindsight suggest-subagents [OPTIONS]
+
+Options
+
+  --runner <cli>               Which local CLI runs the stages: claude, codex,
+                               kiro, opencode, or auto (default: auto)
+  --model <name>               Model for summarizing preferences (env
+                               HUMAN_HINDSIGHT_SUBAGENT_MODEL; default: the
+                               selected plan)
+  --author-model <name>        Model for writing role prompts (default: --model,
+                               else the selected plan)
+  --propose-model <name>       Model for choosing roles (default: --model, else
+                               the selected plan)
+  --include-unreviewed         Use every preference you have not dismissed, even
+                               when some are accepted
+  --min-roles <n>              Fewest roles to propose (2 to 15, default 2)
+  --max-roles <n>              Most roles to propose (2 to 15, default 15)
+  --concurrency <n>            Most preference batches or role prompts at a time
+                               (default 10)
+  --input-budget <characters>  Size limit per call, in characters of preferences
+                               (default 400000)
+  --window-size <n>            Most preferences per summary call (default 20)
+  --fresh-generalize           Summarize every preference again, replacing the
+                               saved working agreements
+  --author-only                Finish unwritten role prompts in the interrupted
+                               or saved suggestion
+  --timeout <seconds>          Time limit per call in seconds (default 900, plus
+                               5 per preference)
+  --dry-run                    Print the call plan and the inputs; run nothing
+  --yes                        Approve the plan without asking (for scripting)
+  --verbose                    Show which batches and roles are being worked on
+  --export <dir>               Write the saved suggestion as files under this
+                               directory (no model calls)
+  --target <tool>              With --export: claude, codex, kiro, kirocrew,
+                               knowledge, or all (default: all)
+  --force                      With --export: overwrite files that already exist
+  --pin-model <name>           With --export: write this model id into the
+                               Claude Code, Kiro CLI and Kiro Crew files
+                               (default: inherit)
+
+human-hindsight retention
+Preview or apply settings that keep local session history longer.
+Usage
+  human-hindsight retention [OPTIONS]
+
+Options
+
+  --apply    Apply the previewed settings after confirmation
+  --dry-run  Preview only, even when --apply is present
+  --yes      With --apply, opt in without a confirmation prompt
+
+human-hindsight gui
+Open your library in a browser.
+Usage
+  human-hindsight gui [OPTIONS]
+
+Options
+
+  --port <number>                      Local port (4317 over SSH, otherwise
+                                       automatic)
+  --tab prompts|preferences|subagents  Open the prompts, preferences, or
+                                       subagents overview
+  --open                               Open your browser (use --no-open to print
+                                       the address only) (Default: true)
+  --no-open                            Turn off --open
+
+More help
+  human-hindsight help <command>  Examples and common options
+  human-hindsight doctor          Check your setup
+  human-hindsight help --all      All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

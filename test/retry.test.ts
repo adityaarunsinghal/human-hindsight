@@ -2,28 +2,32 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AUTHOR_PROMPT_VERSION } from "../src/claude/prompts/author.js";
-import { CLUSTER_PROMPT_VERSION } from "../src/claude/prompts/cluster.js";
-import { DIGEST_PROMPT_VERSION } from "../src/claude/prompts/digest.js";
-import {
-  AuthorSchema,
-  ClusterMergeSchema,
-  ClusterSchema,
-  DigestResponseSchema,
-  toJsonSchema,
-} from "../src/claude/schemas.js";
 import { contentFingerprint, fingerprint } from "../src/core/fingerprint.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
 import {
   type OperationKind,
   OperationStore,
   type QueueOperation,
 } from "../src/distill/operations.js";
+import { AUTHOR_PROMPT_VERSION } from "../src/distill/prompts/author.js";
+import { CLUSTER_PROMPT_VERSION } from "../src/distill/prompts/cluster.js";
+import { DIGEST_PROMPT_VERSION } from "../src/distill/prompts/digest.js";
 import {
   executeRetry,
   prepareRecovery,
   prepareRetry,
   type RetryHandler,
 } from "../src/distill/retry.js";
+import {
+  AuthorSchema,
+  ClusterMergeSchema,
+  ClusterSchema,
+  DigestResponseSchema,
+  toJsonSchema,
+} from "../src/distill/schemas.js";
+
+// Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
+setFileWriter(unflushedWriter);
 
 const homes: string[] = [];
 function fixture() {
@@ -165,6 +169,8 @@ describe("strict retry selection and execution", () => {
     f.store.start(failed.id);
     f.store.fail(failed.id, "timeout");
     const queued = f.queue("queued");
+    // A stage writes held queue entries when it ends.
+    f.store.flush();
     const plan = prepareRetry({
       home: f.home,
       handlers: f.handlers,
@@ -447,5 +453,21 @@ describe("strict retry selection and execution", () => {
           JSON.parse(fs.readFileSync(path.join(f.home, invocation.requestPath), "utf8")).prompt,
       ),
     ).toEqual(["first request", "corrected request"]);
+  });
+});
+
+describe("the retry summary line", () => {
+  it.each([
+    [
+      { succeeded: [1], repaired: [], failed: [], blocked: [], unattempted: [] },
+      "1 saved call made again.",
+    ],
+    [
+      { succeeded: [1, 2], repaired: [1], failed: [1], blocked: [], unattempted: [1, 2] },
+      "2 saved calls made again; 1 result finished from saved answers; 1 failed; 2 not started after repeated failures.",
+    ],
+  ])("%j", async (result, line) => {
+    const { retrySummary } = await import("../src/commands/retry.js");
+    expect(retrySummary(result)).toBe(line);
   });
 });

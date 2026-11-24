@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildCorpus, type DedupeInput } from "../src/core/dedupe.js";
-import { extractMessages } from "../src/core/extract.js";
+import { extractMessages } from "../src/sources/claude/extract.js";
+import { extractKiroMessages } from "../src/sources/kiro/extract.js";
 
 /**
  * Build a DedupeInput from raw lines. `buildCorpus` now takes pre-extracted
  * sessions (extraction is a SessionSource concern), so tests extract with the
- * claude extractor here — exactly what the export command does upstream.
+ * claude extractor here, exactly what the export command does upstream.
  */
 function di(d: {
   project: string;
@@ -22,7 +23,7 @@ function userLine(timestamp: string, text: string): string {
   return JSON.stringify({ type: "user", timestamp, message: { role: "user", content: text } });
 }
 
-/** An assistant line — never human input; must be ignored by extraction. */
+/** An assistant line: never human input; must be ignored by extraction. */
 function assistantLine(timestamp: string, text: string): string {
   return JSON.stringify({
     type: "assistant",
@@ -62,7 +63,7 @@ function forkPair(): DedupeInput[] {
   return [sessionA, sessionB];
 }
 
-describe("buildCorpus — R8 cross-file dedupe", () => {
+describe("buildCorpus: R8 cross-file dedupe", () => {
   it("attributes each (timestamp,text) to the earliest session; fork copies drop", () => {
     const corpus = buildCorpus(forkPair());
     const a = corpus.sessions.find((s) => s.sessionId === "sess-a");
@@ -81,7 +82,7 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
     const corpus = buildCorpus(forkPair());
     const a = corpus.sessions.find((s) => s.sessionId === "sess-a");
     const b = corpus.sessions.find((s) => s.sessionId === "sess-b");
-    // "hello" survives in A (at T1) AND in B (re-sent at T4) — distinct keys.
+    // "hello" survives in A (at T1) AND in B (re-sent at T4): distinct keys.
     expect(a?.messages.some((m) => m.text === "hello" && m.timestamp === T1)).toBe(true);
     expect(b?.messages.some((m) => m.text === "hello" && m.timestamp === T4)).toBe(true);
   });
@@ -90,7 +91,7 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
     const corpus = buildCorpus(forkPair());
     const b = corpus.sessions.find((s) => s.sessionId === "sess-b");
     // Even though B's survivors were the 3rd and 4th entries in the file, their
-    // post-dedupe indices are a dense 0,1 — this is what the anaphora pass aligns against.
+    // post-dedupe indices are a dense 0,1; this is what the anaphora pass aligns against.
     expect(b?.messages.map((m) => m.index)).toEqual([0, 1]);
     const a = corpus.sessions.find((s) => s.sessionId === "sess-a");
     expect(a?.messages.map((m) => m.index)).toEqual([0, 1]);
@@ -147,5 +148,70 @@ describe("buildCorpus — R8 cross-file dedupe", () => {
     const forward = buildCorpus(forkPair());
     const reversed = buildCorpus([...forkPair()].reverse());
     expect(JSON.stringify(reversed)).toBe(JSON.stringify(forward));
+  });
+});
+
+describe("buildCorpus: messages without a timestamp", () => {
+  // Kiro v2 prompts without `meta.timestamp` are tolerated with timestamp "".
+  // With no timestamp there is no evidence of a fork copy, so every reply stays.
+  const prompt = (text: string, id: string) =>
+    JSON.stringify({
+      version: 1,
+      kind: "Prompt",
+      data: { message_id: id, content: [{ kind: "text", data: text }], meta: {} },
+    });
+
+  it("keeps a repeated reply in one session", () => {
+    const extracted = extractKiroMessages([
+      prompt("add the tests", "m1"),
+      prompt("yes", "m2"),
+      prompt("now the docs", "m3"),
+      prompt("yes", "m4"),
+    ]);
+    const corpus = buildCorpus([
+      { project: "p", sessionId: "s1", sourcePath: "/synthetic/s1.jsonl", extracted },
+    ]);
+    expect(corpus.sessions[0]?.messages.map((m) => [m.index, m.text])).toEqual([
+      [0, "add the tests"],
+      [1, "yes"],
+      [2, "now the docs"],
+      [3, "yes"],
+    ]);
+    expect(corpus.duplicatesDropped).toBe(0);
+  });
+
+  it("keeps the same short reply typed in two unrelated sessions", () => {
+    const a = extractKiroMessages([prompt("rename the module", "m1"), prompt("yes", "m2")]);
+    const b = extractKiroMessages([prompt("bump the version", "m1"), prompt("yes", "m2")]);
+    const corpus = buildCorpus([
+      { project: "p", sessionId: "a", sourcePath: "/synthetic/a.jsonl", extracted: a },
+      { project: "q", sessionId: "b", sourcePath: "/synthetic/b.jsonl", extracted: b },
+    ]);
+    expect(corpus.duplicatesDropped).toBe(0);
+    expect(corpus.sessions.map((s) => s.messages.length)).toEqual([2, 2]);
+  });
+
+  it("still drops a timestamped fork copy beside untimed replies", () => {
+    const extracted = (lines: string[]) => extractMessages(lines);
+    const untimed = JSON.stringify({ type: "user", message: { role: "user", content: "yes" } });
+    const corpus = buildCorpus([
+      {
+        project: "p",
+        sessionId: "a",
+        sourcePath: "/a",
+        extracted: extracted([userLine("2026-01-01T00:00:00.000Z", "plan it"), untimed]),
+      },
+      {
+        project: "p",
+        sessionId: "b",
+        sourcePath: "/b",
+        extracted: extracted([userLine("2026-01-01T00:00:00.000Z", "plan it"), untimed]),
+      },
+    ]);
+    expect(corpus.duplicatesDropped).toBe(1);
+    expect(corpus.sessions.map((s) => s.messages.map((m) => m.text))).toEqual([
+      ["plan it", "yes"],
+      ["yes"],
+    ]);
   });
 });

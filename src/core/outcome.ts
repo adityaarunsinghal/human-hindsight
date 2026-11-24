@@ -1,5 +1,5 @@
 /**
- * core/outcome.ts — the bounded outcome-evidence pass.
+ * core/outcome.ts: the bounded outcome-evidence pass.
  *
  * Without any signal of whether a session succeeded, failed, or was abandoned,
  * the distill stages would confidently author "ideal" prompts that reproduce
@@ -9,9 +9,12 @@
  *   - final_human_turns:    the last {@link FINAL_TURNS} deduped human turns,
  *                           most recent LAST (what the human ended up asking for);
  *   - final_assistant_tail: the ~{@link TAIL_CHARS}-char tail of the LAST
- *                           assistant text turn in the file ("" if none).
+ *                           assistant text turn in the file ("" if none);
+ *   - human_spoke_last:     whether the person wrote anything after that
+ *                           assistant turn (absent when the timeline has
+ *                           neither kind of turn).
  *
- * This is distill INPUT ONLY — the human-only export artifact is unaffected. The
+ * This is distill INPUT ONLY: the human-only export artifact is unaffected. The
  * assistant text is machine-authored and is never copied into a oneshot; the
  * `_note` written alongside the data (see the export command) states this.
  */
@@ -29,7 +32,7 @@ export const FINAL_TURNS = 3;
 
 /**
  * A top-level `_note` for `outcomes.json` labeling the assistant text as
- * machine-authored context — it is never surfaced in an export or a
+ * machine-authored context; it is never surfaced in an export or a
  * oneshot, only fed to the outcome-classification stage of distill.
  */
 export const OUTCOME_NOTE =
@@ -44,6 +47,31 @@ export interface OutcomeEvidence {
   final_assistant_tail: string;
   /** Tool-recorded execution result, independent of the assistant's claims. */
   final_execution_status?: string;
+  /**
+   * True when the person wrote something after the assistant's last text
+   * turn (or when the timeline has human turns and no assistant text turn);
+   * false when the assistant's turn came last. Absent when the timeline has
+   * neither, and in files written before this field existed.
+   */
+  human_spoke_last?: boolean;
+}
+
+/**
+ * Whether a group of sessions can get a prompt, judged from each member's
+ * outcome label (`undefined` for a member with no digest, which counts as
+ * `unclear`: no ending was captured):
+ * - `verified`: at least one member is `completed` or `partial`;
+ * - `unverified`: none is, but at least one is `unclear` or has no label; the
+ *   prompt is written and marked "outcome not verified";
+ * - `abandoned`: every member was abandoned (or there are none); no prompt.
+ */
+export type GroupOutcome = "verified" | "unverified" | "abandoned";
+
+export function groupOutcome(outcomes: readonly (string | undefined)[]): GroupOutcome {
+  if (outcomes.some((outcome) => outcome === "completed" || outcome === "partial"))
+    return "verified";
+  if (outcomes.some((outcome) => outcome !== "abandoned")) return "unverified";
+  return "abandoned";
 }
 
 /**
@@ -58,14 +86,21 @@ export function buildOutcome(session: CorpusSession, timeline: TimelineEvent[]):
   const final_human_turns = session.messages.slice(-FINAL_TURNS).map((message) => message.text);
 
   let final_assistant_tail = "";
+  let lastAssistant = -1;
   for (let i = timeline.length - 1; i >= 0; i--) {
     const event = timeline[i];
     if (event?.kind === "assistant") {
       final_assistant_tail =
         event.text.length > TAIL_CHARS ? event.text.slice(-TAIL_CHARS) : event.text;
+      lastAssistant = i;
       break;
     }
   }
+  // Which came last: the person's words or the assistant's closing message.
+  // Only a human turn with text counts as the person writing something.
+  const lastHuman = timeline.findLastIndex(
+    (event) => event.kind === "human" && event.text.trim() !== "",
+  );
 
   // A later human prompt starts another attempt; an earlier idle marker must
   // not label that new attempt as completed.
@@ -82,5 +117,8 @@ export function buildOutcome(session: CorpusSession, timeline: TimelineEvent[]):
     final_human_turns,
     final_assistant_tail,
     ...(final_execution_status ? { final_execution_status } : {}),
+    ...(lastHuman >= 0 || lastAssistant >= 0
+      ? { human_spoke_last: lastHuman > lastAssistant }
+      : {}),
   };
 }

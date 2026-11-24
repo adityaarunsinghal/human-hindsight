@@ -3,10 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { DigestResponseSchema } from "../src/claude/schemas.js";
 import { exportMessages } from "../src/core/preference-evidence.js";
 import { readObservedPreferences } from "../src/core/preferences.js";
 import { type RunnerFn, runDigestStage } from "../src/distill/pipeline.js";
+import { DigestResponseSchema } from "../src/distill/schemas.js";
 import { runEvaluationCli } from "../src/eval/cli.js";
 import {
   evaluationCases,

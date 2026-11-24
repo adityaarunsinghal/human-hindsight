@@ -9,10 +9,12 @@
  * `cli_<uuid>` migration case); extract/timeline/classify sniff each session's
  * format from its lines and dispatch. Kiro classifies human-vs-automation at the
  * SESSION level, so this source exposes `classify`, wiring discovery metadata
- * (`.history` presence, parent link) to the per-format classifier.
+ * (`.history` presence, parent link, v3 `agentMode`) to the per-format
+ * classifier. A v3 Kiro Crew run (K15) classifies as `"kirocrew"`, apart from
+ * ordinary automation, so export and status can say where its text went.
  */
 
-import fs from "node:fs";
+import { readFileLines } from "../read.js";
 import type {
   ExtractResult,
   ProjectInfo,
@@ -49,6 +51,13 @@ export function kiroSource(kiroDir: string): SessionSource {
     const v2 = collectKiroV2Sessions(kiroDir, opts).filter(
       (s) => !v3Ids.has(s.file.replace(/\.jsonl$/, "")),
     );
+    // A migrated `cli_<uuid>_<suffix>` session was exported before under the
+    // flat file's id, the bare uuid. Carrying it lets export keep that earlier
+    // export name and session id (see SessionInfo.stableId).
+    for (const session of v3) {
+      const stem = session.file.replace(/\.jsonl$/, "");
+      if (stem.startsWith("cli_") && coreUuid(stem) !== stem) session.stableId = coreUuid(stem);
+    }
     const projects = groupKiroSessionsByCwd([...v2, ...v3]);
     metaByPath.clear();
     for (const project of projects) {
@@ -76,15 +85,17 @@ export function kiroSource(kiroDir: string): SessionSource {
       if (!meta) return undefined; // unknown session → keep (recall-oriented)
       let lines: string[];
       try {
-        lines = fs.readFileSync(session.path, "utf8").split(/\r?\n/);
+        lines = readFileLines(session.path);
       } catch {
         return undefined; // unreadable → let the read-error path handle it
       }
-      const verdict =
-        detectKiroFormat(lines) === "v3"
-          ? classifyKiroV3Lines(meta, lines)
-          : classifyKiroLines(meta, lines);
-      return verdict.include ? "interactive" : "automation";
+      if (detectKiroFormat(lines) === "v3") {
+        const verdict = classifyKiroV3Lines(meta, lines);
+        if (verdict.include) return "interactive";
+        // K15: a Kiro Crew run; its human side is read from the Crew store.
+        return verdict.kind === "kirocrew" ? "kirocrew" : "automation";
+      }
+      return classifyKiroLines(meta, lines).include ? "interactive" : "automation";
     },
   };
 }

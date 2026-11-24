@@ -1,0 +1,25 @@
+human-hindsight edit
+Edit a saved prompt in your preferred text editor.
+
+Examples
+  human-hindsight edit review-changes
+    Use a name from list. Later runs keep your edits by
+    default.
+
+  human-hindsight edit review-changes --no-follow-up
+    Return to the shell when the editor closes.
+
+Common options
+  --home <dir>  Data directory (env HUMAN_HINDSIGHT_HOME;
+                legacy CC_HINDSIGHT_HOME is also supported)
+  --follow-up   Offer next steps in a terminal (disable with
+                --no-follow-up)
+
+More help
+  human-hindsight edit --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

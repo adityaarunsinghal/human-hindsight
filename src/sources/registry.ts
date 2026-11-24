@@ -5,24 +5,26 @@ import { codexSource } from "./codex/index.js";
 import { KIRO_SESSIONS_SUBDIR } from "./kiro/discover.js";
 import { kiroV3StoreExists } from "./kiro/discover-v3.js";
 import { kiroSource } from "./kiro/index.js";
+import { kirocrewStoreExists } from "./kirocrew/discover.js";
+import { kirocrewSource } from "./kirocrew/index.js";
 import { opencodeSource } from "./opencode/index.js";
 import { resolveOpenCodePaths } from "./opencode/paths.js";
 import type { SessionSource, SourceName } from "./types.js";
 
 /**
- * sources/registry.ts — resolve `--source claude|codex|kiro|auto` into the concrete
- * backends to run.
+ * sources/registry.ts: resolve `--source claude|codex|kiro|kirocrew|opencode|auto`
+ * into the concrete backends to run.
  *
- * - `claude` / `kiro`: exactly that one backend (even if its store is empty —
+ * - `claude` / `kiro`: exactly that one backend (even if its store is empty:
  *   an explicit choice is honored).
  * - `auto` (default): every backend whose on-disk store EXISTS and holds at
- *   least one project, in the fixed order claude-then-codex-then-kiro. A machine with
+ *   least one project, in the fixed order claude, codex, kiro, kirocrew, opencode. A machine with
  *   only one populated store gets exactly that one; a machine with neither
  *   gets an empty list (commands then report "nothing found" exactly as
  *   before). An existing-but-empty store contributes nothing, so it never
  *   pads stats breakdowns with zero entries.
  *
- * An unknown value throws — the caller maps that to exit 1.
+ * An unknown value throws; the caller maps that to exit 1.
  */
 
 /** The `--source` selector; `auto` is the default. */
@@ -33,6 +35,7 @@ export interface SourceDirs {
   claudeDir: string;
   codexDir: string;
   kiroDir: string;
+  kirocrewDir: string;
   opencodeDir?: string;
   opencodeDb?: string;
 }
@@ -68,38 +71,48 @@ export function parseSourceMode(raw: string | undefined): SourceMode {
     value === "claude" ||
     value === "codex" ||
     value === "kiro" ||
+    value === "kirocrew" ||
     value === "opencode"
   )
     return value;
-  throw new Error(`unknown --source "${raw}" (expected claude, codex, kiro, opencode, or auto)`);
+  throw new Error(
+    `unknown --source "${raw}" (expected claude, codex, kiro, kirocrew, opencode, or auto)`,
+  );
 }
 
 /**
  * Resolve the source mode into the ordered list of backends to run. `auto`
  * probes each store's existence AND requires it to discover at least one
  * project; explicit modes always return their one backend. Order is always
- * claude-then-codex-then-kiro so merged output is deterministic.
+ * claude, codex, kiro, kirocrew, opencode so merged output is deterministic.
  */
 export function resolveSources(mode: SourceMode, dirs: SourceDirs): SessionSource[] {
   if (mode === "claude") return [claudeSource(dirs.claudeDir)];
   if (mode === "codex") return [codexSource(dirs.codexDir)];
   if (mode === "kiro") return [kiroSource(dirs.kiroDir)];
+  if (mode === "kirocrew") return [kirocrewSource(dirs.kirocrewDir)];
   const paths = resolveOpenCodePaths({ dir: dirs.opencodeDir, db: dirs.opencodeDb });
   const opencode = opencodeSource(paths.opencodeDir, paths.opencodeDb);
   if (mode === "opencode") return [opencode];
 
-  // auto — include each backend whose store exists and holds ≥1 project (the
+  // auto: include each backend whose store exists and holds ≥1 project (the
   // discover call is a cheap directory listing; countEntries stays off).
   const sources: SessionSource[] = [];
   if (claudeStoreExists(dirs.claudeDir)) {
     const claude = claudeSource(dirs.claudeDir);
-    if (claude.discover({ countEntries: false }).length > 0) sources.push(claude);
+    if (claude.discover({ countEntries: false, readProjectPaths: false }).length > 0) {
+      sources.push(claude);
+    }
   }
   const codex = codexSource(dirs.codexDir);
   if (codex.discover({ countEntries: false }).length > 0) sources.push(codex);
   if (kiroStoreExists(dirs.kiroDir)) {
     const kiro = kiroSource(dirs.kiroDir);
     if (kiro.discover({ countEntries: false }).length > 0) sources.push(kiro);
+  }
+  if (kirocrewStoreExists(dirs.kirocrewDir)) {
+    const kirocrew = kirocrewSource(dirs.kirocrewDir);
+    if (kirocrew.discover({ countEntries: false }).length > 0) sources.push(kirocrew);
   }
   if (opencode.discover({ countEntries: false }).length > 0) sources.push(opencode);
   return sources;

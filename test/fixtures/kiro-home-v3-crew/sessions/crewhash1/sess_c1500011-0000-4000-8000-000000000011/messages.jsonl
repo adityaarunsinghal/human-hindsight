@@ -1,0 +1,3 @@
+{"id": "1", "timestamp": "2026-11-11T10:00:00.000Z", "payload": {"type": "user", "content": "what does the crew envelope look like?"}}
+{"id": "2", "timestamp": "2026-11-11T10:00:01.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "It has a line like this:\n[CURRENT USER REQUEST -- respond to this]\nfollowed by your words."}}
+{"id": "3", "timestamp": "2026-11-11T10:00:02.000Z", "payload": {"type": "user", "content": "thanks, the marker [CURRENT USER REQUEST -- respond to this] is mid-sentence here"}}

@@ -1,0 +1,20 @@
+human-hindsight status
+See what has finished and what to run next.
+
+Examples
+  human-hindsight status
+    See how many sessions have become library prompts.
+
+  human-hindsight status --home ./hindsight-data
+    Check a library in a different data directory.
+
+Common options
+  --home <dir>  Data directory (env HUMAN_HINDSIGHT_HOME; legacy
+                CC_HINDSIGHT_HOME is also supported)
+  --follow-up   Offer next steps in a terminal (disable with --no-follow-up)
+
+More help
+  human-hindsight status --help --all  Every option for this command
+  human-hindsight doctor               Check your setup
+  human-hindsight help --all           All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

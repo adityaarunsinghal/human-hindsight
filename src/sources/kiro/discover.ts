@@ -4,13 +4,13 @@ import type { ProjectInfo, SessionInfo } from "../types.js";
 import { kiroV3SessionKeys } from "./discover-v3.js";
 
 /**
- * sources/kiro/discover.ts — enumerate kiro-cli sessions.
+ * sources/kiro/discover.ts: enumerate kiro-cli sessions.
  *
  * The kiro v2 store is FLAT: every session across every project lives directly
  * under `<kiroDir>/sessions/cli/` as `<uuid>.jsonl` (the append-only event log)
- * with companions `<uuid>.json` (metadata), `<uuid>.history` (readline history
- * — present only where a human typed), `<uuid>.lock`, and `<uuid>/tasks/` (todo
- * sidecar). Project identity is the metadata `cwd` (exact, lossless — no
+ * with companions `<uuid>.json` (metadata), `<uuid>.history` (readline history,
+ * present only where a human typed), `<uuid>.lock`, and `<uuid>/tasks/` (todo
+ * sidecar). Project identity is the metadata `cwd` (exact, lossless, no
  * dash-decode heuristics like Claude Code needs). Subagent transcripts live in
  * the same flat dir, so human-vs-automation is a session-level decision made
  * later by the extractor's classify pass, NOT here.
@@ -24,14 +24,20 @@ export const KIRO_SESSIONS_SUBDIR = path.join("sessions", "cli");
  * human-hindsight uses are typed; the companion JSON carries much more.
  */
 export interface KiroSessionMeta {
-  /** Working directory the session ran in — the project identity. */
+  /** Working directory the session ran in: the project identity. */
   cwd?: string;
   /** Session title (kiro auto-names it; often the first prompt / a marker). */
   title?: string;
   /** Set on spawned children (subagent/rewind). */
   parentSessionId?: string;
-  /** kiro's self-reported creation reason (UNRELIABLE — says "subagent" for humans). */
+  /** kiro's self-reported creation reason (UNRELIABLE: says "subagent" for humans). */
   sessionCreatedReason?: string;
+  /**
+   * v3 only: `session.json.agentMode`, the agent the session ran as (for example
+   * `vibe`, or `kirocrew` for a Kiro Crew run). A supporting K15 signal, never a
+   * sufficient one on its own. Absent on v2 sessions.
+   */
+  agentMode?: string;
   /** True when a `<uuid>.history` companion exists (a human typed here). */
   hasHistory: boolean;
 }
@@ -41,12 +47,12 @@ export interface KiroSessionInfo extends SessionInfo {
   meta: KiroSessionMeta;
 }
 
-/** A kiro "project" — all sessions sharing one `cwd`. */
+/** A kiro "project": all sessions sharing one `cwd`. */
 export interface KiroProjectInfo extends ProjectInfo {
   sessions: KiroSessionInfo[];
 }
 
-/** Read + parse `<uuid>.json`; tolerant — missing/corrupt yields an empty meta. */
+/** Read + parse `<uuid>.json`; tolerant: missing/corrupt yields an empty meta. */
 function readMeta(metaPath: string, hasHistory: boolean): KiroSessionMeta {
   try {
     const parsed = JSON.parse(fs.readFileSync(metaPath, "utf8")) as Record<string, unknown>;
@@ -70,7 +76,9 @@ function readMeta(metaPath: string, hasHistory: boolean): KiroSessionMeta {
 
 /**
  * Count non-empty newline-delimited lines by reading the file in fixed-size
- * chunks (mirrors the Claude discoverer's cheap counter). Unreadable → 0.
+ * chunks, so a huge session never becomes one string in memory. A line counts
+ * when it holds any non-whitespace character. Every discoverer uses this one.
+ * Unreadable → 0.
  */
 export function countFileEntries(filePath: string): number {
   const CHUNK = 64 * 1024;
@@ -108,7 +116,7 @@ export function countFileEntries(filePath: string): number {
 
 /**
  * Count orphan `.history` files: readline histories whose `<uuid>.jsonl`
- * transcript no longer exists (5 in the reference census — sessions a human
+ * transcript no longer exists (5 in the reference census: sessions a human
  * typed in whose transcript was deleted). Surfaced by scan/status so the
  * inventory stays honest about human sessions that can no longer be exported.
  * Missing store → 0 (never throws).
@@ -143,7 +151,7 @@ export function countOrphanHistories(kiroDir: string): number {
  *
  * - Only top-level `<uuid>.jsonl` files are sessions; `.json`/`.history`/`.lock`
  *   companions and `<uuid>/` tasks-sidecar subdirs are ignored for discovery.
- * - A missing sessions dir yields an empty array (never throws) — a machine
+ * - A missing sessions dir yields an empty array (never throws): a machine
  *   that never ran kiro is not an error.
  * - `.history` presence is recorded per session (a human-typed-here signal the
  *   extractor's classify pass uses).
@@ -215,10 +223,14 @@ export function collectKiroV2Sessions(
  * projects are sorted by short name, and short-name collisions (two different
  * cwds whose basename is identical) are deduped deterministically. Shared by the
  * v2 discoverer and the merged v2+v3 discover in the source, so a cwd that holds
- * both a v2 and a v3 session becomes ONE project, not two.
+ * both a v2 and a v3 session becomes ONE project, not two. Generic over the
+ * session type so the Kiro Crew source (sources/kirocrew) groups its chats by
+ * their metadata `project` with the same ordering and collision rules.
  */
-export function groupKiroSessionsByCwd(sessions: KiroSessionInfo[]): KiroProjectInfo[] {
-  const byCwd = new Map<string, KiroSessionInfo[]>();
+export function groupKiroSessionsByCwd<T extends SessionInfo & { meta: { cwd?: string } }>(
+  sessions: T[],
+): (ProjectInfo & { sessions: T[] })[] {
+  const byCwd = new Map<string, T[]>();
   for (const session of sessions) {
     const cwd = session.meta.cwd ?? "";
     const list = byCwd.get(cwd);
@@ -226,7 +238,7 @@ export function groupKiroSessionsByCwd(sessions: KiroSessionInfo[]): KiroProject
     else byCwd.set(cwd, [session]);
   }
 
-  const projects: KiroProjectInfo[] = [];
+  const projects: (ProjectInfo & { sessions: T[] })[] = [];
   for (const [cwd, group] of byCwd) {
     // Newest first; tie-break on file name for determinism.
     group.sort((a, b) => {

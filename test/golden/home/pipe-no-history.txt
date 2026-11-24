@@ -1,0 +1,14 @@
+│ Human Hindsight 2.0.0
+│ The prompt you'd write if you knew then what you know now.
+│
+│ Your coding tools on this machine
+│ No session history found on this machine yet.
+│ Looked for Claude Code, Codex, Kiro CLI, Kiro Crew, and OpenCode.
+│ Kept somewhere else? Pass its folder, for example --claude-dir <dir>.
+│ Every folder option: human-hindsight help --all
+│
+│ Private by default
+│ No session text leaves this machine until you approve a plan.
+│ This screen only asks your coding tools for their version and sign-in status.
+
+→ next: human-hindsight doctor --home=<ROOT>/home --claude-dir=<ROOT>/claude --codex-dir=<ROOT>/codex --kiro-dir=<ROOT>/kiro --kirocrew-dir=<ROOT>/kirocrew --opencode-dir=<ROOT>/opencode

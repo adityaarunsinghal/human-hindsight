@@ -1,0 +1,8 @@
+{
+  "id": "sess_c1500014-0000-4000-8000-000000000014",
+  "title": "control subagent_ cwd outside kirocrew-workspace",
+  "agentMode": "vibe",
+  "workspacePaths": ["/proj/tools/subagent_helpers"],
+  "createdAt": "2026-11-14T10:00:00.000Z",
+  "status": "idle"
+}

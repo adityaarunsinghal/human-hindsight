@@ -1,25 +1,26 @@
 import { styleText } from "node:util";
+import { canColor, glyph } from "./mode.js";
 
 /**
  * Apply ANSI styling, honoring THIS module's explicit `color` flag rather than
  * Node's stream auto-detection. `styleText`'s default path re-inspects
  * `process.stdout` and silently strips escapes whenever it looks non-color
- * (piped output, CI, the test runner) — which would override an explicit
+ * (piped output, CI, the test runner), which would override an explicit
  * `color: true` and make the flag a lie. `validateStream: false` disables that
  * re-check so the caller's decision is authoritative. Safe here because the
  * TTY-vs-pipe choice is made upstream (show.ts prints raw markdown when stdout
  * is not a TTY and never reaches this module with color on), and NO_COLOR is
- * likewise the caller's business — this module only styles when asked to.
+ * likewise the caller's business: this module only styles when asked to.
  */
 const sty = (format: Parameters<typeof styleText>[0], text: string): string =>
   styleText(format, text, { validateStream: false });
 
 /**
- * ui/markdown.ts — zero-dependency ANSI rendering of the markdown subset that
+ * ui/markdown.ts: zero-dependency ANSI rendering of the markdown subset that
  * authored oneshots (and exports) actually use: headings, **bold**, `inline
  * code`, fenced code blocks, bullet/numbered lists, paragraphs.
  *
- * Anything outside the subset stays literal — same fidelity philosophy as the
+ * Anything outside the subset stays literal, the same fidelity philosophy as the
  * extractor: never mangle what we don't understand.
  *
  * Wrapping happens on visible characters BEFORE styling is applied (styled
@@ -122,7 +123,8 @@ function wrapWords(words: Word[], width: number, color: boolean, indent = "", ha
 /** Render markdown to ANSI-styled terminal text. */
 export function renderMarkdownAnsi(markdown: string, opts: RenderOptions = {}): string {
   const width = opts.width ?? Math.max(30, Math.min(process.stdout.columns ?? 80, 100));
-  const color = opts.color ?? true;
+  // The same color rule as every other screen: stdout, NO_COLOR, TERM, FORCE_COLOR.
+  const color = opts.color ?? canColor();
   const out: string[] = [];
   let paragraph: string[] = [];
   let fence: string[] | null = null;
@@ -171,7 +173,7 @@ export function renderMarkdownAnsi(markdown: string, opts: RenderOptions = {}): 
     const numbered = line.match(/^\s*(\d+)\.\s+(.*)$/);
     if (bullet?.[1] !== undefined) {
       flushParagraph();
-      out.push(...wrapWords(inlineWords(bullet[1]), width, color, "  • ", "    "));
+      out.push(...wrapWords(inlineWords(bullet[1]), width, color, `  ${glyph("•", "*")} `, "    "));
       continue;
     }
     if (numbered?.[2] !== undefined) {

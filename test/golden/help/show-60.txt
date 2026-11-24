@@ -1,0 +1,24 @@
+human-hindsight show
+Read a saved prompt in your terminal.
+
+Examples
+  human-hindsight show review-changes
+    Replace review-changes with a name from list.
+
+  human-hindsight show review-changes --raw
+    Print the prompt body as Markdown.
+
+Common options
+  --raw        Print the prompt as plain Markdown, without
+               styling or wrapping
+  --follow-up  Offer next steps in a terminal (disable with
+               --no-follow-up)
+
+More help
+  human-hindsight show --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

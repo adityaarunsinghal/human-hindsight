@@ -1,21 +1,21 @@
 /**
- * core/anaphora.ts — the recall-oriented anaphora pass.
+ * core/anaphora.ts: the recall-oriented anaphora pass.
  *
  * For EVERY short human turn (≤ {@link SHORT_TURN_MAX_WORDS} whitespace tokens)
  * we attach the context needed to later resolve what "yes", "do both", or
- * "option 2" meant, WITHOUT classifying which turns are actually referential —
+ * "option 2" meant, WITHOUT classifying which turns are actually referential:
  * false positives are free, false negatives are the failure mode. Two
  * kinds of context are attached, either/both/neither may be present:
  *
- *   (a) antecedent — the ~{@link TAIL_CHARS}-char TAIL of the immediately
+ *   (a) antecedent: the ~{@link TAIL_CHARS}-char TAIL of the immediately
  *       preceding assistant *text* turn ("the ask lives at the end of an
  *       essay", so we keep the end, not the head);
- *   (b) a pending decision surface — the most recent `ExitPlanMode` plan or
+ *   (b) a pending decision surface: the most recent `ExitPlanMode` plan or
  *       `AskUserQuestion` question issued by the assistant AFTER the previous
  *       human turn and BEFORE this one; i.e. exactly what a bare "yes" approved.
  *
  * Index alignment is sacred: every record's `index` is the POST-DEDUPE
- * message index from {@link buildCorpus} — the position of that message in the
+ * message index from {@link buildCorpus}, the position of that message in the
  * rendered export. Human turns that were dropped as fork copies (owned by an
  * earlier session, rule R8) get NO record here; they are recorded where they
  * are owned. Attached assistant text is consumed ONLY to resolve meaning and
@@ -29,7 +29,7 @@
  */
 
 import type { TimelineEvent } from "../sources/types.js";
-import type { CorpusSession } from "./dedupe.js";
+import { type CorpusSession, dedupeKey } from "./dedupe.js";
 
 /** Human turns with at most this many whitespace tokens get a record. */
 export const SHORT_TURN_MAX_WORDS = 15;
@@ -46,7 +46,7 @@ export type DecisionKind = "plan" | "question";
  * null when absent (e.g. the session's first message has neither).
  */
 export interface AnaphoraRecord {
-  /** POST-DEDUPE message index — aligns with the rendered export heading. */
+  /** POST-DEDUPE message index; aligns with the rendered export heading. */
   index: number;
   timestamp: string;
   human_text: string;
@@ -69,11 +69,6 @@ export function isShortTurn(text: string): boolean {
 /** Keep the last {@link TAIL_CHARS} characters of a string (its tail). */
 function tail(text: string): string {
   return text.length > TAIL_CHARS ? text.slice(-TAIL_CHARS) : text;
-}
-
-/** The `(timestamp, text)` dedupe key — must match core/dedupe.ts exactly. */
-function messageKey(timestamp: string, text: string): string {
-  return `${timestamp}\u0000${text}`;
 }
 
 /**
@@ -125,16 +120,20 @@ function findDecision(
  * `timeline` is that session file's full event stream (produced once by the
  * owning SessionSource) so the antecedent and decision windows see the full
  * conversation (assistant turns, plans, questions, and even fork-copied human
- * turns) — while records are only emitted for short human turns THIS session
+ * turns), while records are only emitted for short human turns THIS session
  * owns.
  */
 export function buildAnaphora(session: CorpusSession, timeline: TimelineEvent[]): AnaphoraRecord[] {
-  // Owned (survived dedupe here) key → post-dedupe index. First occurrence wins,
-  // matching dedupe's keep-the-first-in-file-order behavior.
-  const ownedIndex = new Map<string, number>();
+  // Owned (survived dedupe here) key to its post-dedupe indices, in order. A
+  // session can own the same (timestamp, text) more than once (two "yes"
+  // replies without a timestamp), so each timeline turn takes the next index
+  // for its key: the n-th such turn in file order is the n-th such message.
+  const ownedIndex = new Map<string, number[]>();
   for (const message of session.messages) {
-    const key = messageKey(message.timestamp, message.text);
-    if (!ownedIndex.has(key)) ownedIndex.set(key, message.index);
+    const key = dedupeKey(message.timestamp, message.text);
+    const list = ownedIndex.get(key);
+    if (list) list.push(message.index);
+    else ownedIndex.set(key, [message.index]);
   }
 
   const records: AnaphoraRecord[] = [];
@@ -146,7 +145,7 @@ export function buildAnaphora(session: CorpusSession, timeline: TimelineEvent[])
     if (event?.kind !== "human") continue;
 
     if (isShortTurn(event.text)) {
-      const index = ownedIndex.get(messageKey(event.timestamp, event.text));
+      const index = ownedIndex.get(dedupeKey(event.timestamp, event.text))?.shift();
       // Emit only for short turns THIS session owns (fork copies are recorded
       // where they are owned), each index at most once.
       if (index !== undefined && !emitted.has(index)) {

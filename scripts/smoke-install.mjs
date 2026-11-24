@@ -132,6 +132,20 @@ try {
   ]);
   const smoke = await run(process.execPath, [path.resolve("scripts/smoke-runtime.mjs"), prefix]);
   console.log(smoke.stdout.trim());
+  // Both installed commands on an old Node: the short message and exit code 1.
+  // CI names a Node 18 binary; a local run without one says it was skipped.
+  const oldest = process.env.HUMAN_HINDSIGHT_OLDEST_NODE;
+  assert(oldest || !process.env.CI, "Set HUMAN_HINDSIGHT_OLDEST_NODE to a Node 18 binary.");
+  if (oldest) {
+    const refused = await run(process.execPath, [
+      path.resolve("scripts/smoke-node-versions.mjs"),
+      prefix,
+      `refuse:${oldest}`,
+    ]);
+    console.log(refused.stdout.trim());
+  } else {
+    console.log("Old-Node check skipped: set HUMAN_HINDSIGHT_OLDEST_NODE to a Node 18 binary.");
+  }
   assert(
     requests.every(
       (route) => route.startsWith("/human-hindsight") || route.startsWith("/cc-hindsight"),

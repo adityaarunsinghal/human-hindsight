@@ -1,18 +1,20 @@
-import path from "node:path";
 import type { Readable, Writable } from "node:stream";
 import { defineCommand } from "citty";
-import { askYesNo } from "../claude/consent.js";
-import { DEFAULT_TIMEOUT_MS } from "../claude/runner.js";
-import { type Consolidated, ConsolidateSchema } from "../claude/schemas.js";
 import { resolveTimeoutMs } from "../core/budget.js";
 import {
   materializeConsolidation,
   saveConsolidatedPreferences,
   validateConsolidation,
 } from "../core/consolidated-preferences.js";
+import { readExportSessionShare } from "../core/environment.js";
 import { readLibrary } from "../core/library.js";
+import { parseQuality } from "../core/model-plan.js";
 import { HISTORICAL_DATA_INSTRUCTION } from "../core/preference-evidence.js";
-import { reviewedPreferences } from "../core/preference-review.js";
+import {
+  preferenceReview,
+  readPreferenceReviews,
+  reviewedPreferences,
+} from "../core/preference-review.js";
 import {
   type AggregatedPreference,
   type PreferencesTarget,
@@ -20,29 +22,119 @@ import {
   readObservedPreferences,
   renderPreferencesBlock,
 } from "../core/preferences.js";
+import { openRunSession, type RunSession } from "../core/run-session.js";
+import { askYesNoAnswer, confirmPlan } from "../distill/consent.js";
 import type { RunnerFn } from "../distill/pipeline.js";
-import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
-import type { AgentRunner } from "../runners/types.js";
+import { guardRun, mutableOutput, pinSourcesFrom, type RunGuard } from "../distill/run-guard.js";
+import { type Consolidated, ConsolidateSchema } from "../distill/schemas.js";
+import { DEFAULT_TIMEOUT_MS } from "../runners/shared.js";
+import type { ResolvedCall } from "../runners/types.js";
 import { parseSourceMode, type SourceMode } from "../sources/registry.js";
-import { copyToClipboard } from "../ui/clipboard.js";
+import { type ClipboardResult, copyToClipboard } from "../ui/clipboard.js";
+import type { TerminalHost } from "../ui/live.js";
+import { canPrompt, lineWidth } from "../ui/mode.js";
 import { withSpinner } from "../ui/progress.js";
-import { cyan, dim, green, hint, ok } from "../ui/style.js";
+import { counted, cyan, dim, green, hint, ok } from "../ui/style.js";
+import { fitLines, sayThenRun } from "../ui/wrap.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
-import { flowArgs, offerNext } from "./next.js";
+import { flowArgs, nextCommandText, offerNext } from "./next.js";
 
 /** Injectable dependencies (testing). */
 export interface PreferencesDeps {
   runner?: RunnerFn;
   input?: Readable;
+  /** Where the instruction block goes (stdout), so `preferences > CLAUDE.md` is a clean file. */
   output?: Writable;
+  /**
+   * Every other line: counts, notes, hints, questions, the plan (stderr).
+   * Defaults to `output` when only that is given, else to stderr.
+   */
+  errorOutput?: Writable;
   /**
    * Clipboard sink; injectable so tests never touch a real clipboard. Shape
    * matches copyToClipboard's return (tool is reported even on failure).
    */
-  clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
+  clipboard?: (text: string) => Promise<ClipboardResult>;
+  /** Where Ctrl-C arrives and how the process ends (tests). */
+  host?: TerminalHost;
+  exit?(code: number): void;
 }
 
 export const CONSOLIDATE_PROMPT_VERSION = 2;
+
+/** How many preferences were observed, and where each stands in the person's review. */
+export interface PreferenceStory {
+  observed: number;
+  waiting: number;
+  accepted: number;
+  dismissed: number;
+}
+
+/** Count the observed preferences by review status. A review of older evidence counts as waiting. */
+export function preferenceStory(
+  home: string,
+  observed: AggregatedPreference[] = readObservedPreferences(home),
+): PreferenceStory {
+  const { reviews } = readPreferenceReviews(home);
+  const story = { observed: observed.length, waiting: 0, accepted: 0, dismissed: 0 };
+  for (const preference of observed) {
+    const { status } = preferenceReview(home, preference, reviews);
+    if (status === "accepted") story.accepted++;
+    else if (status === "dismissed") story.dismissed++;
+    else story.waiting++;
+  }
+  return story;
+}
+
+/**
+ * The one sentence every screen uses for the preferences: "3 preferences
+ * observed: 2 waiting for your review, 1 accepted." Zero counts are left out,
+ * except that nothing accepted is said when some are waiting.
+ */
+export function preferenceStoryText(story: PreferenceStory): string {
+  const parts: string[] = [];
+  if (story.waiting) parts.push(`${story.waiting} waiting for your review`);
+  if (story.accepted) parts.push(`${story.accepted} accepted`);
+  else if (story.waiting) parts.push("none accepted yet");
+  if (story.dismissed) parts.push(`${story.dismissed} dismissed`);
+  const observed = `${story.observed} ${story.observed === 1 ? "preference" : "preferences"} observed`;
+  return parts.length ? `${observed}: ${parts.join(", ")}.` : `${observed}.`;
+}
+
+/** Where a person reviews the observed preferences. */
+export function reviewCommand(args: object): string {
+  return nextCommandText("gui", { ...args, tab: "preferences" });
+}
+
+/**
+ * The preferences story as `status` and a finished distill run print it: the
+ * one sentence, then, while some wait, where to review them with the command
+ * alone on its own line. Nothing when none were observed or the review file
+ * cannot be read.
+ */
+export function preferenceStoryLines(
+  home: string,
+  flow: object,
+  o: { lead?: string; indent?: string; width?: number } = {},
+): string[] {
+  let story: PreferenceStory;
+  try {
+    story = preferenceStory(home);
+  } catch {
+    return [];
+  }
+  if (!story.observed) return [];
+  const lines = [`${o.lead ?? ""}${preferenceStoryText(story)}`];
+  if (story.waiting)
+    lines.push(
+      ...sayThenRun(
+        `${o.indent ?? ""}Review them in your browser:`,
+        reviewCommand(flow),
+        o.width ?? Number.POSITIVE_INFINITY,
+      ),
+    );
+  return lines;
+}
 
 /** Build the consolidation prompt with a verifiable source mapping. */
 export function buildConsolidatePrompt(prefs: AggregatedPreference[]): string {
@@ -93,15 +185,31 @@ export async function runPreferences(
     timeout?: string;
     yes?: boolean;
     model?: string;
+    quality?: string;
     project?: string;
     "include-unreviewed"?: boolean;
   },
   deps: PreferencesDeps = {},
 ): Promise<number> {
+  const typed = args;
   args = flowArgs(args);
-  const out = deps.output ?? process.stdout;
-  const write = (s = "") => out.write(`${s}\n`);
+  // The block alone goes to `block`; everything a person reads about it goes to `out`.
+  // Both fall silent after Ctrl-C, so the interrupt line is the last thing printed.
+  const rawBlock = deps.output ?? process.stdout;
+  const rawOut = deps.errorOutput ?? deps.output ?? process.stderr;
+  const quietOut = mutableOutput(rawOut);
+  const quietBlock = rawBlock === rawOut ? quietOut : mutableOutput(rawBlock);
+  const out = quietOut.output;
+  const block = quietBlock.output;
+  const mute = () => {
+    quietOut.mute();
+    quietBlock.mute();
+  };
+  const write = (s = "") => out.write(`${fitLines([s], lineWidth(out)).join("\n")}\n`);
+  const writeBlock = (s: string) => block.write(`${s}\n`);
   const target = resolveTarget(args.target, parseSourceMode(args.source));
+  // A wrong time limit is an error before anything is read, not the default later.
+  const timeoutMs = resolveTimeoutMs(args.timeout);
 
   const { home } = resolvePaths(args);
   const observed = await withSpinner(out, "Reading preference evidence", async () =>
@@ -109,8 +217,8 @@ export async function runPreferences(
   );
   const entries = readLibrary(home);
   if (entries.length === 0 && observed.length === 0) {
-    write("library is empty — nothing distilled yet.");
-    write(hint("human-hindsight distill"));
+    write("Library is empty. Distill sessions to see their preferences.");
+    write(hint(nextCommandText("distill", args), lineWidth(out)));
     return 1;
   }
 
@@ -122,106 +230,186 @@ export async function runPreferences(
       )
     : reviewedPreferences(home, observed, args.project);
   if (prefs.length === 0) {
+    if (!observed.length) {
+      write("No preferences were observed across the library.");
+      return 0;
+    }
+    const story = preferenceStory(home, observed);
+    const width = lineWidth(out) ?? Number.POSITIVE_INFINITY;
     write(
-      observed.length
-        ? "No accepted preferences for this scope. Review suggestions in the GUI first."
-        : "no preferences were observed across the library.",
+      story.accepted
+        ? `${preferenceStoryText(story)} None of the accepted ones apply here; a project's own rules need --project <name>.`
+        : `No accepted preferences yet. ${preferenceStoryText(story)}`,
     );
-    if (observed.length) write(hint("human-hindsight gui"));
+    if (story.waiting) {
+      for (const line of sayThenRun("Review them in your browser:", reviewCommand(args), width)) {
+        write(line);
+      }
+      const unreviewed = `${nextCommandText("preferences", args)} --include-unreviewed`;
+      for (const line of sayThenRun("Or print them without a review:", unreviewed, width)) {
+        write(line);
+      }
+    }
     return 0;
   }
   if (args["include-unreviewed"]) {
-    write("Including unreviewed suggestions by explicit request; check their scope and evidence.");
+    write("Including suggestions you have not reviewed, as asked. Check their scope and evidence.");
   }
 
   const recurring = prefs.filter((p) => p.count > 1).length;
   write(
-    green(`${prefs.length} preference(s) across ${entries.length} task(s)`) +
-      (recurring ? cyan(` (${recurring} recur)`) : ""),
+    green(`${counted(prefs.length, "preference")} across ${counted(entries.length, "task")}`) +
+      (recurring ? cyan(` (${recurring} stated more than once)`) : ""),
   );
   write();
 
   if (!args.consolidate) {
-    const block = renderPreferencesBlock(prefs, entries.length, target);
-    write(block);
+    const rendered = renderPreferencesBlock(prefs, entries.length, target);
+    writeBlock(rendered);
     write();
     // Offer the copy first; on a successful copy the guidance prints after the
     // confirmation. When no copy happens (declined, failure, or pipe/CI), fall
     // back to the footer in its original position so guidance prints exactly
     // once either way.
-    const { copied } = await offerCopyBlock({
-      block,
+    const { copied, interrupted } = await offerCopyBlock({
+      block: rendered,
       count: prefs.length,
       target,
       yes: Boolean(args.yes),
-      deps,
+      deps: { ...deps, output: out },
       output: out,
+      blockOutput: block,
     });
+    if (interrupted) return 130;
     if (!copied) for (const line of targetFooter(target)) write(line);
+    write(hint(`${nextCommandText("suggest-subagents", args)} --dry-run`, lineWidth(out)));
     return 0;
   }
 
-  // --consolidate: one runner call, behind the same consent gate as distill.
-  // Route through resolveRunner so a kiro-only machine works (and the copy names
-  // whichever CLI will actually run); an explicit --runner with a missing
-  // binary fails HERE, before the consent prompt. An injected deps.runner
-  // (tests) bypasses it.
-  const sourceMode = parseSourceMode(args.source);
-  let resolved: AgentRunner | null = null;
-  if (!deps.runner) {
-    try {
-      resolved = await resolveRunner(parseRunnerMode(args.runner), {
-        preferSource: sourceMode === "auto" ? undefined : sourceMode,
-        scratchBase: path.join(home, "runner-scratch"),
-      });
-      await resolved.preflight?.();
-    } catch (err) {
-      write((err as Error).message);
+  let session: RunSession;
+  try {
+    session = await openRunSession({
+      home,
+      runner: args.runner,
+      quality: parseQuality(args.quality),
+      explicit: { model: args.model },
+      pinSources: pinSourcesFrom(typed, args),
+      sessionShare: readExportSessionShare(home, { project: args.project, source: args.source }),
+      output: out,
+      injectedRunner: deps.runner,
+    });
+  } catch (error) {
+    write(error instanceof Error ? error.message : String(error));
+    return 1;
+  }
+  let guard: RunGuard | undefined;
+  try {
+    const decision = await confirmPlan(
+      {
+        digests: 0,
+        cluster: 0,
+        authorEstimate: 0,
+        runnerName: session.ledgerRunner,
+        session: session.describe(),
+        quality: session.quality,
+        consolidation: {
+          inputs: prefs.length,
+          models: {
+            balanced: session.displayModelFor("consolidate", "balanced"),
+            best: session.displayModelFor("consolidate", "best"),
+          },
+        },
+      },
+      {
+        yes: args.yes,
+        input: deps.input,
+        output: out,
+        host: deps.host,
+        onQuality:
+          args.quality || process.env.HUMAN_HINDSIGHT_QUALITY
+            ? undefined
+            : (quality) => {
+                session.quality = quality;
+              },
+      },
+    );
+    // Ctrl-C at the question means what it means everywhere: one line, exit 130.
+    // The question printed its one line for Ctrl-C; nothing was sent.
+    if (decision === "interrupted") return 130;
+    if (decision !== "proceed") {
+      write("Declined. Nothing was sent.");
+      return 2;
+    }
+    // The saved consolidation is part of the library: take the writer lock
+    // after consent, and release it on Ctrl-C.
+    // Consolidation saves nothing until its single call returns, and the line says so.
+    const guarded = guardRun({
+      home,
+      command: "preferences",
+      output: out,
+      resume: `${nextCommandText("preferences", { ...args, quality: session.quality })} --consolidate`,
+      says: "Interrupted. Nothing was saved; run the same command again:",
+      interrupt: () => session.interrupt(),
+      mute,
+      cleanup: () => session.finalize(),
+      host: deps.host,
+      exit: deps.exit,
+    });
+    if ("busy" in guarded) {
+      write(guarded.busy);
       return 1;
     }
-  }
-  const cli = resolved?.name === "kiro" ? "kiro-cli" : (resolved?.name ?? "claude");
-  const cost = resolved?.name === "kiro" ? "your Kiro credits" : "your subscription/credits";
-  write(
-    `consolidate will invoke your local \`${cli}\` CLI (${cost}; one call plus bounded validation retries).`,
-  );
-  const confirmed =
-    Boolean(args.yes) || (await askYesNo("Proceed?", { input: deps.input, output: deps.output }));
-  if (!confirmed) {
-    write("declined; nothing was invoked.");
-    return 2;
-  }
-
-  const runner: RunnerFn = deps.runner ?? (resolved as NonNullable<typeof resolved>).run;
-  const { merged, block, saved } = await runConsolidation({
-    home,
-    prefs,
-    taskCount: entries.length,
-    target,
-    runner,
-    model: args.model,
-    timeoutMs: resolveTimeoutMs(args.timeout),
-    output: out,
-    project: args.project,
-    includeUnreviewed: args["include-unreviewed"],
-  });
-  // Offer to copy the merged block (only on success; the failure path already
-  // fell back to the deterministic block and returns 1 unchanged).
-  if (merged !== null && block !== null) {
-    await offerCopyBlock({
-      block,
-      count: merged.length,
+    guard = guarded;
+    // The one call below is certain from here, so readiness is checked now and only now.
+    const ready = await session.liveCheck("consolidate");
+    if (!ready.ok) {
+      write(ready.line);
+      writeBlock(renderPreferencesBlock(prefs, entries.length, target));
+      return 1;
+    }
+    const {
+      merged,
+      block: rendered,
+      saved,
+    } = await runConsolidation({
+      home,
+      prefs,
+      taskCount: entries.length,
       target,
-      yes: Boolean(args.yes),
-      deps,
+      runner: session.run,
+      model: session.modelFor("consolidate"),
+      timeoutMs,
       output: out,
+      blockOutput: block,
+      project: args.project,
+      includeUnreviewed: args["include-unreviewed"],
     });
+    guard.end();
+    if (merged !== null && rendered !== null) {
+      const { interrupted } = await offerCopyBlock({
+        block: rendered,
+        count: merged.length,
+        target,
+        yes: Boolean(args.yes),
+        deps: { ...deps, output: out },
+        output: out,
+        blockOutput: block,
+        merged: true,
+      });
+      if (interrupted) return saved ? 130 : 1;
+      write(
+        hint(
+          `${nextCommandText("suggest-subagents", { ...args, quality: session.quality })} --dry-run`,
+          lineWidth(out),
+        ),
+      );
+    }
+    return merged === null || !saved ? 1 : 0;
+  } finally {
+    guard?.end();
+    for (const line of session.summaryLines()) write(line);
+    await session.finalize();
   }
-  // Once-per-run teardown (kiro: delete this run's auto-saved session). Called
-  // in both paths; finalize is idempotent-once-per-run and emits no output, so
-  // moving it past the rendering keeps the byte stream identical.
-  await resolved?.finalize?.();
-  return merged === null || !saved ? 1 : 0;
 }
 
 /**
@@ -257,12 +445,16 @@ export async function runConsolidation(opts: {
   model?: string;
   /** Per-call timeout (ms); default scales with the preference count. */
   timeoutMs?: number;
+  /** Notes, progress, and errors. */
   output: Writable;
+  /** The block itself; defaults to `output`. */
+  blockOutput?: Writable;
   project?: string;
   includeUnreviewed?: boolean;
 }): Promise<ConsolidationOutcome> {
   const { prefs, taskCount, target, runner, model, output } = opts;
   const write = (s = "") => output.write(`${s}\n`);
+  const writeBlock = (s: string) => (opts.blockOutput ?? output).write(`${s}\n`);
 
   // Consolidation is one call over EVERY aggregated preference, so like the
   // cluster stage its wall-clock cost grows with input size; the flat per-call
@@ -273,6 +465,7 @@ export async function runConsolidation(opts: {
     opts.timeoutMs ?? DEFAULT_TIMEOUT_MS + CONSOLIDATE_TIMEOUT_PER_PREFERENCE_MS * prefs.length;
 
   let consolidated: Consolidated;
+  let resolved: ResolvedCall | undefined;
   try {
     const basePrompt = buildConsolidatePrompt(prefs);
     let prompt = basePrompt;
@@ -280,8 +473,17 @@ export async function runConsolidation(opts: {
     for (let attempt = 0; attempt < 2; attempt++) {
       const response = await withSpinner(
         output,
-        `consolidating ${prefs.length} preference(s)`,
-        () => runner({ prompt, schema: ConsolidateSchema, model, timeoutMs }),
+        `consolidating ${counted(prefs.length, "preference")}`,
+        () =>
+          runner({
+            prompt,
+            schema: ConsolidateSchema,
+            model,
+            timeoutMs,
+            onResolved: (call) => {
+              resolved = call;
+            },
+          }),
       );
       const parsed = ConsolidateSchema.safeParse(response);
       const problems = parsed.success
@@ -298,13 +500,11 @@ export async function runConsolidation(opts: {
     if (!result) throw new Error("Consolidation returned no validated result");
     consolidated = result;
   } catch (err) {
-    // Real-world case: the account's default model can be rejected by policy
-    // (e.g. Bedrock data-retention 400s) — fail with the reason, not a stack,
-    // and still emit the deterministic block so the run yields a usable artifact.
+    // Keep the deterministic block available when the provider or model fails.
     write(`consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
-    write(dim("falling back to the unconsolidated block; retry with --model <model>."));
+    write(dim("Printing the block without merging; try again with --model <model>."));
     write();
-    write(renderPreferencesBlock(prefs, taskCount, target));
+    writeBlock(renderPreferencesBlock(prefs, taskCount, target));
     return { merged: null, block: null, saved: false };
   }
 
@@ -312,13 +512,14 @@ export async function runConsolidation(opts: {
   const now = new Date();
   const block = renderPreferencesBlock(merged, taskCount, target, now);
   write();
-  write(block);
+  writeBlock(block);
   write();
-  write(dim(`consolidated ${prefs.length} → ${merged.length} preference(s).`));
+  write(dim(`consolidated ${prefs.length} → ${counted(merged.length, "preference")}.`));
   try {
     const file = saveConsolidatedPreferences(opts.home, {
       source: prefs,
       consolidated,
+      resolved,
       taskCount,
       target,
       markdown: block,
@@ -326,7 +527,7 @@ export async function runConsolidation(opts: {
       project: opts.project,
       includeUnreviewed: opts.includeUnreviewed,
     });
-    write(dim(`saved to ${file} — available in the GUI after Refresh.`));
+    write(dim(`saved to ${file}. Refresh the browser view to see the result.`));
     return { merged, block, saved: true };
   } catch (err) {
     write(`Could not save consolidated preferences: ${err instanceof Error ? err.message : err}`);
@@ -337,53 +538,70 @@ export async function runConsolidation(opts: {
 
 /**
  * Resolve the preferences target: explicit `--target`, else infer from the
- * active source (kiro source ⇒ kiro steering; else claude). Exported for the
- * distill cascade, which infers the target the same way.
+ * active source (kiro source ⇒ kiro steering; kirocrew source ⇒ the same
+ * steering block, with a footer naming Kiro Crew; codex/opencode ⇒ AGENTS.md;
+ * else claude). Exported for the distill cascade, which infers the target the
+ * same way.
  */
 export function resolveTarget(raw: string | undefined, sourceMode: SourceMode): PreferencesTarget {
   if (raw) {
     const v = raw.toLowerCase();
     if (v === "codex" || v === "opencode") return "agents";
-    if (v === "claude" || v === "kiro" || v === "agents") return v;
+    if (v === "claude" || v === "kiro" || v === "kirocrew" || v === "agents") return v;
     throw new Error(
-      `unknown --target "${raw}" (expected claude, codex, kiro, opencode, or agents)`,
+      `unknown --target "${raw}" (expected claude, codex, kiro, kirocrew, opencode, or agents)`,
     );
   }
-  return sourceMode === "kiro"
-    ? "kiro"
+  return sourceMode === "kiro" || sourceMode === "kirocrew"
+    ? sourceMode
     : sourceMode === "codex" || sourceMode === "opencode"
       ? "agents"
       : "claude";
 }
 
+/** Footer line for the kiro and kirocrew targets: one steering file reaches both. */
+export const KIRO_CREW_STEERING_NOTE =
+  "Kiro Crew agents load every file in ~/.kiro/steering/, so the same file reaches them.";
+
 /**
  * Per-target paste instructions shown under the rendered block. The destination
  * filename is colored cyan (it is the actionable bit); the rest stays dim, so
  * these lines are pre-styled and written verbatim (no outer dim() at the call
- * site).
+ * site). A block that was just merged is not offered the merge again.
  */
-function targetFooter(target: PreferencesTarget): string[] {
+function targetFooter(target: PreferencesTarget, merged = false): string[] {
+  const merge = "run with --consolidate to merge near-duplicates with one model call.";
   switch (target) {
     case "kiro":
+    case "kirocrew":
       return [
         dim("paste the block into ") +
           cyan("~/.kiro/steering/hindsight-preferences.md") +
           dim(" (global) or"),
         cyan(".kiro/steering/") +
-          dim(" (workspace) — or run with --consolidate to merge near-duplicates."),
+          dim(
+            merged
+              ? " (workspace)."
+              : " (workspace), or run with --consolidate to merge near-duplicates.",
+          ),
+        dim(KIRO_CREW_STEERING_NOTE),
       ];
     case "agents":
       return [
         dim("add the block to your ") +
           cyan("AGENTS.md") +
-          dim(" — Codex, Kiro, OpenCode, and other agent CLIs auto-inherit it."),
-        dim("or run with --consolidate to merge near-duplicates with one runner call."),
+          dim(". Codex, Kiro, OpenCode, and other agent CLIs inherit it."),
+        ...(merged ? [] : [dim(`or ${merge}`)]),
       ];
     default:
-      return [
-        dim("paste the block into your ") + cyan("CLAUDE.md") + dim(" — or run with --consolidate"),
-        dim("to merge near-duplicates with one runner call."),
-      ];
+      return merged
+        ? [dim("paste the block into your ") + cyan("CLAUDE.md") + dim(".")]
+        : [
+            dim("paste the block into your ") +
+              cyan("CLAUDE.md") +
+              dim(", or run with --consolidate"),
+            dim("to merge near-duplicates with one model call."),
+          ];
   }
 }
 
@@ -402,33 +620,52 @@ export async function offerCopyBlock(opts: {
   yes: boolean;
   deps: PreferencesDeps;
   output: Writable;
-}): Promise<{ copied: boolean }> {
+  /**
+   * Where the block was written. When that is not a terminal (`preferences >
+   * CLAUDE.md`), nothing is asked: the block already went where it was sent.
+   */
+  blockOutput?: Writable;
+  /** The block was just merged with --consolidate. */
+  merged?: boolean;
+}): Promise<{ copied: boolean; interrupted?: boolean }> {
   const { block, count, target, yes, deps, output } = opts;
   const write = (s = "") => output.write(`${s}\n`);
-  const canPrompt = Boolean(deps.input) || process.stdin.isTTY === true;
+  const canAsk = Boolean(deps.input) || canPrompt({ output: opts.blockOutput ?? output });
 
   let doCopy: boolean;
   if (yes) doCopy = true;
-  else if (canPrompt)
-    doCopy = await askYesNo("Copy block to clipboard?", {
+  else if (canAsk) {
+    const answer = await askYesNoAnswer("Copy block to clipboard?", {
       input: deps.input,
       output: deps.output,
+      host: deps.host,
       defaultYes: true, // empty input (plain enter) means yes
     });
-  else return { copied: false }; // pipe/CI without --yes: no offer, output unchanged
+    // Ctrl-C means one thing everywhere: one line, exit 130.
+    if (answer === "interrupt") {
+      write("Interrupted.");
+      return { copied: false, interrupted: true };
+    }
+    doCopy = answer === "yes";
+  } else return { copied: false }; // pipe/CI without --yes: no offer, output unchanged
 
   if (!doCopy) return { copied: false };
 
-  const copy = deps.clipboard ?? copyToClipboard;
-  const result = await copy(block);
+  const result = deps.clipboard
+    ? await deps.clipboard(block)
+    : await copyToClipboard(block, { output });
+  if (result.terminalAttempted) {
+    write(dim("Terminal clipboard request sent. The block above is available for manual copying."));
+    return { copied: false };
+  }
   if (!result.ok) {
     // best-effort: the block is still on screen, so keep the exit code and
     // point the user at manual selection.
     write(dim(`could not copy (${result.error}); select the block above manually.`));
     return { copied: false };
   }
-  write(`  ${ok(`copied (${count} preference(s), via ${result.tool})`)}`);
-  for (const line of targetFooter(target)) write(line);
+  write(`  ${ok(`copied (${counted(count, "preference")}, via ${result.tool})`)}`);
+  for (const line of targetFooter(target, opts.merged)) write(line);
   return { copied: true };
 }
 
@@ -452,12 +689,12 @@ export default defineCommand({
     target: {
       type: "string",
       description:
-        "Output target: claude (CLAUDE.md), codex/opencode/agents (AGENTS.md), or kiro (steering file). Default: inferred from --source",
+        "Output target: claude (CLAUDE.md), codex/opencode/agents (AGENTS.md), or kiro/kirocrew (steering file, also loaded by Kiro Crew). Default: inferred from --source",
     },
     consolidate: {
       type: "boolean",
       description:
-        "Merge semantic duplicates with one runner call and save in the library (consent-gated)",
+        "Merge near-duplicates with one model call through your CLI and save in the library (asks first)",
     },
     runner: {
       type: "string",
@@ -466,20 +703,21 @@ export default defineCommand({
     },
     model: {
       type: "string",
-      description: "Model to pass through to the runner's --model for --consolidate",
+      description: "Model for --consolidate, passed to the CLI's --model",
     },
     timeout: {
       type: "string",
       description:
         "Consolidation call timeout in seconds (default scales with the preference count)",
     },
-    yes: { type: "boolean", description: "Skip the consent prompt (for scripting)" },
+    yes: { type: "boolean", description: "Approve the plan without asking (for scripting)" },
   },
   async run({ args }) {
     const code = await runPreferences(args);
     if (code !== 0) process.exitCode = code;
     if (code === 1 && readLibrary(resolvePaths(args).home).length === 0) {
-      await offerNext("distill", args, { hintPrinted: true });
+      // Only the block belongs on stdout; the follow-up question goes with the notes.
+      await offerNext("distill", args, { hintPrinted: true, output: process.stderr });
     }
   },
 });

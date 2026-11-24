@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { ResolvedCall, RunnerName } from "../runners/types.js";
 import type { SourceName } from "../sources/types.js";
 
 /** Inputs that identify one generated artifact, independent of JSON key order. */
@@ -8,7 +9,9 @@ export interface StageLineage {
   prompt_version: number;
   schema_hash: string;
   model: string | null;
-  runner: SourceName | null;
+  runner: RunnerName | null;
+  /** Concrete producer, kept outside the fingerprint when selecting a CLI automatically. */
+  resolved?: ResolvedCall;
 }
 
 function canonical(value: unknown): unknown {
@@ -59,7 +62,7 @@ export function stageLineage(opts: {
   schema: unknown;
   inputs: unknown;
   model?: string;
-  runnerName?: SourceName;
+  runnerName?: RunnerName | null;
 }): StageLineage {
   const schemaHash = fingerprint(opts.schema);
   const identity = {

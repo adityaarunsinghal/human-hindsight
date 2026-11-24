@@ -1,49 +1,65 @@
 import fs from "node:fs";
 import type { Writable } from "node:stream";
-import { AUTHOR_PROMPT_VERSION } from "../claude/prompts/author.js";
-import { CLUSTER_PROMPT_VERSION } from "../claude/prompts/cluster.js";
-import { DIGEST_PROMPT_VERSION } from "../claude/prompts/digest.js";
-import {
-  AuthorSchema,
-  ClusterMergeSchema,
-  ClusterSchema,
-  DigestResponseSchema,
-  toJsonSchema,
-} from "../claude/schemas.js";
+import { DEFAULT_CONCURRENCY } from "../core/budget.js";
 import { contentFingerprint, fingerprint } from "../core/fingerprint.js";
+import { isPlanLabel, planLabel, type Quality } from "../core/model-plan.js";
 import { DEFAULT_TIMEOUT_MS } from "../runners/shared.js";
-import type { AgentRunner, RunOptions } from "../runners/types.js";
+import type { AgentRunner } from "../runners/types.js";
+import { counted } from "../ui/style.js";
 import {
   type AttemptSettings,
   AttemptSettingsSchema,
   acquireWriterLock,
+  attemptOwnerStatus,
   checkSourceGuards,
   guardedPath,
   type OperationInput,
   type OperationKind,
   type OperationRecord,
   OperationStore,
-  ownerStatus,
   type PreparedRequest,
   type PublicationReceipt,
   type QueueOperation,
-  readWriterLock,
+  WriterBusyError,
+  writerBusyReason,
 } from "./operations.js";
+import { AUTHOR_PROMPT_VERSION } from "./prompts/author.js";
+import { CLUSTER_PROMPT_VERSION } from "./prompts/cluster.js";
+import { DIGEST_PROMPT_VERSION } from "./prompts/digest.js";
+import {
+  AuthorSchema,
+  ClusterMergeSchema,
+  ClusterSchema,
+  DigestResponseSchema,
+  toJsonSchema,
+} from "./schemas.js";
+
+import type { StageProgressSink } from "./stage-events.js";
+import {
+  CLUSTER_TIMEOUT_PER_DIGEST_MS,
+  executeOperation,
+  FailureBreaker,
+  type RunnerFn,
+  runItems,
+  stageReporter,
+} from "./stage-support.js";
 
 export type RetryStage = "all" | "digest" | "cluster" | "author";
 export interface RetryHandler {
-  guard?(input: OperationInput, operation: OperationRecord): void;
+  /** Strict checks against current files; `store` is the ledger holding `operation`, if any. */
+  guard?(input: OperationInput, operation: OperationRecord, store?: OperationStore | null): void;
   prepare(
     input: OperationInput,
     settings: AttemptSettings,
     operation: OperationRecord,
   ): PreparedRequest;
-  validate(value: unknown, input: OperationInput): void;
+  /** `source` is "runner" when the stage runner has just enforced the response schema. */
+  validate(value: unknown, input: OperationInput, source?: "runner" | "ledger"): void;
   run(
     request: PreparedRequest,
     settings: AttemptSettings,
     input: OperationInput,
-    invoke: (options: RunOptions<unknown>) => Promise<unknown>,
+    invoke: RunnerFn,
   ): Promise<unknown>;
   publish(
     value: unknown,
@@ -100,24 +116,36 @@ function settingsFor(
   input: OperationInput,
   overrides: Partial<AttemptSettings>,
   clusterModel?: string,
+  authorModel?: string,
+  quality?: Quality,
 ): AttemptSettings {
   const previous = operation.attempts.at(-1)?.settings ?? input.settings;
   const definedOverrides = Object.fromEntries(
     Object.entries(overrides).filter(([, value]) => value !== undefined),
   );
   const settings = { ...previous, ...definedOverrides };
+  const stageModel =
+    operation.kind === "author"
+      ? authorModel
+      : operation.kind.startsWith("cluster-")
+        ? clusterModel
+        : undefined;
+  if (quality && overrides.model === undefined)
+    settings.model = planLabel(quality, operation.kind === "digest" ? "bulk" : "major");
+  if (stageModel !== undefined) settings.model = stageModel;
+  // A concrete override pins the CLI, including when the selected failure was automatic.
   if (
-    clusterModel !== undefined &&
-    (operation.kind === "cluster-window" || operation.kind === "cluster-merge")
-  ) {
-    settings.model = clusterModel;
-  }
+    overrides.automatic === undefined &&
+    (overrides.runner || (overrides.model && !isPlanLabel(overrides.model)) || stageModel)
+  )
+    delete settings.automatic;
   if (overrides.timeoutMs !== undefined)
     settings.timeoutExplicit = overrides.timeoutExplicit ?? true;
   if (!settings.timeoutExplicit) {
     const units = typeof input.request.timeoutUnits === "number" ? input.request.timeoutUnits : 0;
     settings.timeoutMs =
-      DEFAULT_TIMEOUT_MS + (operation.kind.startsWith("cluster-") ? 5_000 * units : 0);
+      DEFAULT_TIMEOUT_MS +
+      (operation.kind.startsWith("cluster-") ? CLUSTER_TIMEOUT_PER_DIGEST_MS * units : 0);
   }
   return AttemptSettingsSchema.parse(settings);
 }
@@ -128,7 +156,7 @@ function compatibility(input: OperationInput): void {
     input.schemaHash !== fingerprint(toJsonSchema(supported.schema))
   )
     throw new Error(
-      "Recorded prompt/schema version is unsupported; use normal distill to prepare new work",
+      "It was recorded by another version of human-hindsight; run distill without --retry-failed to prepare it again",
     );
 }
 function filesFor(items: PreparedOperation[]): string[] {
@@ -196,6 +224,8 @@ export interface PrepareRetryOptions {
   overrides?: Partial<AttemptSettings>;
   /** Applies only to clustering operations, taking precedence over overrides.model. */
   clusterModel?: string;
+  authorModel?: string;
+  quality?: Quality;
   handlers: RetryHandlers;
 }
 
@@ -204,10 +234,11 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
   const stage = options.stage ?? "all";
   if (!["all", "digest", "cluster", "author"].includes(stage))
     throw new Error(`Unknown retry stage: ${stage}`);
-  const lock = readWriterLock(options.home);
-  if (lock.status === "alive" || lock.status === "unknown")
-    throw new Error("Another distill writer is active or its ownership cannot be verified");
+  const busy = writerBusyReason(options.home);
+  if (busy) throw new WriterBusyError(busy);
   const store = new OperationStore(options.home);
+  // A strict preview trusts nothing it has not read: every recorded file is checked.
+  store.verifyAll();
   const plan: RetryPlan = {
     mode: "retry-failed",
     home: options.home,
@@ -248,7 +279,7 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
     }
     if (operation.state === "running") {
       const attempt = operation.attempts.at(-1);
-      if (!attempt || ownerStatus(attempt.owner) !== "dead")
+      if (!attempt || attemptOwnerStatus(attempt.owner) !== "dead")
         throw new Error(`Operation ${operation.id} has a live or unverifiable owner`);
     }
     const input = store.loadInput(operation.id);
@@ -257,8 +288,15 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
       checkSourceGuards(options.home, input.sources);
       const handler = options.handlers[operation.kind];
       if (!handler) throw new Error(`No handler for ${operation.kind}`);
-      handler.guard?.(input, operation);
-      const settings = settingsFor(operation, input, options.overrides ?? {}, options.clusterModel);
+      handler.guard?.(input, operation, store);
+      const settings = settingsFor(
+        operation,
+        input,
+        options.overrides ?? {},
+        options.clusterModel,
+        options.authorModel,
+        options.quality,
+      );
       // Results are checked before request preparation: a saved result never
       // needs another model call because the new budget would block preparation.
       const result = store.readResult(operation.id);
@@ -281,6 +319,41 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
   }
   const files = filesFor([...plan.modelOperations, ...plan.localRepairs]);
   return finishPlan(plan, { snapshot: store.snapshot(), files });
+}
+
+/** Release version is publication provenance. Legacy manifests may omit the default origin. */
+function sameRecoveryInput(prior: OperationInput, proposed: OperationInput): boolean {
+  function identity(input: OperationInput) {
+    const raw = input.logicalInput;
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+      return input.logicalInputHash;
+    const { toolVersion: _version, ...logical } = raw as Record<string, unknown>;
+    if (Array.isArray(logical.members) && Array.isArray(logical.entries)) {
+      const ordered = [...(logical.entries as { export: string; origin?: string }[])].sort((a, b) =>
+        a.export.localeCompare(b.export),
+      );
+      logical.entries = ordered;
+      const entries = new Map(ordered.map((entry) => [entry.export, entry]));
+      logical.members = (logical.members as { exportName: string; origin?: string }[]).map(
+        (member) => ({
+          ...member,
+          origin:
+            member.origin ??
+            (entries.has(member.exportName)
+              ? (entries.get(member.exportName)?.origin ?? "claude")
+              : undefined),
+        }),
+      );
+    }
+    return fingerprint({
+      kind: input.kind,
+      logical,
+      sources: input.sources,
+      promptVersion: input.promptVersion,
+      schemaHash: input.schemaHash,
+    });
+  }
+  return identity(prior) === identity(proposed);
 }
 
 export interface PrepareRecoveryOptions {
@@ -309,11 +382,11 @@ export function prepareRecovery(options: PrepareRecoveryOptions): RetryPlan {
     options.operations.length
   )
     throw new Error("Duplicate recovery task");
-  const lock = readWriterLock(options.home);
-  if (lock.status === "alive" || lock.status === "unknown")
-    throw new Error("Another distill writer is active or its ownership cannot be verified");
+  const busy = writerBusyReason(options.home);
+  if (busy) throw new WriterBusyError(busy);
   const ledgerPath = guardedPath(options.home, "distill/operations.json");
   const existing = fs.existsSync(ledgerPath) ? new OperationStore(options.home) : null;
+  existing?.verifyAll();
   if (existing && existing.generation !== generation)
     throw new Error("Saved task generation differs from the active operation ledger");
   const newOperations: QueueOperation[] = [];
@@ -382,12 +455,17 @@ export function prepareRecovery(options: PrepareRecoveryOptions): RetryPlan {
       plan.excluded.push(disposition(prior, prior.state));
       continue;
     }
-    if (prior && existing && prior.logicalInputHash === logicalInputHash) {
+    const priorInput = prior && existing ? existing.loadInput(prior.id) : undefined;
+    if (
+      prior &&
+      priorInput &&
+      (prior.logicalInputHash === logicalInputHash || sameRecoveryInput(priorInput, input))
+    ) {
       operation = prior;
-      input = existing.loadInput(prior.id);
+      input = priorInput;
       if (prior.state === "running") {
         const last = prior.attempts.at(-1);
-        if (!last || ownerStatus(last.owner) !== "dead")
+        if (!last || attemptOwnerStatus(last.owner) !== "dead")
           throw new Error(`Operation ${prior.id} has a live or unverifiable owner`);
       }
     }
@@ -396,8 +474,12 @@ export function prepareRecovery(options: PrepareRecoveryOptions): RetryPlan {
     try {
       compatibility(input);
       checkSourceGuards(options.home, input.sources);
-      handler.guard?.(input, operation);
-      const settings = settingsFor(operation, input, optionsInput.settings);
+      handler.guard?.(input, operation, existing);
+      const changes =
+        operation === prior
+          ? (optionsInput.recoveryOverrides ?? optionsInput.settings)
+          : optionsInput.settings;
+      const settings = settingsFor(operation, input, changes);
       const saved =
         existing && prior?.id === operation.id ? existing.readResult(operation.id) : null;
       if (saved) {
@@ -424,6 +506,12 @@ export interface ExecuteRetryOptions {
   concurrency?: number;
   noBreaker?: boolean;
   output?: Writable;
+  progress?: StageProgressSink;
+  /**
+   * The command already holds the writer lock (it took it after consent, so
+   * Ctrl-C can release it). Without it, execution takes and releases the lock.
+   */
+  lockHeld?: boolean;
 }
 export interface RetryExecutionResult {
   succeeded: string[];
@@ -441,8 +529,10 @@ export async function executeRetry(
 ): Promise<RetryExecutionResult> {
   const context = contexts.get(plan);
   if (!context) throw new Error("Retry plan must be the original prepared plan");
-  const lock = acquireWriterLock(plan.home);
+  const lock = options.lockHeld ? { release() {} } : acquireWriterLock(plan.home, "distill");
   const runners = new Map<string, Promise<AgentRunner>>();
+  const concurrency = Math.max(1, Math.floor(options.concurrency ?? DEFAULT_CONCURRENCY));
+  const reporter = stageReporter(options, concurrency);
   const result: RetryExecutionResult = {
     succeeded: [],
     repaired: [],
@@ -451,6 +541,7 @@ export async function executeRetry(
     unattempted: [],
     pendingAdoption: [],
   };
+  let opened: OperationStore | undefined;
   try {
     const ledgerPath = guardedPath(plan.home, "distill/operations.json");
     const current = fs.existsSync(ledgerPath) ? new OperationStore(plan.home) : null;
@@ -464,6 +555,7 @@ export async function executeRetry(
     if (currentFingerprint !== plan.fingerprint)
       throw new Error("Retry plan changed since preview; run a new preview before execution");
     const store = current ?? new OperationStore(plan.home, plan.generation);
+    opened = store;
     const prepared = new Map(plan.modelOperations.map((item) => [item.operation.id, item]));
     if (context.recovery) {
       for (const input of context.recovery) {
@@ -473,29 +565,43 @@ export async function executeRetry(
         prepared.set(old.operation.id, { ...old, operation, input: store.loadInput(operation.id) });
       }
     }
+    reporter.start(plan.localRepairs.length + plan.modelOperations.length);
     for (const item of plan.localRepairs) {
       const handler = options.handlers[item.operation.kind];
       if (!handler) throw new Error(`No handler for ${item.operation.kind}`);
       try {
-        checkSourceGuards(plan.home, item.input.sources);
-        handler.guard?.(item.input, item.operation);
-        const saved = store.reconcileResult(item.operation.id);
+        const saved = store.readResult(item.operation.id);
         if (!saved) throw new Error("Saved result disappeared after preview");
-        handler.validate(saved.value, item.input);
-        const receipt = handler.publish(saved.value, item.input, item.operation);
-        store.commit(item.operation.id, receipt ?? undefined);
+        await executeOperation({
+          ...item,
+          store,
+          handler,
+          publish: true,
+          strict: true,
+          run: async () => {
+            throw new Error("A local repair cannot dispatch inference");
+          },
+        });
         result.repaired.push(item.operation.id);
+        reporter.item(
+          item.operation.id,
+          "done",
+          `  ${item.operation.unitId}: repaired from saved result`,
+          false,
+        );
       } catch (error) {
         store.fail(item.operation.id, error);
         result.failed.push(disposition(item.operation, errorMessage(error)));
+        reporter.item(
+          item.operation.id,
+          "failed",
+          `  ${item.operation.unitId}: ${errorMessage(error)}`,
+          false,
+        );
       }
     }
-    let next = 0;
-    let failedStreak = 0;
-    let priorFailure = "";
-    let stopped = false;
     const runnerFor = (settings: AttemptSettings): Promise<AgentRunner> => {
-      const key = settings.runner;
+      const key = JSON.stringify([settings.runner, !!settings.automatic, settings.model]);
       let runner = runners.get(key);
       if (!runner) {
         runner = Promise.resolve(options.getRunner(settings)).then(async (adapter) => {
@@ -506,70 +612,45 @@ export async function executeRetry(
       }
       return runner;
     };
-    // Construct and preflight only selected adapters, before dispatching work.
-    await Promise.all(
-      [
-        ...new Map(
-          plan.modelOperations.map((item) => [item.settings.runner, item.settings]),
-        ).values(),
-      ].map(runnerFor),
-    );
-    const work = async (): Promise<void> => {
-      while (!stopped && next < plan.modelOperations.length) {
-        const original = plan.modelOperations[next++];
-        if (!original) continue;
-        const item = prepared.get(original.operation.id) as PreparedOperation;
-        const handler = options.handlers[item.operation.kind];
-        if (!handler) throw new Error(`No handler for ${item.operation.kind}`);
-        let dispatched = false;
-        try {
-          checkSourceGuards(plan.home, item.input.sources);
-          handler.guard?.(item.input, item.operation);
-          const runner = await runnerFor(item.settings);
-          const attempt = store.start(item.operation.id, item.settings, item.request);
-          dispatched = true;
-          options.output?.write(`  ${item.operation.kind} ${item.operation.unitId} — retrying\n`);
-          const value = await handler.run(item.request, item.settings, item.input, (args) => {
-            store.recordInvocation(item.operation.id, attempt.id, {
-              prompt: args.prompt,
-              schema: toJsonSchema(args.schema),
-              model: item.settings.model,
-              timeoutMs: item.settings.timeoutMs,
-            });
-            return runner.run({
-              ...args,
-              model: item.settings.model ?? undefined,
-              timeoutMs: item.settings.timeoutMs,
-            });
-          });
-          handler.validate(value, item.input);
-          store.saveResult(item.operation.id, attempt.id, value);
-          checkSourceGuards(plan.home, item.input.sources);
-          handler.guard?.(item.input, item.operation);
-          if (item.operation.kind.startsWith("cluster-"))
-            result.pendingAdoption.push(item.operation.id);
-          else {
-            const receipt = handler.publish(value, item.input, item.operation);
-            store.commit(item.operation.id, receipt ?? undefined);
-          }
-          result.succeeded.push(item.operation.id);
-          failedStreak = 0;
-          priorFailure = "";
-        } catch (error) {
-          const message = errorMessage(error);
-          if (dispatched) store.fail(item.operation.id, error);
-          result.failed.push(disposition(item.operation, message));
-          failedStreak = message === priorFailure ? failedStreak + 1 : 1;
-          priorFailure = message;
-          if (!options.noBreaker && failedStreak >= 5) stopped = true;
-        }
+    await Promise.all(plan.modelOperations.map((item) => runnerFor(item.settings)));
+    const breaker = new FailureBreaker(!options.noBreaker);
+    const pending = await runItems(plan.modelOperations, concurrency, breaker, async (original) => {
+      const item = prepared.get(original.operation.id) as PreparedOperation;
+      const handler = options.handlers[item.operation.kind];
+      if (!handler) throw new Error(`No handler for ${item.operation.kind}`);
+      try {
+        const runner = await runnerFor(item.settings);
+        reporter.running(item.operation.id, `trying ${item.operation.unitId} again`);
+        const clustering = item.operation.kind.startsWith("cluster-");
+        await executeOperation({
+          ...item,
+          store,
+          handler,
+          run: (args) => runner.run(args),
+          strict: true,
+          publish: !clustering,
+        });
+        if (clustering) result.pendingAdoption.push(item.operation.id);
+        result.succeeded.push(item.operation.id);
+        breaker.success();
+        reporter.item(
+          item.operation.id,
+          "done",
+          `  ${item.operation.unitId}: ${clustering ? "saved for grouping" : "done"}`,
+          false,
+        );
+      } catch (error) {
+        const message = errorMessage(error);
+        result.failed.push(disposition(item.operation, message));
+        reporter.item(item.operation.id, "failed", `  ${item.operation.unitId}: ${message}`, false);
+        breaker.failure(error);
       }
-    };
-    const concurrency = Math.max(1, Math.floor(options.concurrency ?? 3));
-    await Promise.all(
-      Array.from({ length: Math.min(concurrency, plan.modelOperations.length) }, work),
-    );
-    result.unattempted = plan.modelOperations.slice(next).map((item) => item.operation.id);
+    });
+    result.unattempted = pending.map((item) => item.operation.id);
+    if (result.unattempted.length && (options.progress || options.output))
+      reporter.note(
+        `  ${breaker.reason}. ${counted(result.unattempted.length, "operation")} not attempted.`,
+      );
     const order = new Map(
       [...plan.localRepairs, ...plan.modelOperations].map((item, index) => [
         item.operation.id,
@@ -582,9 +663,16 @@ export async function executeRetry(
     result.failed.sort((a, b) => sort(a.id, b.id));
     return result;
   } finally {
-    await Promise.allSettled(
-      [...runners.values()].map(async (runner) => (await runner).finalize?.()),
-    );
-    lock.release();
+    try {
+      opened?.flush();
+      reporter.end();
+      const ready = await Promise.allSettled(runners.values());
+      const adapters = new Set(
+        ready.flatMap((entry) => (entry.status === "fulfilled" ? [entry.value] : [])),
+      );
+      await Promise.allSettled([...adapters].map(async (adapter) => adapter.finalize?.()));
+    } finally {
+      lock.release();
+    }
   }
 }

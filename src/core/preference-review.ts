@@ -1,8 +1,8 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
-import { FILE_MODE, mkdirPrivate } from "./fsutil.js";
+import { atomicWriteFilePrivate } from "./fsutil.js";
 import { type AggregatedPreference, preferenceId } from "./preferences.js";
 
 export const PREFERENCE_REVIEW_FILE = "preferences.review.json";
@@ -130,19 +130,10 @@ export function savePreferenceReview(
       ...(project ? { project } : {}),
     });
   }
-  const directory = path.join(home, "library");
-  mkdirPrivate(directory);
-  const target = path.join(directory, PREFERENCE_REVIEW_FILE);
-  const temp = `${target}.${randomUUID()}.tmp`;
-  try {
-    fs.writeFileSync(temp, `${JSON.stringify({ version: 1, reviews: state.reviews }, null, 2)}\n`, {
-      flag: "wx",
-      mode: FILE_MODE,
-    });
-    fs.renameSync(temp, target);
-  } finally {
-    fs.rmSync(temp, { force: true });
-  }
+  atomicWriteFilePrivate(
+    path.join(home, "library", PREFERENCE_REVIEW_FILE),
+    `${JSON.stringify({ version: 1, reviews: state.reviews }, null, 2)}\n`,
+  );
   return preferenceReview(home, preference, state.reviews);
 }
 

@@ -4,6 +4,246 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-11-24
+
+### First run
+
+- Running `human-hindsight` with no arguments opens a guided start. A card
+  lists the coding tools found, with the history on disk, whether each command
+  is installed, and a sign-in hint. It appears at once, says what is still
+  being checked, and fills in as each check finishes without changing height;
+  a version still being checked shows as the command name with an ellipsis. A
+  privacy note follows, then a menu that follows your library's state: build
+  the library, export only, show every project, or check your setup. The bare
+  command also accepts `--dry-run`, `--yes`, `--no-follow-up`, and `--plain`.
+- New `doctor` command: the data home, Node version, and for each tool its
+  history, command, and sign-in status, with one exact fix per problem. It
+  covers history from a desktop app or editor extension with no command
+  installed, a command that looks signed out, and Claude Code set up with a
+  cloud provider.
+- With more than 25 eligible sessions, `distill` first offers your 25 most
+  recent sessions or everything. `--recent N` chooses up front. Work from a
+  shorter first run is reused when you do the rest.
+- With input or output redirected, the bare command prints the setup summary
+  and the next command instead of a menu.
+
+### Quality and automatic fallback
+
+- `--quality balanced|best` picks one model plan for any CLI, and
+  `HUMAN_HINDSIGHT_QUALITY` sets the default. Balanced reads sessions with a
+  Sonnet or Terra model and groups and writes with an Opus or Sol model. Best
+  reads with Opus or Sol and groups and writes with Fable or Astra.
+- Models come from each CLI's own model list: the newest version of each
+  family, from the same vendor and prefix as the CLI's default model. Claude
+  Code receives family names such as `sonnet`, which the CLI and its provider
+  resolve; `--model` or Claude Code's own setting chooses an exact model.
+- The plan screen and its Start question show the models of each plan,
+  the CLI that runs, and the other CLIs that are ready if it stops working.
+  Its Sending row says that the calls use your tokens with your provider.
+- The readiness check runs just before the first model call. It sends one tiny
+  request for each model the approved plan will call, the plan says how many,
+  and it names the models that answered: "Claude Code is ready: sonnet reads
+  sessions, opus groups and writes." When everything is reused, no call is made
+  at all.
+- A model the provider refuses steps down in one line ("Claude Code cannot use
+  opus here (your provider refused it). Using sonnet for grouping and
+  writing."). A CLI that is signed out, missing, out of quota, or failing
+  repeatedly hands the remaining work to a ready CLI, also in one line. The run
+  summary repeats every step-down and switch.
+- `--runner`, or an explicit `--model`, `--cluster-model`, or `--author-model`,
+  keeps the whole run on one CLI, and the plan says so. A plan name such as
+  `balanced/bulk` is rejected as a `--model` value.
+- Parallel stages run up to 10 calls at a time by default, and a CLI can take
+  fewer: OpenCode takes 2, and the plan's pace line says so. Grouping runs one
+  call at a time.
+
+### Prompt library
+
+- How a session ended is judged more fully. A closing report of finished work
+  that you did not dispute counts as completed; open items, a pause, or a
+  correction left unanswered count as partial; giving up, or an ending that
+  says the work could not be done, counts as abandoned. Unclear is kept for
+  sessions with no ending to judge, so fewer sessions are left unjudged.
+- A group whose outcome could not be judged now gets a prompt, marked "outcome
+  not verified" in the prompt file's header, in `list`, `show`, and `status`,
+  and in the browser view. A group whose every session was abandoned still
+  gets no prompt, and its preferences are kept. The run's closing summary says
+  how many of each.
+- The "Library:" sentence counts each prompt once: written, already up to
+  date, kept because you edited it, or skipped. The detail for each group
+  shows only under `--verbose`.
+- `distill --force` replaces a prompt you edited by hand even when nothing else
+  changed, from the saved result and with no model call.
+
+### Sources
+
+- Kiro Crew is a new source (`--source kirocrew`, `--kirocrew-dir`). It reads
+  Crew's own chats and archives, including messages typed while a role was
+  working, and skips scheduled jobs and setup runs. The copies of Crew runs in
+  the Kiro CLI store are excluded so injected context stays out of your
+  history, and `export` and `status` report how many.
+- These are no longer kept as text you typed: tool output that happens to
+  contain the wording of a rejected tool call, wrapper blocks a coding tool adds
+  around a message, the instructions Kiro CLI wraps around a message typed
+  while it works (the message itself is kept), editor context sent with a
+  Codex request, and image markers that carry a file path.
+- Text you typed that contains or starts with a tag, such as `<Button> is not
+  rendering`, is kept.
+- A shell command typed with `!` is kept as `[command] !...`, in Claude Code
+  and in Codex, where its exit code and output are dropped.
+- The instructions block Codex adds at the start of a message is removed,
+  whether or not its heading names a folder.
+- Replies without a timestamp are no longer merged with each other.
+- A session that cannot be read keeps its earlier export instead of
+  disappearing from it.
+- Project and export file names stay the same across re-exports, after a
+  filtered export (`--project` or `--source`) followed by a full one, and when
+  a tool moves its sessions to a new store layout. A project folder that comes
+  back never takes a name another folder now holds.
+- `export` closes with what was exported ("Exported N sessions with M of your
+  messages."), a count per tool, and one line saying what was left out and
+  why.
+
+### Working preferences and suggested subagents
+
+- Every `distill` run ends by summarizing your working preferences, 20 at a
+  time, into working agreements with their scope, exceptions, and quotations,
+  saved in `library/preferences.generalized.json`. A partly summarized set is
+  saved and shown, and the next run finishes it. `--no-generalize` skips this
+  step, and a failure here never fails the prompt library.
+- `status` and `preferences` give the same counts of preferences observed,
+  waiting for review, and accepted. `preferences` writes the block to standard
+  output and its notes to standard error, so `preferences > file.md` saves only
+  the block. `preferences --target kirocrew` writes a Kiro steering block that
+  Kiro Crew also reads.
+- New `suggest-subagents` command: proposes specialist roles from your accepted
+  preferences, or from every preference you have not dismissed when none are
+  accepted, and writes instructions for each role. It uses the same plan
+  screen and Start question as `distill`, ends with its own menu to open or export
+  the roles, and never opens the browser by itself. `--export DIR --target
+  claude|codex|kiro|kirocrew|knowledge|all` writes the saved roles as files
+  with no model call, and `--pin-model` sets a model in the role files that
+  support one. `--include-unreviewed`, `--window-size`, `--fresh-generalize`,
+  and `--author-only` control the inputs and resuming.
+
+### Browser view
+
+- Prompts, Preferences, and Subagents each open on an overview that suggests up
+  to three items to open first, with the reason each was picked.
+  `gui --tab prompts|preferences|subagents` picks the starting tab.
+- Preferences shows general working agreements first, grouped by the kind of
+  work where each was seen, then project-specific agreements under their
+  project, with one-time notes folded away. One button copies the general
+  agreements as Markdown.
+- Prompts left behind by a regrouping are listed apart from current ones and
+  never suggested first. A prompt whose outcome was not verified is labeled,
+  and is never suggested first while a verified one is available.
+- Every data route requires the session key in a request header, the expected
+  `Host`, and a same-origin request. The page keeps the key for its own tab, so
+  a reload keeps working. The browser is opened through a private, owner-only
+  file, so the key never appears on a command line.
+- Over SSH, `gui` uses port 4317 and prints the port-forward command and the
+  address to open on your laptop.
+
+### Terminal
+
+- Menus take arrow keys and Enter, or a number; the Start question is the
+  exception (see Safety and privacy). `--plain` or
+  `HUMAN_HINDSIGHT_PLAIN=1` gives numbered prompts and static progress lines,
+  which is also what you get without a terminal.
+- Progress lines show items done, failures, elapsed time, and an estimate from
+  the observed pace. Each stage ends with one summary line. Without a drawing
+  terminal, progress prints at most one line a second. `--verbose` on
+  `distill` and `suggest-subagents` shows detail per session or role, and
+  `status --verbose` shows internal bookkeeping.
+- Ctrl-C during a run stops the calls in flight and ends their processes,
+  says what was saved, and prints the command that continues on its own line.
+  An answer that arrives afterwards is discarded, and nothing is printed,
+  written, or copied after the interrupt line.
+- Questions never take keys typed before they appear. The question shows
+  "Ignored keys typed ahead. Choose when you are ready." and waits.
+- `status` and the end of `distill` tell the same story about your
+  preferences, with the review command on its own line.
+- A command printed for you to run next keeps the choices of the run (quality,
+  CLI, models, source, project), names a folder only when it is not the one
+  you use by default, and never carries `--yes`.
+- Exit codes are the same for every command: 0 done, 1 failed, 2 declined, 130
+  interrupted.
+- `list` keeps prompt names whole at any width, and marks prompts you edited or
+  rated and those whose outcome was not verified.
+- Terminals whose locale is not UTF-8 get ASCII symbols. Over SSH, `copy` asks
+  your own terminal to set the clipboard and always prints the text too.
+
+### Help
+
+- `human-hindsight --help` is one short screen: where to start, the everyday
+  commands, and where to go next. `help <command>` and `<command> --help` lead
+  with examples, then common options. `help --all` lists every command and
+  option.
+- An unknown command or option is an error with the closest match as a
+  suggestion, and nothing runs.
+- A switch takes no value other than `=true` or `=false`, and a word no
+  command takes is an error, so `--yes no` never runs as yes. A wrong value
+  for `--source`, `--runner`, or `--quality`, or for their environment
+  variables, is one plain line listing the accepted values. A wrong number is
+  one line naming the option and the value given, never a silent default. An
+  empty folder option is refused, and an empty folder variable counts as
+  unset, so the data home is never the current folder by accident. A leading
+  `--` is an error.
+- A damaged `exports/manifest.json` is one line that names the file and says
+  to run `export` again.
+- An unexpected failure prints one line and how to see the details
+  (`HUMAN_HINDSIGHT_DEBUG=1`).
+
+### Safety and privacy
+
+- Before a plan is approved, Human Hindsight sends nothing and opens no
+  network connection of its own. The home screen and `doctor` only run each
+  coding tool's own version and sign-in status commands. When building a plan
+  asks a CLI for its models from its service, the screen says so first.
+- Commands that change the library (`distill`, `export`, `prune`, `rate`,
+  `edit`, `preferences --consolidate`, `suggest-subagents`, strict retry, and
+  a review in the browser) take turns. While one runs, another stops without
+  changing anything, names the command that holds the library, and says what
+  to remove if nothing is running. A run stopped with Ctrl-C keeps the lock
+  until it has finished writing. A lock whose process is gone is taken back at
+  once, and one left under another machine name after a short wait.
+- The question that starts model calls takes one deliberate key: `s`. Enter,
+  a number, `y`, pasted text, a key held down or repeated from an earlier
+  menu, and keys typed before the question appeared never start a run; the
+  question answers "Press s to start, or q to leave." `1` and `2` only choose
+  between Balanced and Best. In plain mode the same letters are typed and
+  entered. `--yes` is unchanged.
+- Declining a plan, and `--dry-run`, change nothing in the data home.
+- On an unsupported Node, both `human-hindsight` and `cc-hindsight` stop before
+  loading anything: "needs Node.js 22.13 or newer in the 22 line, or 23.4 or
+  newer". They suggest a one-off command for each Node version manager found,
+  then `npx` with Node 24. Pre-release Node builds are accepted.
+
+### Upgrading from 1.x
+
+- Your data home keeps working, including a `~/.cc-hindsight` folder. Results
+  now record the model plan that produced them, so the first 2.0 `distill`
+  regenerates earlier results once. The plan says how many. Hand-edited
+  prompts, ratings, and preference reviews are kept.
+- When the new grouping leaves out an earlier prompt, the run keeps it, says
+  how many, and prints the `prune` command that removes them.
+- A prompt you edited by hand is kept, including one edited while it was being
+  written; `distill --force` replaces it.
+- Groups that 1.x skipped because no session showed a result now get a prompt
+  marked "outcome not verified".
+- The 2.0 operation records carry new fields that 1.x cannot read. Keep a copy
+  of your data home if you may go back to 1.x.
+- OpenCode decision lines now quote the question, like the other sources, so
+  re-exported OpenCode Markdown can differ.
+- At every prompt an empty line takes the default and end of input declines,
+  except the Start question, which only `s` answers. `--yes` never reads
+  input. Unknown options, stray words, and wrong numbers are now errors.
+- For contributors: `npm test` runs the unit tier only, `npm run test:smoke`
+  runs tests that start a process, drive a terminal, or pack a tarball, and
+  `npm run test:budget` checks the unit tier against its time budget. The
+  release workflow runs the full checks before publishing.
+
 ## [1.8.5] - 2026-11-13
 
 ### Fixed
@@ -385,7 +625,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the `type: "result"` event instead of a single result object. The runner read
   the array as an object, found no `result`, and failed every digest, cluster,
   and author call with `claude envelope missing a 'result' field` after burning
-  its one corrective retry — so a whole distill run died at the clustering
+  its one corrective retry, so a whole distill run died at the clustering
   stage with no usable output. Both payload shapes are now accepted (the result
   event is located by its `type` field, whose key position is not stable).
   There is no `--no-verbose` flag to force the object shape, so tolerating the
@@ -579,13 +819,13 @@ First public release.
 ### Pre-1.0 history
 
 Earlier `0.1.x` releases built up the core: read-only `scan`, the deterministic
-`export` with its audited extraction contract (rules R1–R11) and cross-file
+`export` with its audited extraction contract (rules R1 to R11) and cross-file
 dedupe, the consent-gated three-stage `distill` pipeline (digest, cluster,
 author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
-[Unreleased]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.5...HEAD
+[2.0.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.5...v2.0.0
 [1.8.5]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.3...v1.8.4
 [1.8.3]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.2...v1.8.3

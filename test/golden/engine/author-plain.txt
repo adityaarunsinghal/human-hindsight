@@ -1,0 +1,3 @@
+Writing prompts  0/3
+failed: task-number-one: synthetic failure for one unit
+Writing prompts  3/3 · 1 failed · 2 skipped · 0s

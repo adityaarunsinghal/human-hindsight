@@ -26,13 +26,21 @@ function failure(file: string, detail: string): SourceReadError {
   );
 }
 
+/** How long a read waits for OpenCode's own write lock before giving up. */
+const OPENCODE_BUSY_TIMEOUT_MS = 1000;
+
 /** Lazy import keeps SQLite (and its experimental warning on Node 22) out of other commands. */
-export function openOpenCodeDatabase(file: string): DatabaseSync {
+export function openOpenCodeDatabase(
+  file: string,
+  busyTimeoutMs = OPENCODE_BUSY_TIMEOUT_MS,
+): DatabaseSync {
   let database: DatabaseSync | undefined;
   try {
     const sqlite = require("node:sqlite") as typeof import("node:sqlite");
     database = new sqlite.DatabaseSync(file, { readOnly: true, allowExtension: false });
-    database.exec("PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=1000;");
+    database.exec(
+      `PRAGMA query_only=ON; PRAGMA trusted_schema=OFF; PRAGMA busy_timeout=${Math.max(0, Math.trunc(busyTimeoutMs))};`,
+    );
     return database;
   } catch (error) {
     database?.close();
@@ -179,6 +187,21 @@ function jsonFile(file: string): Record<string, unknown> {
   throw failure(file, "unreadable or malformed session JSON");
 }
 
+/**
+ * One message or part file of the JSON layout, or undefined when it cannot be
+ * read or parsed (a write cut short when OpenCode was killed). The caller
+ * counts it as one corrupt record and goes on, as the database path does for a
+ * malformed row; only the store itself failing stops the export.
+ */
+function recordFile(file: string): Record<string, unknown> | undefined {
+  try {
+    return payload(fs.readFileSync(file, "utf8"));
+  } catch {
+    // Do not print JSON parser errors, which can contain private prompt text.
+    return undefined;
+  }
+}
+
 function safeId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]+$/.test(value);
 }
@@ -218,11 +241,16 @@ function legacySessions(dir: string, count: boolean): OpenCodeSession[] {
 }
 
 /** Inventory includes archives; parent sessions and automation are classified separately. */
-export function discoverOpenCode(dir: string, file: string, count = true): ProjectInfo[] {
+export function discoverOpenCode(
+  dir: string,
+  file: string,
+  count = true,
+  busyTimeoutMs = OPENCODE_BUSY_TIMEOUT_MS,
+): ProjectInfo[] {
   if (file === ":memory:") return [];
   let sessions: OpenCodeSession[] = [];
   if (persistedFile(file)) {
-    const db = openOpenCodeDatabase(file);
+    const db = openOpenCodeDatabase(file, busyTimeoutMs);
     try {
       db.exec("BEGIN");
       sessions = readInventory(db, file, count);
@@ -240,6 +268,9 @@ export function discoverOpenCode(dir: string, file: string, count = true): Proje
   for (const session of sessions) {
     if (usedIds.has(session.id)) session.id = `${session.id}-${session.format}`;
     usedIds.add(session.id);
+    // A session OpenCode migrated to another layout keeps its stored id, which
+    // an earlier export recorded; the export keeps its name (stableId).
+    session.stableId = session.storedId;
   }
   const grouped = new Map<string, OpenCodeSession[]>();
   for (const session of sessions) {
@@ -355,22 +386,37 @@ export function readOpenCodeSession(db: DatabaseSync, session: OpenCodeSession):
 
 export function readLegacyOpenCode(dir: string, session: OpenCodeSession): string[] {
   const root = path.join(dir, "storage", "message", session.storedId);
+  // A damaged message file, or one with an unusable id, becomes one corrupt
+  // line ("{"), which extraction counts in badLines.
+  let damaged = 0;
   const messages = files(root)
     .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => jsonFile(path.join(root, entry.name)))
+    .flatMap((entry) => {
+      const info = recordFile(path.join(root, entry.name));
+      if (info && safeId(info.id)) return [info];
+      damaged++;
+      return [];
+    })
     .sort(
       (a, b) =>
         Number(object(a.time)?.created ?? 0) - Number(object(b.time)?.created ?? 0) ||
         String(a.id).localeCompare(String(b.id)),
     );
-  return beforeRevert(messages, session.revert, (message) => message.id).map((info) => {
-    if (!safeId(info.id)) throw failure(root, "invalid message ID");
-    const partsRoot = path.join(dir, "storage", "part", info.id);
+  const lines = beforeRevert(messages, session.revert, (message) => message.id).map((info) => {
+    const partsRoot = path.join(dir, "storage", "part", String(info.id));
+    let badParts = 0;
     const parts = files(partsRoot)
       .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-      .map((entry) => jsonFile(path.join(partsRoot, entry.name)));
-    return JSON.stringify({ format: "v1", info, parts });
+      .flatMap((entry) => {
+        const part = recordFile(path.join(partsRoot, entry.name));
+        if (part) return [part];
+        badParts++;
+        return [];
+      });
+    return JSON.stringify({ format: "v1", info, parts, ...(badParts ? { badParts } : {}) });
   });
+  for (let i = 0; i < damaged; i++) lines.push("{");
+  return lines;
 }
 
 export function isOpenCodeAutomation(session: OpenCodeSession): boolean {

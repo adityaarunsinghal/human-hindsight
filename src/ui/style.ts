@@ -1,128 +1,176 @@
-import { styleText } from "node:util";
+import { stripVTControlCharacters, styleText } from "node:util";
+import { canColor, glyph, lineWidth } from "./mode.js";
 
-export const bold = (s: string): string => styleText("bold", s);
-export const dim = (s: string): string => styleText("dim", s);
-export const green = (s: string): string => styleText("green", s);
-export const yellow = (s: string): string => styleText("yellow", s);
-export const red = (s: string): string => styleText("red", s);
-export const cyan = (s: string): string => styleText("cyan", s);
-export const magenta = (s: string): string => styleText("magenta", s);
+type Format = Parameters<typeof styleText>[0];
 
-/** Visible length of a string: ANSI escape sequences take no columns. */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
-const ANSI = /\u001b\[[0-9;]*m/g;
-const visibleLength = (s: string): number => s.replace(ANSI, "").length;
+/** "1 task", "1,234 tasks": a count with thousands separators and its noun, singular for one. */
+export function counted(n: number, noun: string, many = `${noun}s`): string {
+  return `${n.toLocaleString("en-US")} ${nounFor(n, noun, many)}`;
+}
 
-/** Pad to a visible width, styling-safe. */
-const padVisible = (s: string, width: number): string =>
-  s + " ".repeat(Math.max(0, width - visibleLength(s)));
-
-/** Columns are never shrunk below this many visible characters. */
-const MIN_COL_WIDTH = 6;
-
-/** Sticky variant of {@link ANSI}: matches only at `lastIndex` (loop-safe). */
-// biome-ignore lint/suspicious/noControlCharactersInRegex: matching ANSI escapes is the point
-const ANSI_AT = /\u001b\[[0-9;]*m/y;
-
-/**
- * Truncate a (possibly ANSI-styled) cell to `width` visible columns with a
- * trailing ellipsis. Escape sequences are copied through untouched (they take
- * no columns), and a full reset is appended after the cut so a style opened
- * inside the kept part can never bleed into the rest of the table.
- */
-function truncateVisible(cell: string, width: number): string {
-  if (visibleLength(cell) <= width) return cell;
-  let out = "";
-  let visible = 0;
-  for (let i = 0; i < cell.length; ) {
-    ANSI_AT.lastIndex = i;
-    const m = ANSI_AT.exec(cell);
-    if (m) {
-      out += m[0]; // escape sequence: zero columns, copy verbatim
-      i += m[0].length;
-      continue;
-    }
-    if (visible === width - 1) break; // leave room for the ellipsis
-    out += cell[i];
-    visible++;
-    i++;
-  }
-  return `${out}…${cell.includes("\u001b[") ? "\u001b[0m" : ""}`;
+/** The noun alone, singular for one: "task" or "tasks". */
+export function nounFor(n: number, noun: string, many = `${noun}s`): string {
+  return n === 1 ? noun : many;
 }
 
 /**
- * Render rows as aligned columns. Cells may carry ANSI styling — widths are
- * measured on visible characters, so color never breaks alignment.
- *
- * When the natural table is wider than `maxWidth` (default: the terminal
- * width, TTY only), the widest columns are shrunk first — down to
- * {@link MIN_COL_WIDTH} at most — and overlong cells get an ANSI-safe
- * ellipsis. Piped output is never capped: `list | grep` sees full content.
+ * Only the 16 terminal colors and bold or dim, through Node's own `styleText`.
+ * The decision is made here (see `canColor`), so `styleText` must not decide
+ * again from `process.stdout`, which may not be the stream being written.
  */
-export function table(rows: string[][], opts?: { header?: string[]; maxWidth?: number }): string {
+function paint(format: Format, text: string, enabled = canColor()): string {
+  if (!enabled) return text;
+  return styleText(format, text, { validateStream: false });
+}
+
+export const bold = (s: string): string => paint("bold", s);
+export const dim = (s: string): string => paint("dim", s);
+export const green = (s: string): string => paint("green", s);
+export const yellow = (s: string): string => paint("yellow", s);
+export const red = (s: string): string => paint("red", s);
+export const cyan = (s: string): string => paint("cyan", s);
+export const magenta = (s: string): string => paint("magenta", s);
+
+/** The same styles, decided for a given output instead of `process.stdout`. */
+export function palette(enabled: boolean) {
+  const style = (format: Format) => (s: string) => paint(format, s, enabled);
+  return {
+    bold: style("bold"),
+    dim: style("dim"),
+    green: style("green"),
+    yellow: style("yellow"),
+    red: style("red"),
+    cyan: style("cyan"),
+    magenta: style("magenta"),
+  };
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const wideCharacter =
+  /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]|\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: preserve SGR colors but remove cursor controls from text
+const styles = /(\u001b\[[0-9;]*m)/;
+// biome-ignore lint/suspicious/noControlCharactersInRegex: foreign labels must not ring the bell or move the cursor
+const controls = /[\u0000-\u001f\u007f-\u009f]/g;
+
+export function safeLine(text: string): string {
+  return text
+    .split(styles)
+    .map((part, i) => (i % 2 ? part : stripVTControlCharacters(part).replace(controls, " ")))
+    .join("");
+}
+
+/**
+ * A status label on one row: whitespace runs (including line breaks and tabs)
+ * become one space and other control characters are dropped, so
+ * "ses\bsion" reads as "session". Colors are kept.
+ */
+export function oneLine(text: string): string {
+  return text
+    .split(styles)
+    .map((part, i) =>
+      i % 2 ? part : stripVTControlCharacters(part).replace(/\s+/g, " ").replace(controls, ""),
+    )
+    .join("");
+}
+
+function graphemeWidth(s: string): number {
+  if (/^\p{Mark}+$/u.test(s)) return 0;
+  return wideCharacter.test(s) ? 2 : 1;
+}
+
+export function visibleWidth(s: string): number {
+  const plain = stripVTControlCharacters(s);
+  if (/^[ -~]*$/.test(plain)) return plain.length;
+  let width = 0;
+  for (const { segment } of graphemes.segment(plain)) width += graphemeWidth(segment);
+  return width;
+}
+
+/** Keep complete graphemes and reset any style still open after a cut. */
+export function truncateVisible(text: string, width: number): string {
+  if (width <= 0) return "";
+  if (visibleWidth(text) <= width) return text;
+  const suffix = glyph("…", "...").slice(0, width);
+  const limit = width - visibleWidth(suffix);
+  let line = "";
+  let used = 0;
+  for (const [index, part] of text.split(styles).entries()) {
+    if (index % 2) {
+      line += part;
+      continue;
+    }
+    for (const { segment } of graphemes.segment(part)) {
+      used += graphemeWidth(segment);
+      if (used > limit) return `${line}${suffix}${line.includes("\u001b[") ? "\u001b[0m" : ""}`;
+      line += segment;
+    }
+  }
+  return line;
+}
+
+/** Render aligned columns. An uncapped pipe preserves the complete content. */
+export function table(
+  rows: string[][],
+  opts?: { header?: string[]; maxWidth?: number; divider?: boolean },
+): string {
   const header = opts?.header?.map(bold);
   const all = header ? [header, ...rows] : rows;
   if (all.length === 0) return "";
   const widths: number[] = [];
   for (const row of all) {
     row.forEach((cell, i) => {
-      widths[i] = Math.max(widths[i] ?? 0, visibleLength(cell));
+      widths[i] = Math.max(widths[i] ?? 0, visibleWidth(cell));
     });
   }
-
-  // Cap the total width by greedily shrinking the widest column one column at
-  // a time — spreads the loss across the offenders (Title, Domain) instead of
-  // gutting one, and never touches already-narrow columns.
-  const maxWidth =
-    opts?.maxWidth ?? (process.stdout.isTTY ? (process.stdout.columns ?? undefined) : undefined);
+  const maxWidth = opts?.maxWidth ?? (process.stdout.isTTY ? process.stdout.columns : undefined);
   if (maxWidth !== undefined) {
-    const gaps = 2 * (widths.length - 1);
-    let total = widths.reduce((a, b) => a + b, gaps);
+    let total = widths.reduce((sum, width) => sum + width, 2 * (widths.length - 1));
     while (total > maxWidth) {
       let widest = 0;
       for (let i = 1; i < widths.length; i++) {
         if ((widths[i] ?? 0) > (widths[widest] ?? 0)) widest = i;
       }
-      if ((widths[widest] ?? 0) <= MIN_COL_WIDTH) break; // nothing left to shrink
+      if ((widths[widest] ?? 0) <= 6) break;
       widths[widest] = (widths[widest] ?? 0) - 1;
       total--;
     }
   }
-
-  const render = (row: string[]): string =>
+  const lines = all.map((row) =>
     row
-      .map((cell, i) => padVisible(truncateVisible(cell, widths[i] ?? 0), widths[i] ?? 0))
+      .map((cell, i) => {
+        const width = widths[i] ?? 0;
+        const text = truncateVisible(cell, width);
+        return text + " ".repeat(Math.max(0, width - visibleWidth(text)));
+      })
       .join("  ")
-      .trimEnd();
-  const lines = all.map(render);
-  if (header) {
-    const sep = dim(widths.map((w) => "-".repeat(w)).join("  "));
-    lines.splice(1, 0, sep);
+      .trimEnd(),
+  );
+  if (header && opts?.divider !== false) {
+    lines.splice(1, 0, dim(widths.map((w) => "-".repeat(w)).join("  ")));
   }
   return lines.join("\n");
 }
 
-/** Funnel hint: the suggested next step, styled dim. */
-export function hint(text: string): string {
-  return dim(`→ next: ${text}`);
+/**
+ * The suggested next command. It reads `→ next: <command>` on one line when
+ * that fits; otherwise the command moves to a line of its own, whole, so it
+ * can be copied even when it is wider than the terminal.
+ */
+export function hint(text: string, width: number | undefined = lineWidth()): string {
+  const lead = `${glyph("→", "->")} next:`;
+  const line = `${lead} ${text}`;
+  if (width === undefined || visibleWidth(line) <= width) return dim(line);
+  return `${dim(lead)}\n${dim(`  ${text}`)}`;
 }
 
-/** Stage banners are padded to this visible width before the right-hand text. */
-const BANNER_WIDTH = 28;
-
-/**
- * Stage banner: `── digest ─────────────── 5 sessions`. The label is bold
- * magenta, the rule dim, the right-hand annotation cyan. Total left width is
- * fixed so consecutive banners align their right column.
- */
 export function banner(label: string, right?: string): string {
-  const head = `── ${label} `;
-  const rule = "─".repeat(Math.max(1, BANNER_WIDTH - head.length));
-  const left = `${dim("──")} ${bold(magenta(label))} ${dim(rule)}`;
+  const rule = glyph("─", "-");
+  const head = `${rule.repeat(2)} ${label} `;
+  const left = `${dim(rule.repeat(2))} ${bold(magenta(label))} ${dim(rule.repeat(Math.max(1, 28 - visibleWidth(head))))}`;
   return right === undefined ? left : `${left} ${cyan(right)}`;
 }
 
-/** Status glyphs: colored ✔ / ✗ / ⤬ prefixes for per-item progress lines. */
-export const ok = (s: string): string => `${green("✔")} ${s}`;
-export const fail = (s: string): string => `${red("✗")} ${s}`;
-export const skip = (s: string): string => `${yellow("⤬")} ${s}`;
+export const ok = (s: string): string => `${green(glyph("✔", "[ok]"))} ${s}`;
+export const fail = (s: string): string => `${red(glyph("✗", "[failed]"))} ${s}`;
+export const skip = (s: string): string => `${yellow(glyph("⤬", "[skip]"))} ${s}`;

@@ -1,0 +1,31 @@
+  -c, --config <key=value>
+      --enable <FEATURE>
+      --disable <FEATURE>
+      --remote <ADDR>
+      --remote-auth-token-env <ENV_VAR>
+      --strict-config
+  -i, --image <FILE>...
+  -m, --model <MODEL>
+      --oss
+      --local-provider <OSS_PROVIDER>
+  -p, --profile <CONFIG_PROFILE_V2>
+  -s, --sandbox <SANDBOX_MODE>
+      --approve-for-me
+      --dangerously-bypass-approvals-and-sandbox
+      --dangerously-bypass-hook-trust
+  -C, --cd <DIR>
+      --worktree
+      --add-dir <DIR>
+      --thread-source <SOURCE>
+      --cyber-access-program <PROGRAM>
+      --skip-git-repo-check
+      --trust
+      --ephemeral
+      --ignore-user-config
+      --ignore-rules
+      --output-schema <FILE>
+      --color <COLOR>
+      --json
+  -o, --output-last-message <FILE>
+  -h, --help
+  -V, --version

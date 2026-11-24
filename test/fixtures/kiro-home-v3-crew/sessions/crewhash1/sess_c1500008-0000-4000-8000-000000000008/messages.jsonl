@@ -1,0 +1,4 @@
+{"id": "1", "timestamp": "2026-11-08T10:00:00.000Z", "payload": {"type": "user", "content": "check the deploy status"}}
+{"id": "2", "timestamp": "2026-11-08T10:00:01.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "checking"}}
+{"id": "3", "timestamp": "2026-11-08T10:00:02.000Z", "payload": {"type": "user", "content": "[auto-nudge cycle 2] synthetic nudge"}}
+{"id": "4", "timestamp": "2026-11-08T10:00:03.000Z", "payload": {"type": "user", "content": ""}}

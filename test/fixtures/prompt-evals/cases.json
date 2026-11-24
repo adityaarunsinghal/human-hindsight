@@ -824,5 +824,265 @@
         "fails": ["source-coverage", "separate-scope"]
       }
     ]
+  },
+  {
+    "id": "outcome-silent-finish",
+    "title": "A finished report that nobody disputed is completed",
+    "stage": "digest",
+    "input": {
+      "exportName": "outcome-silent-finish.md",
+      "content": "### 2026-10-21T10:00:00Z\n\nDownload the quarterly report from the build box into my Downloads folder.\n",
+      "outcome": {
+        "final_human_turns": [
+          "Download the quarterly report from the build box into my Downloads folder."
+        ],
+        "final_assistant_tail": "Downloaded quarterly-report.zip to Downloads. The local and remote checksums match."
+      }
+    },
+    "rules": [
+      {
+        "id": "completed",
+        "kind": "outcome",
+        "value": "completed"
+      }
+    ],
+    "reference": {
+      "goal": "Download the quarterly report",
+      "deliverable": "Download the quarterly report",
+      "domain": "Software engineering",
+      "keywords": ["review", "behavior", "testing"],
+      "outcome": "completed",
+      "preferences": []
+    },
+    "regressions": [
+      {
+        "label": "doubt about an unconfirmed report read as unclear",
+        "response": {
+          "goal": "Download the quarterly report",
+          "deliverable": "Download the quarterly report",
+          "domain": "Software engineering",
+          "keywords": ["review", "behavior", "testing"],
+          "outcome": "unclear",
+          "preferences": []
+        },
+        "fails": ["completed"]
+      }
+    ]
+  },
+  {
+    "id": "outcome-open-items",
+    "title": "A report that names unfinished work is partial",
+    "stage": "digest",
+    "input": {
+      "exportName": "outcome-open-items.md",
+      "content": "### 2026-10-21T10:00:00Z\n\nSet up the sync service and run the reboot recovery drill.\n",
+      "outcome": {
+        "final_human_turns": ["Set up the sync service and run the reboot recovery drill."],
+        "final_assistant_tail": "The sync service is installed and running. The reboot recovery drill remains untested."
+      }
+    },
+    "rules": [
+      {
+        "id": "partial",
+        "kind": "outcome",
+        "value": "partial"
+      }
+    ],
+    "reference": {
+      "goal": "Set up the sync service and test recovery",
+      "deliverable": "Set up the sync service and test recovery",
+      "domain": "Software engineering",
+      "keywords": ["review", "behavior", "testing"],
+      "outcome": "partial",
+      "preferences": []
+    },
+    "regressions": [
+      {
+        "label": "a report of progress read as finished",
+        "response": {
+          "goal": "Set up the sync service and test recovery",
+          "deliverable": "Set up the sync service and test recovery",
+          "domain": "Software engineering",
+          "keywords": ["review", "behavior", "testing"],
+          "outcome": "completed",
+          "preferences": []
+        },
+        "fails": ["partial"]
+      }
+    ]
+  },
+  {
+    "id": "outcome-disputed-report",
+    "title": "The person's last word outranks the closing report",
+    "stage": "digest",
+    "input": {
+      "exportName": "outcome-disputed-report.md",
+      "content": "### 2026-10-21T10:00:00Z\n\nAdd a retry to the uploader.\n\n### 2026-10-21T10:01:00Z\n\nno, that is wrong, test_upload_retry still fails on my machine\n",
+      "outcome": {
+        "final_human_turns": [
+          "Add a retry to the uploader.",
+          "no, that is wrong, test_upload_retry still fails on my machine"
+        ],
+        "final_assistant_tail": "Done. I added the retry wrapper and all tests pass."
+      }
+    },
+    "rules": [
+      {
+        "id": "partial",
+        "kind": "outcome",
+        "value": "partial"
+      }
+    ],
+    "reference": {
+      "goal": "Add a retry to the uploader",
+      "deliverable": "Add a retry to the uploader",
+      "domain": "Software engineering",
+      "keywords": ["review", "behavior", "testing"],
+      "outcome": "partial",
+      "preferences": []
+    },
+    "regressions": [
+      {
+        "label": "the closing report outranked the person's own words",
+        "response": {
+          "goal": "Add a retry to the uploader",
+          "deliverable": "Add a retry to the uploader",
+          "domain": "Software engineering",
+          "keywords": ["review", "behavior", "testing"],
+          "outcome": "completed",
+          "preferences": []
+        },
+        "fails": ["partial"]
+      }
+    ]
+  },
+  {
+    "id": "outcome-could-not-do-it",
+    "title": "A closing message that says the work could not be done is abandoned",
+    "stage": "digest",
+    "input": {
+      "exportName": "outcome-could-not-do-it.md",
+      "content": "### 2026-10-21T10:00:00Z\n\nMigrate the config file to the new format.\n",
+      "outcome": {
+        "final_human_turns": ["Migrate the config file to the new format."],
+        "final_assistant_tail": "I could not complete the migration: the schema validator rejects the new file, so I reverted my changes. Nothing was changed."
+      }
+    },
+    "rules": [
+      {
+        "id": "abandoned",
+        "kind": "outcome",
+        "value": "abandoned"
+      }
+    ],
+    "reference": {
+      "goal": "Migrate the config file",
+      "deliverable": "Migrate the config file",
+      "domain": "Software engineering",
+      "keywords": ["review", "behavior", "testing"],
+      "outcome": "abandoned",
+      "preferences": []
+    },
+    "regressions": [
+      {
+        "label": "a reverted attempt read as progress",
+        "response": {
+          "goal": "Migrate the config file",
+          "deliverable": "Migrate the config file",
+          "domain": "Software engineering",
+          "keywords": ["review", "behavior", "testing"],
+          "outcome": "partial",
+          "preferences": []
+        },
+        "fails": ["abandoned"]
+      }
+    ]
+  },
+  {
+    "id": "outcome-paused",
+    "title": "Work paused to continue later is partial",
+    "stage": "digest",
+    "input": {
+      "exportName": "outcome-paused.md",
+      "content": "### 2026-10-21T10:00:00Z\n\nCapture all 55 profiles into the sheet.\n\n### 2026-10-21T10:01:00Z\n\npause all work, I need to restart, you can continue later\n",
+      "outcome": {
+        "final_human_turns": [
+          "Capture all 55 profiles into the sheet.",
+          "pause all work, I need to restart, you can continue later"
+        ],
+        "final_assistant_tail": "Paused. 38 of 55 profiles are captured and saved. Say continue to resume from the checkpoint."
+      }
+    },
+    "rules": [
+      {
+        "id": "partial",
+        "kind": "outcome",
+        "value": "partial"
+      }
+    ],
+    "reference": {
+      "goal": "Capture the profiles into the sheet",
+      "deliverable": "Capture the profiles into the sheet",
+      "domain": "Software engineering",
+      "keywords": ["review", "behavior", "testing"],
+      "outcome": "partial",
+      "preferences": []
+    },
+    "regressions": [
+      {
+        "label": "a pause read as giving up",
+        "response": {
+          "goal": "Capture the profiles into the sheet",
+          "deliverable": "Capture the profiles into the sheet",
+          "domain": "Software engineering",
+          "keywords": ["review", "behavior", "testing"],
+          "outcome": "abandoned",
+          "preferences": []
+        },
+        "fails": ["partial"]
+      }
+    ]
+  },
+  {
+    "id": "outcome-no-ending",
+    "title": "With no closing message and nothing in the messages, the outcome is unclear",
+    "stage": "digest",
+    "input": {
+      "exportName": "outcome-no-ending.md",
+      "content": "### 2026-10-21T10:00:00Z\n\nHow do I list the open ports on this machine?\n",
+      "outcome": {
+        "final_human_turns": ["How do I list the open ports on this machine?"],
+        "final_assistant_tail": ""
+      }
+    },
+    "rules": [
+      {
+        "id": "unclear",
+        "kind": "outcome",
+        "value": "unclear"
+      }
+    ],
+    "reference": {
+      "goal": "List the open ports",
+      "deliverable": "List the open ports",
+      "domain": "Software engineering",
+      "keywords": ["review", "behavior", "testing"],
+      "outcome": "unclear",
+      "preferences": []
+    },
+    "regressions": [
+      {
+        "label": "an ending was guessed where none was captured",
+        "response": {
+          "goal": "List the open ports",
+          "deliverable": "List the open ports",
+          "domain": "Software engineering",
+          "keywords": ["review", "behavior", "testing"],
+          "outcome": "completed",
+          "preferences": []
+        },
+        "fails": ["unclear"]
+      }
+    ]
   }
 ]

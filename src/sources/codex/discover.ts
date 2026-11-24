@@ -33,8 +33,10 @@ function inspect(file: string, countEntries: boolean): CodexSession | null {
   let fd: number;
   try {
     fd = fs.openSync(file, "r");
-  } catch {
-    return null;
+  } catch (error) {
+    // Gone since it was listed: not a session. Present but unreadable: still a
+    // session, so export keeps its earlier export instead of pruning it.
+    return (error as NodeJS.ErrnoException).code === "ENOENT" ? null : unreadableRollout(file);
   }
   try {
     const stat = fs.fstatSync(fd);
@@ -95,9 +97,7 @@ function inspect(file: string, countEntries: boolean): CodexSession | null {
       }
     }
     const basename = path.basename(file);
-    const filenameId = basename.match(
-      /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i,
-    )?.[1];
+    const filenameId = filenameIdOf(basename);
     return {
       id: typeof meta.id === "string" ? meta.id : (filenameId ?? basename.replace(/\.jsonl$/, "")),
       file: basename,
@@ -107,10 +107,31 @@ function inspect(file: string, countEntries: boolean): CodexSession | null {
       meta,
     };
   } catch {
-    return null;
+    return unreadableRollout(file);
   } finally {
     fs.closeSync(fd);
   }
+}
+
+/** The id a rollout's file name carries (`rollout-<time>-<uuid>.jsonl`). */
+function filenameIdOf(basename: string): string | undefined {
+  return basename.match(
+    /([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.jsonl$/i,
+  )?.[1];
+}
+
+/** A rollout that exists but cannot be read: its id from the file name, no metadata. */
+function unreadableRollout(file: string): CodexSession {
+  const basename = path.basename(file);
+  return {
+    id: filenameIdOf(basename) ?? basename.replace(/\.jsonl$/, ""),
+    file: basename,
+    path: file,
+    entryCount: 0,
+    mtime: new Date(0),
+    meta: {},
+    unreadable: true,
+  };
 }
 
 /** Active and archived rollouts, grouped by the actual cwd (which preserves hyphens). */
@@ -120,16 +141,34 @@ export function discoverCodexProjects(
 ): ProjectInfo[] {
   const byCwd = new Map<string, CodexSession[]>();
   const seen = new Set<string>();
+  const unreadable: CodexSession[] = [];
   for (const store of ["sessions", "archived_sessions"]) {
     for (const file of rolloutFiles(path.join(codexDir, store))) {
       const session = inspect(file, opts.countEntries ?? true);
       if (!session || seen.has(session.id ?? session.path)) continue;
+      // An unreadable copy never hides a readable one with the same id.
+      if (session.unreadable) {
+        unreadable.push(session);
+        continue;
+      }
       seen.add(session.id ?? session.path); // prefer the active copy if both exist
       const cwd = typeof session.meta.cwd === "string" ? session.meta.cwd : "(unknown)";
       const sessions = byCwd.get(cwd) ?? [];
       sessions.push(session);
       byCwd.set(cwd, sessions);
     }
+  }
+  for (const session of unreadable) {
+    if (seen.has(session.id ?? session.path)) continue;
+    seen.add(session.id ?? session.path);
+    const sessions = byCwd.get("(unknown)") ?? [];
+    sessions.push(session);
+    byCwd.set("(unknown)", sessions);
+  }
+  // Codex moves a rollout to archived_sessions when it is archived; its id is
+  // what an earlier export recorded, so the export keeps its name (stableId).
+  for (const sessions of byCwd.values()) {
+    for (const session of sessions) if (session.id) session.stableId = session.id;
   }
   const usedNames = new Set<string>();
   return [...byCwd.entries()]

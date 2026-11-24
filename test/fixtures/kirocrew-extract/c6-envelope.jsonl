@@ -1,0 +1,5 @@
+{"role":"user","content":"[Subagent completion event] worker w1 finished","ts":"2026-02-01T10:00:00.000000+00:00","meta":{}}
+{"role":"user","content":"[auto-nudge cycle 3] keep working","ts":"2026-02-01T10:00:01.000000+00:00","meta":{}}
+{"role":"user","content":"[Cron notification] digest ready","ts":"2026-02-01T10:00:02.000000+00:00","meta":{}}
+{"role":"user","content":"[Kiro Crew host notice] a server restarted","ts":"2026-02-01T10:00:03.000000+00:00","meta":{}}
+{"role":"user","content":"why did [auto-nudge] fire twice?","ts":"2026-02-01T10:00:04.000000+00:00","meta":{"human":true}}

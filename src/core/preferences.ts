@@ -1,19 +1,19 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DigestSchema, type PreferenceCitation, type PreferenceScope } from "../claude/schemas.js";
+import { DigestSchema, type PreferenceCitation, type PreferenceScope } from "../distill/schemas.js";
 import type { SourceName } from "../sources/types.js";
 import { digestSourceFingerprint } from "./fingerprint.js";
 import { type LibraryEntry, readLibrary } from "./library.js";
 import { exportMessages, validatePreferenceCandidates } from "./preference-evidence.js";
 
 /**
- * core/preferences.ts — deterministic preference aggregation.
+ * Deterministic preference aggregation.
  *
  * Collect `preferences[]` from every library entry's `sources.json`,
  * normalize, dedupe near-identical strings, rank by frequency × recency, and
- * emit a paste-ready `CLAUDE.md` block with evidence counts. No LLM here —
- * the optional `--consolidate` pass lives behind the consent gate in the
+ * emit a paste-ready `CLAUDE.md` block with evidence counts. No model call
+ * happens here. The optional `--consolidate` pass lives behind the consent gate in the
  * preferences command.
  */
 
@@ -307,8 +307,13 @@ export function readObservedPreferences(home: string): AggregatedPreference[] {
   );
 }
 
-/** Where a preferences block is destined to be pasted. */
-export type PreferencesTarget = "claude" | "kiro" | "agents";
+/**
+ * Where a preferences block is destined to be pasted. `kirocrew` renders the
+ * same steering block as `kiro`: Kiro Crew agents load every file in
+ * `~/.kiro/steering/`, so one file serves both. It exists as its own target so
+ * the paste instructions can say Kiro Crew reads it too.
+ */
+export type PreferencesTarget = "claude" | "kiro" | "kirocrew" | "agents";
 
 /** Per-target leading comment + section heading. */
 function targetHeader(
@@ -317,19 +322,21 @@ function targetHeader(
 ): { comment: string; heading: string } {
   switch (target) {
     case "kiro":
-      // A kiro steering file (~/.kiro/steering/*.md) — auto-loaded by the agent.
+    case "kirocrew":
+      // A kiro steering file (~/.kiro/steering/*.md), loaded automatically by Kiro.
+      // Kiro Crew agents load the same directory, so kirocrew renders identically.
       return {
         comment: `<!-- human-hindsight preferences · generated ${date} · paste into ~/.kiro/steering/hindsight-preferences.md -->`,
         heading: "## Working preferences",
       };
     case "agents":
-      // An AGENTS.md section — portable across kiro and other agent CLIs.
+      // An AGENTS.md section, portable across Kiro and other coding CLIs.
       return {
         comment: `<!-- human-hindsight preferences · generated ${date} · add to AGENTS.md -->`,
         heading: "## Working preferences",
       };
     default:
-      // claude: the original CLAUDE.md block — byte-identical to before.
+      // claude: the original CLAUDE.md block, byte for byte.
       return {
         comment: `<!-- human-hindsight preferences · generated ${date} -->`,
         heading: "## Working preferences",
@@ -340,7 +347,7 @@ function targetHeader(
 /**
  * Render the paste-ready preferences block for a given target. Preferences are
  * grouped by how many tasks stated them, one comment header per group
- * (most-stated first) — repeating the count on every line drowned the signal
+ * (most-stated first). Repeating the count on every line drowned the signal
  * when most items occur once. Consolidated items (no per-task occurrences)
  * render as a flat list. The BODY is identical across targets; only the leading
  * provenance comment names the destination file.

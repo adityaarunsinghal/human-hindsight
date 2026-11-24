@@ -1,6 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { parseRunnerMode, resolveRunner } from "../src/runners/registry.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { makeRunner, parseRunnerMode, resolveRunner } from "../src/runners/registry.js";
 import type { RunnerIo } from "../src/runners/shared.js";
+import type { RunnerName } from "../src/runners/types.js";
+import type { SourceName } from "../src/sources/types.js";
+import { fakeRunnerIo } from "./support/runner-io.js";
 
 /** An IO whose PATH contains exactly the given binaries; spawn is never used. */
 function ioWith(...bins: string[]): RunnerIo {
@@ -12,78 +16,78 @@ function ioWith(...bins: string[]): RunnerIo {
   };
 }
 
+afterEach(() => {
+  vi.useRealTimers();
+});
+
 describe("parseRunnerMode", () => {
-  it("defaults to auto and accepts the three modes", () => {
+  it("defaults to auto, accepts every runner in any case, and rejects others", () => {
     expect(parseRunnerMode(undefined)).toBe("auto");
     expect(parseRunnerMode("KIRO")).toBe("kiro");
     expect(parseRunnerMode("CODEX")).toBe("codex");
-  });
-  it("rejects unknown values", () => {
+    expect(parseRunnerMode("OpenCode")).toBe("opencode");
     expect(() => parseRunnerMode("gpt")).toThrow(/unknown --runner/);
   });
 });
 
-describe("resolveRunner — explicit modes fail fast on a missing binary", () => {
-  it("explicit kiro with no kiro-cli throws missing-binary with the kiro hint at RESOLVE time", async () => {
-    await expect(resolveRunner("kiro", { io: ioWith("claude") })).rejects.toMatchObject({
+describe("resolveRunner: explicit modes fail fast on a missing binary", () => {
+  it.each([
+    ["kiro", "kiro-cli", ["claude"]],
+    ["claude", "claude", ["kiro-cli"]],
+    ["codex", "codex", ["claude"]],
+    ["opencode", "opencode", ["claude"]],
+  ] as const)("%s without %s throws missing-binary before consent", async (mode, bin, others) => {
+    await expect(resolveRunner(mode, { io: ioWith(...others) })).rejects.toMatchObject({
       kind: "missing-binary",
-      message: expect.stringContaining("kiro-cli"),
+      message: expect.stringContaining(`\`${bin}\``),
     });
-  });
-
-  it("explicit claude with no claude throws missing-binary at RESOLVE time", async () => {
-    await expect(resolveRunner("claude", { io: ioWith("kiro-cli") })).rejects.toMatchObject({
-      kind: "missing-binary",
-    });
-  });
-
-  it("explicit modes resolve when the binary exists", async () => {
-    expect((await resolveRunner("kiro", { io: ioWith("kiro-cli") })).name).toBe("kiro");
-    expect((await resolveRunner("claude", { io: ioWith("claude") })).name).toBe("claude");
-    expect((await resolveRunner("codex", { io: ioWith("codex") })).name).toBe("codex");
-  });
-
-  it("explicit Codex fails before consent when its binary is absent", async () => {
-    await expect(resolveRunner("codex", { io: ioWith("claude") })).rejects.toMatchObject({
-      kind: "missing-binary",
-      message: expect.stringContaining("codex"),
-    });
+    expect((await resolveRunner(mode, { io: ioWith(bin) })).name).toBe(mode);
   });
 });
 
-describe("resolveRunner — auto", () => {
-  it("prefers the runner matching the active source when installed", async () => {
-    const r = await resolveRunner("auto", {
-      io: ioWith("claude", "kiro-cli"),
-      preferSource: "kiro",
-    });
-    expect(r.name).toBe("kiro");
+describe("resolveRunner: auto", () => {
+  it.each([
+    [["claude", "kiro-cli"], "kiro", "kiro"],
+    // Kiro Crew runs kiro-cli underneath.
+    [["claude", "kiro-cli"], "kirocrew", "kiro"],
+    [["kiro-cli"], undefined, "kiro"],
+    [["codex"], undefined, "codex"],
+    [["claude", "codex", "kiro-cli"], "codex", "codex"],
+    [["claude", "kiro-cli"], undefined, "claude"],
+    // Nothing installed: claude, so its install hint surfaces on first use.
+    [[], undefined, "claude"],
+  ] as [
+    string[],
+    SourceName | undefined,
+    RunnerName,
+  ][])("on %j preferring %s picks %s", async (bins, preferSource, expected) => {
+    expect((await resolveRunner("auto", { io: ioWith(...bins), preferSource })).name).toBe(
+      expected,
+    );
+  });
+});
+
+describe("Kiro empty-output retries follow who wraps the adapter", () => {
+  async function chatCalls(build: (io: RunnerIo) => Promise<ReturnType<typeof makeRunner>>) {
+    vi.useFakeTimers();
+    const io = fakeRunnerIo()
+      .script("kiro-cli", { args: ["--version"] }, { stdout: "kiro-cli 2.12.1\n" })
+      .script("kiro-cli", { has: ["--no-interactive"] }, { stdout: "" })
+      .script("kiro-cli", { has: ["--list-sessions"] }, { stdout: "[]" })
+      .failOnUnscripted();
+    const runner = await build(io);
+    const result = runner.run({ prompt: "p", schema: z.object({}) }).catch((e: unknown) => e);
+    await vi.runAllTimersAsync();
+    expect(await result).toMatchObject({ kind: "transient" });
+    await runner.finalize?.();
+    return io.callsOf("kiro-cli", { has: ["--no-interactive"] }).length;
+  }
+
+  it("the pool's adapter reports the first empty output; the pool retries it", async () => {
+    expect(await chatCalls(async (io) => makeRunner("kiro", { io }))).toBe(1);
   });
 
-  it("falls back to whichever binary exists (kiro-only machine works)", async () => {
-    const r = await resolveRunner("auto", { io: ioWith("kiro-cli") });
-    expect(r.name).toBe("kiro");
-  });
-
-  it("supports Codex-only machines and an explicit source preference", async () => {
-    expect((await resolveRunner("auto", { io: ioWith("codex") })).name).toBe("codex");
-    expect(
-      (
-        await resolveRunner("auto", {
-          io: ioWith("claude", "codex", "kiro-cli"),
-          preferSource: "codex",
-        })
-      ).name,
-    ).toBe("codex");
-  });
-
-  it("prefers claude when both exist and no source preference is given", async () => {
-    const r = await resolveRunner("auto", { io: ioWith("claude", "kiro-cli") });
-    expect(r.name).toBe("claude");
-  });
-
-  it("returns the claude runner when neither binary exists (its hint surfaces on use)", async () => {
-    const r = await resolveRunner("auto", { io: ioWith() });
-    expect(r.name).toBe("claude");
+  it("an adapter used outside the pool keeps its own backoff", async () => {
+    expect(await chatCalls((io) => resolveRunner("kiro", { io }))).toBe(3);
   });
 });

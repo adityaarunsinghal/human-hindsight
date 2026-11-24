@@ -66,6 +66,68 @@ describe("kiro v3: SessionSource law (extract ↔ timeline agreement)", () => {
   }
 });
 
+describe("kiro v3: harness envelopes on a user entry (V4)", () => {
+  // Synthetic copies of the envelope shapes the v2 store carries (K14, K6).
+  const TS = "2026-10-21T10:00:00.000Z";
+  const v3 = (content: string, id: string) =>
+    JSON.stringify({ id, timestamp: TS, payload: { type: "user", content } });
+  const steering =
+    "[LIVE STEERING - New message from user]\n\n" +
+    "The user sent a new message while you are working. As the currently active agent, adjust your approach if necessary based on this guidance.\n\n" +
+    '<user_message id="steer-1">\nuse offset pagination instead\n</user_message>\n\n' +
+    "IMPORTANT: After completing your work, include a brief note about how you handled this steering message.";
+
+  it.each([
+    {
+      name: "a live-steering envelope keeps only the typed words",
+      content: steering,
+      kept: ["use offset pagination instead"],
+      drops: [],
+    },
+    {
+      name: "a subagent completion event is dropped with a record",
+      content: "[Subagent completion event]\nThe worker finished: 3 files changed.",
+      kept: [],
+      drops: ["K6: bracket marker"],
+    },
+    {
+      name: "a steering envelope with no message body is dropped with a record",
+      content: "[LIVE STEERING - New message from user]\nno body here",
+      kept: [],
+      drops: ["K6: bracket marker"],
+    },
+    {
+      name: "a harness nudge is dropped with a record",
+      content: "You took too long to respond. Continue.",
+      kept: [],
+      drops: ["K6: harness nudge"],
+    },
+    {
+      name: "a person quoting the marker mid-message is kept whole",
+      content: "why does [Subagent completion event] show up in my log?",
+      kept: ["why does [Subagent completion event] show up in my log?"],
+      drops: [],
+    },
+  ])("$name, in extract and timeline", ({ content, kept, drops }) => {
+    const input = [v3("start the migration", "a"), v3(content, "b")];
+    const result = extractKiroV3Messages(input);
+    expect(result.messages.map((m) => m.text)).toEqual(["start the migration", ...kept]);
+    expect(result.drops.map((d) => d.reason)).toEqual(drops);
+    expect(
+      kiroV3Timeline(input)
+        .filter((e) => e.kind === "human")
+        .map(({ timestamp, text }) => ({ timestamp, text })),
+    ).toEqual(result.messages);
+  });
+
+  it("leaves classification on the raw body: a lone nudge session is still automation", () => {
+    const meta: KiroSessionMeta = { hasHistory: false };
+    expect(classifyKiroV3Lines(meta, [v3("You took too long to respond", "a")]).include).toBe(
+      false,
+    );
+  });
+});
+
 describe("detectKiroFormat: v2 vs v3 sniffing", () => {
   it("classifies a payload-shaped line as v3", () => {
     expect(detectKiroFormat(lines("user-assistant.jsonl"))).toBe("v3");
@@ -94,15 +156,24 @@ describe("kiro v3 classify: recall-oriented precedence", () => {
 
   it("INCLUDES a session with .history over an automation-marker first prompt", () => {
     const withHistory: KiroSessionMeta = { hasHistory: true };
-    const verdict = classifyKiroV3Lines(withHistory, lines("classify-agent-prompt.jsonl"));
+    const verdict = classifyKiroV3Lines(withHistory, lines("classify-boilerplate.jsonl"));
     expect(verdict.include).toBe(true);
     expect(verdict.reason).toContain(".history present");
   });
 
-  it("EXCLUDES an [AGENT SYSTEM PROMPT] first prompt with no .history", () => {
-    expect(classifyKiroV3Lines(noHistory, lines("classify-agent-prompt.jsonl")).include).toBe(
-      false,
-    );
+  it("EXCLUDES an automation-agent boilerplate first prompt with no .history", () => {
+    const verdict = classifyKiroV3Lines(noHistory, lines("classify-boilerplate.jsonl"));
+    expect(verdict.include).toBe(false);
+    expect(verdict.kind).toBeUndefined();
+  });
+
+  it("EXCLUDES an [AGENT SYSTEM PROMPT] first prompt as K15, even with .history", () => {
+    // K15 runs before the .history check: the Kiro Crew store owns these runs.
+    for (const meta of [noHistory, { hasHistory: true }]) {
+      const verdict = classifyKiroV3Lines(meta, lines("classify-agent-prompt.jsonl"));
+      expect(verdict.include).toBe(false);
+      expect(verdict.kind).toBe("kirocrew");
+    }
   });
 
   it("INCLUDES a plain interactive session (recall default) with no .history", () => {

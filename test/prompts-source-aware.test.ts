@@ -3,10 +3,10 @@ import {
   AUTHOR_PROMPT_VERSION,
   type AuthorMemberInput,
   buildAuthorPrompt,
-} from "../src/claude/prompts/author.js";
-import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../src/claude/prompts/cluster.js";
-import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../src/claude/prompts/digest.js";
-import type { ClusterTask, Digest } from "../src/claude/schemas.js";
+} from "../src/distill/prompts/author.js";
+import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../src/distill/prompts/cluster.js";
+import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../src/distill/prompts/digest.js";
+import type { ClusterTask, Digest } from "../src/distill/schemas.js";
 
 /**
  * Source-aware prompt copy: the digest/cluster/author prompts name the
@@ -25,15 +25,47 @@ const digest = (outcome: Digest["outcome"] = "completed"): Digest => ({
   outcome,
 });
 
-describe("prompt versions were bumped with the source-aware copy change", () => {
-  it("digest, cluster, and author v6 carry the evidence contract", () => {
-    expect(DIGEST_PROMPT_VERSION).toBe(6);
+describe("prompt versions follow the prompt text", () => {
+  it("cluster v6 carries the evidence contract; digest v7 adds the outcome procedure; author v7 adds the unverified-outcome instruction", () => {
+    expect(DIGEST_PROMPT_VERSION).toBe(7);
     expect(CLUSTER_PROMPT_VERSION).toBe(6);
-    expect(AUTHOR_PROMPT_VERSION).toBe(6);
+    expect(AUTHOR_PROMPT_VERSION).toBe(7);
   });
 });
 
-describe("digest prompt — source naming and legend", () => {
+describe("digest prompt: how a session's outcome is judged", () => {
+  const prompt = buildDigestPrompt({
+    exportName: "webapp-a1b2c3d4.md",
+    content: "do the thing",
+    outcome: { final_human_turns: ["do the thing"], final_assistant_tail: "Done. The tests pass." },
+  });
+
+  it("gives the four outcomes as an ordered procedure over the closing evidence", () => {
+    const order = ['"abandoned":', '"completed":', '"partial":', '"unclear":'].map((label) =>
+      prompt.indexOf(label),
+    );
+    expect(order.every((at) => at > 0)).toBe(true);
+    expect([...order].sort((a, b) => a - b)).toEqual(order);
+    expect(prompt).toContain("Take the first of these that fits");
+  });
+
+  it("does not require explicit acceptance, and keeps the person's last word above the report", () => {
+    expect(prompt).toContain("do not require explicit acceptance");
+    expect(prompt).toContain(
+      "a\n  closing report of finished work that the human did not dispute is completed",
+    );
+    expect(prompt).toContain("it is not completed");
+    // Unclear is for a missing ending only, never a default for doubt.
+    expect(prompt).toContain('"unclear": there is no ending to judge');
+    expect(prompt).not.toContain("missing endings are unclear");
+  });
+
+  it("labels the closing message as the assistant's and as machine-written", () => {
+    expect(prompt).toContain("Assistant's closing message, its final part (MACHINE-AUTHORED");
+  });
+});
+
+describe("digest prompt: source naming and legend", () => {
   const base = { exportName: "webapp-a1b2c3d4.md", content: "do the thing" };
 
   it("claude origin (and absent origin) keeps the original copy incl. the legend", () => {
@@ -63,7 +95,7 @@ describe("digest prompt — source naming and legend", () => {
   });
 });
 
-describe("cluster prompt — corpus naming by origin set", () => {
+describe("cluster prompt: corpus naming by origin set", () => {
   const digests = { "a.md": digest(), "b.md": digest() };
 
   it("all-claude (and absent origins) keeps the original naming", () => {
@@ -92,7 +124,7 @@ describe("cluster prompt — corpus naming by origin set", () => {
   });
 });
 
-describe("author prompt — legend bullets follow the members' origins", () => {
+describe("author prompt: legend bullets follow the members' origins", () => {
   const task: ClusterTask = { slug: "the-task", title: "T", rationale: "r", members: ["a.md"] };
   const member = (origin?: AuthorMemberInput["origin"]): AuthorMemberInput => ({
     exportName: "a.md",
