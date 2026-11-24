@@ -1,6 +1,14 @@
+import { EventEmitter } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StageProgressSink } from "../src/distill/stage-events.js";
-import { type SetupRow, setupTable, startStageProgress, summary } from "../src/ui/screen.js";
+import type { TerminalHost } from "../src/ui/live.js";
+import {
+  batchProjectLine,
+  type SetupRow,
+  setupTable,
+  startStageProgress,
+  summary,
+} from "../src/ui/screen.js";
 import { createClock } from "./support/clock.js";
 import { escapeSequences, goldenText } from "./support/text.js";
 import { fakeOutput } from "./support/tty.js";
@@ -85,7 +93,7 @@ describe("closing summary", () => {
     const lines = summary("Your library is ready", [
       "12 prompts from 40 sessions",
       "Read by claude-sonnet-5.5, grouped and written by claude-opus-5",
-      "Next: human-hindsight gui",
+      "Next: npx human-hindsight gui",
     ]);
     await expect(`${lines.join("\n")}\n`).toMatchFileSnapshot("golden/ui/closing-summary.txt");
     expect(lines).toHaveLength(4);
@@ -93,7 +101,16 @@ describe("closing summary", () => {
 });
 
 /** Drive a stage the way the pipeline does, with a clock that moves 2 s per finished call. */
-function stage(o: { columns?: number; isTTY?: boolean; env?: Record<string, string> } = {}) {
+function stage(
+  o: {
+    columns?: number;
+    isTTY?: boolean;
+    env?: Record<string, string>;
+    readProjects?: string[];
+    reusableReads?: Set<string>;
+    host?: TerminalHost;
+  } = {},
+) {
   const out = fakeOutput({ columns: o.columns ?? 80, rows: 24, isTTY: o.isTTY ?? true });
   const clock = createClock();
   const env = { TERM: "xterm-256color", NO_COLOR: "1", ...UTF8, ...o.env };
@@ -101,6 +118,9 @@ function stage(o: { columns?: number; isTTY?: boolean; env?: Record<string, stri
   const sink: StageProgressSink = startStageProgress(out, "Reading sessions", {
     now: clock.nowMs,
     env,
+    host: o.host,
+    readProjects: o.readProjects,
+    reusableReads: o.reusableReads,
     every: (tick) => {
       ticks.push(tick);
       return () => ticks.splice(0);
@@ -122,6 +142,102 @@ function finish(s: ReturnType<typeof stage>, ids: number[], status: "done" | "fa
 }
 
 describe("stage progress", () => {
+  it("previews the most represented projects from the actual selection in stable order", () => {
+    const output = fakeOutput({ isTTY: false });
+    expect(batchProjectLine([], output)).toBeUndefined();
+    expect(
+      batchProjectLine(
+        ["Field notes", "Guides", "Widgets", "Reference", "Guides", "Widgets"],
+        output,
+        UTF8,
+      ),
+    ).toBe("Most represented  Guides ×2 · Widgets ×2 · Field notes");
+  });
+
+  it("shows active projects, then retains each saved goal and preference in completion order after Ctrl-C", async () => {
+    const host = Object.assign(new EventEmitter(), { pid: 1, kill: vi.fn() });
+    host.once("SIGINT", () => {});
+    const s = stage({
+      readProjects: ["Field notes", "Reference", "Field notes"],
+      env: { FORCE_COLOR: "1" },
+      host,
+    });
+    s.sink.start(3, 3);
+    for (const [i, project] of ["Field notes", "Reference", "Field notes"].entries())
+      s.sink.running?.(`s${i}`, `export-${i}.md`, project);
+    s.clock.advance(1_000);
+    for (const tick of s.ticks) tick();
+    expect(s.screen()).toContain("Reading Field notes ×2 · Reference");
+    expect(s.screen()).toContain("The first summary appears as soon as a read finishes.");
+    expect(s.out.raw()).toContain("\x1b[34mField notes");
+    expect(s.out.raw()).toContain("\x1b[36mReference");
+
+    s.sink.item({
+      id: "s1",
+      status: "done",
+      line: "",
+      read: {
+        project: "Reference",
+        outcome: "completed",
+        goal: "Explain the new option.",
+        preference: "Lead with one example.",
+      },
+    });
+    expect(s.screen()).toContain("Preference Lead with one example.");
+    expect(s.sink.savedReads?.()).toBe(1);
+    s.sink.item({
+      id: "s2",
+      status: "done",
+      line: "",
+      read: {
+        project: "Field notes",
+        outcome: "partial",
+        goal: "Organize the field notes.",
+      },
+    });
+    host.emit("SIGINT");
+    const stopped = s.screen();
+    expect(stopped.indexOf("Explain the new option.")).toBeLessThan(
+      stopped.indexOf("Organize the field notes."),
+    );
+    expect(stopped).not.toMatch(/estimating|first summary|Reading Field notes|export-\d/);
+    await expect(stopped).toMatchFileSnapshot("golden/ui/saved-reads-after-interrupt.txt");
+    s.sink.end();
+  });
+
+  it("keeps a long reused result readable on narrow terminals and counts only saved results", () => {
+    const s = stage({
+      columns: 32,
+      readProjects: ["Reference", "Guides", "Reference"],
+      reusableReads: new Set(["cached", "later"]),
+    });
+    s.sink.start(3, 1);
+    s.sink.item({
+      id: "cached",
+      status: "skipped",
+      line: "",
+      read: {
+        project: "Reference",
+        outcome: "unclear",
+        goal: "Document widget sizing for small screens.",
+        preference: "Explain defaults before alternatives.",
+      },
+    });
+    s.sink.item({ id: "missing", status: "failed", line: "missing file" });
+    const active = s.screen();
+    expect(active).toContain("1/3 read");
+    expect(active).toContain("1 failed");
+    expect(active).toContain("1 reused");
+    // The stop notice also includes the saved read later in this batch.
+    expect(s.sink.savedReads?.()).toBe(2);
+    s.sink.end();
+    const text = s.screen();
+    expect(text).toContain("Reused Reference · unclear");
+    expect(text.replace(/\n│\s*/g, " ")).toContain("Explain defaults before alternatives.");
+    expect(text).not.toContain("estimating");
+    for (const line of text.split("\n")) expect(line.length).toBeLessThan(32);
+  });
+
   it("reads estimating before five results and folds finished items into the count", async () => {
     const s = stage();
     s.sink.start(40, 10);

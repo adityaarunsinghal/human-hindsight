@@ -4,38 +4,31 @@ model steps use your own coding tool and its configured provider. Human
 Hindsight has no session-upload service.
 
 Reading exported sessions
-Which sessions would you like to start with?
-  1  My 25 most recent sessions (recommended)
-     A shorter first run. Saved reads are reused when you do the rest.
-  2  Everything (30 eligible sessions)
-  q  Quit
+Which history do you want to reflect on?
+› 1  25 most recent sessions (recommended)
+     Later runs reuse the reads you have already finished.
+• 2  All 30 eligible sessions
+• q  Quit
   Choose [1]:
-Checking which coding CLIs are ready.
+Checking available coding CLIs…
 
-  Distill plan
+Reflect on your history
+25 recent sessions across 1 project · 30 eligible
 
-  Reads    your 25 most recent sessions (of 30 eligible), about 8 prompts, plus
-           your working preferences.
-           The rest can follow in a later run, which reuses this saved work.
-  Runs on  Claude Code (claude 9.9.9)
-  Calls    25 session reads, about 1 grouping call, and about 8 writing calls.
-           Then the working preference summaries. Their count is known after
-           reading sessions.
-           Up to 10 at a time. Grouping runs one call at a time.
-  Models   1 Balanced (selected): sonnet for session reads, opus for grouping
-           and writing
-           2 Best: opus for session reads, fable for grouping and writing
-  Sending  The selected session text and your working preferences go to your
-           provider through Claude Code, the same way your normal sessions do,
-           and the calls use your tokens there. Before the first model call, two
-           tiny requests, one for each model, check that Claude Code is ready;
-           when everything is reused, nothing is sent.
+Runs on  Claude Code (claude 9.9.9)
+Quality
+› 1 Balanced   • 2 Best
+  sonnet for session reads, opus for grouping and writing
 
-Start?
-  1  Balanced (selected)
-     sonnet for session reads, opus for grouping and writing
-  2  Best
-     opus for session reads, fable for grouping and writing
-  s  Start with Balanced
+Plan  25 session reads, about 1 grouping call, and about 8 writing calls.
+  Then the working preference summaries. Their count is known after reading
+  sessions.
+  Up to 10 at a time. Grouping runs one call at a time.
+Sending  Selected session text and working preferences go through Claude Code to
+  its provider, using your tokens.
+  Before the first model call, a tiny request checks each planned model. If all
+  work is reused, nothing is sent.
+
+  s  Start reflection
   q  Not now
   Choose [1/2/s/q]: Declined. Nothing was sent.

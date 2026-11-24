@@ -1,27 +1,31 @@
-Human Hindsight 2.0.0
-Turn your coding sessions into reusable prompts and working
-agreements.
+Human Hindsight 2.1.0
+Understand how you work. Codify your taste.
 
 Start here
   npx human-hindsight
-    Build or open your library
+    Reflect on your history or browse past reflections
   npx human-hindsight --dry-run
     See your setup and the next step
-  npx human-hindsight distill --dry-run
-    Preview the model plan, send nothing
+  npx human-hindsight reflect --dry-run
+    Preview the reflection plan
 
 Everyday commands
-  scan     Find projects and sessions on this machine.
-  export   Save your messages from coding sessions as
-           Markdown.
-  distill  Build a prompt library from your exported
-           sessions.
-  gui      Open your library in a browser.
-  status   See what has finished and what to run next.
+  npx human-hindsight scan     Find projects and sessions on
+                               this machine.
+  npx human-hindsight export   Save your messages from
+                               coding sessions as Markdown.
+  npx human-hindsight reflect  Find preferences and reusable
+                               prompts in your sessions.
+  npx human-hindsight gui      Explore your reflections and
+                               library in a browser.
+  npx human-hindsight status   See what has finished and
+                               what to run next.
 
 More help
-  human-hindsight help <command>  Examples and common
-                                  options
-  human-hindsight doctor          Check your setup
-  human-hindsight help --all      All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  npx human-hindsight help <command>
+    Examples and common options
+  npx human-hindsight doctor
+    Check your setup
+  npx human-hindsight help --all
+    All commands and options
+  https://adityasinghal.com/#current

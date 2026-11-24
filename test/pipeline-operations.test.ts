@@ -199,7 +199,7 @@ describe("durable pipeline operations", () => {
     expect(plan.modelOperations).toEqual([]);
     expect(plan.blocked).toHaveLength(1);
     expect(plan.blocked[0]?.reason).toContain(
-      "Its group changed since it failed; run distill without --retry-failed",
+      `Its group changed since it failed; run npx human-hindsight reflect --home=${dir} without --retry-failed`,
     );
   });
 

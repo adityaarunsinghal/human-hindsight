@@ -119,7 +119,7 @@ function parse(lines: string[]): { result: ExtractResult; timeline: TimelineEven
           }
           const pieces = [text(info.text), ...objects(info.files).map(attachment)].filter(Boolean);
           if (text(info.text).startsWith(OPENCODE_DISTILL_MARKER)) {
-            drop("generated distillation prompt", text(info.text), time);
+            drop("generated reflection prompt", text(info.text), time);
           } else {
             event("human", pieces.join("\n\n"), time);
           }
@@ -160,7 +160,7 @@ function parse(lines: string[]): { result: ExtractResult; timeline: TimelineEven
           drop("synthetic or ignored part", text(part.text), time);
         } else if (part.type === "text") {
           if (text(part.text).startsWith(OPENCODE_DISTILL_MARKER)) {
-            drop("generated distillation prompt", text(part.text), time);
+            drop("generated reflection prompt", text(part.text), time);
           } else if (text(part.text).trim()) human.push(text(part.text));
         } else if (part.type === "file") {
           human.push(attachment(part));

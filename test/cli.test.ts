@@ -20,7 +20,7 @@ const EXPECTED = [
   "doctor",
   "help",
   "export",
-  "distill",
+  "reflect",
   "list",
   "show",
   "copy",
@@ -67,7 +67,7 @@ describe("human-hindsight root command", () => {
       if (meta?.hidden) hidden.push(name);
     }
     // The short help keeps the first-run and everyday commands visible.
-    for (const name of ["scan", "export", "distill", "gui", "status", "doctor", "help"]) {
+    for (const name of ["scan", "export", "reflect", "gui", "status", "doctor", "help"]) {
       expect(hidden).not.toContain(name);
     }
     expect(hidden.length).toBeGreaterThan(0);
@@ -108,7 +108,7 @@ describe("root dispatch", () => {
     for (const d of tmp.splice(0)) fs.rmSync(d, { recursive: true, force: true });
   });
 
-  const ranHome = () => written.includes("Your coding tools on this machine");
+  const ranHome = () => written.includes("Understand how you work. Codify your taste.");
 
   // `--source claude` keeps these dispatch tests hermetic: without it, `auto`
   // would also read the machine's real ~/.kiro store (the "never read the real
@@ -189,7 +189,7 @@ describe("a command that fails", () => {
     [
       "a damaged file the person can rebuild",
       damagedFile("/data/exports/manifest.json", "not valid JSON", "export"),
-      "error: /data/exports/manifest.json is damaged (not valid JSON). Run `human-hindsight export` again to rebuild it.\n",
+      "error: /data/exports/manifest.json is damaged (not valid JSON). Run `npx human-hindsight export` again to rebuild it.\n",
     ],
     [
       "anything else",
@@ -214,6 +214,7 @@ describe("a command that fails", () => {
   // with its stack: every command is dispatched through the guard.
   it.each([
     [["scan", "--source", "bogus"]],
+    [["reflect", "--source", "bogus", "--dry-run"]],
     [["distill", "--source", "bogus", "--dry-run"]],
     [["preferences", "--target", "bogus", "--include-unreviewed"]],
   ])("%j: a wrong value is one plain line and no stack trace", async (rawArgs) => {
@@ -295,7 +296,7 @@ describe("doctor through an injected runner", () => {
     );
     expect(code).toBe(0);
     expect(text).toContain("claude 9.9.9");
-    expect(text).toContain("Distill would use Claude Code");
+    expect(text).toContain("Reflection would use Claude Code");
     // Every probe went to the fake; none is a model call.
     expect(calls.length).toBeGreaterThan(0);
     for (const call of calls)

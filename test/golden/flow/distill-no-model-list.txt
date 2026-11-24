@@ -1,9 +1,9 @@
 Human Hindsight is fully open source (https://github.com/adityaarunsinghal/human-hindsight). Export stays local; model steps use your own coding tool and its configured provider. Human Hindsight has no session-upload service.
 
-Checking which coding CLIs are ready.
+Checking available coding CLIs…
 Asking Kiro CLI which models it offers. This contacts its service; no session text is sent.
 
-  Distill plan
+  Reflect on your history
 
   Reads    3 sessions, about 1 prompt, plus your working preferences.
   Runs on  Kiro CLI (kiro-cli 9.9.9)

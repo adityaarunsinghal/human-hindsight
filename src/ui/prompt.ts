@@ -283,10 +283,8 @@ function defaultChoice<K extends string>(
 const MAX_KEYED_CHOICES = 9;
 
 /**
- * The menu as lines. When a choice's detail would make its row wider than
- * `width`, a live menu (one row per choice) leaves the detail out, and a
- * numbered menu moves it under the label, wrapped at word boundaries. Either
- * way no row is cut or wrapped in the middle of a word, and the label stays.
+ * Wrap long labels and recommendations inside the marker gutter. A live
+ * menu leaves out detail that would wrap; a numbered menu prints it below.
  */
 function menuLines<K extends string>(
   o: { title: string; above: string[]; choices: readonly MenuChoice<K>[] },
@@ -298,19 +296,46 @@ function menuLines<K extends string>(
 ): string[] {
   const s = palette(color);
   const lines = [...o.above, ...(o.above.length ? [""] : []), s.bold(o.title)];
+  const arrow = glyph("›", ">");
+  const dot = glyph("•", "*");
   o.choices.forEach((choice, i) => {
-    const cursor = choice.key === selected ? s.cyan(glyph("›", ">")) : " ";
-    const label = choice.key === selected ? s.bold(choice.label) : choice.label;
+    const active = choice.key === selected;
+    const cursor = active ? s.green(arrow) : s.dim(dot);
+    const label = active ? s.bold(s.green(choice.label)) : choice.label;
     const recommendation = choice.recommended ? s.dim(" (recommended)") : "";
-    const row = `${cursor} ${i + 1}  ${label}${recommendation}`;
-    const detail = choice.detail ? `  ${s.dim(choice.detail)}` : "";
-    if (visibleWidth(row + detail) <= width) lines.push(row + detail);
-    else if (numbered && choice.detail) {
-      lines.push(row, ...wrapText(choice.detail, width, { indent: "     " }).map(s.dim));
-    } else lines.push(row);
+    const prefix = numbered ? `${cursor} ${choice.key === "quit" ? "q" : i + 1}  ` : `${cursor} `;
+    const row = `${prefix}${label}${recommendation}`;
+    const detail =
+      choice.detail && !(numbered && choice.key === "quit") ? `  ${s.dim(choice.detail)}` : "";
+    if (visibleWidth(row + detail) <= width) {
+      lines.push(row + detail);
+    } else {
+      const gutter = " ".repeat(visibleWidth(prefix));
+      if (visibleWidth(row) <= width) lines.push(row);
+      else {
+        const parts = wrapText(choice.label, Math.max(1, width - gutter.length));
+        const labelLines = parts.map(
+          (part, index) => (index ? gutter : prefix) + (active ? s.bold(s.green(part)) : part),
+        );
+        if (choice.recommended) {
+          const last = labelLines.at(-1) ?? "";
+          if (visibleWidth(last + recommendation) <= width)
+            labelLines[labelLines.length - 1] = last + recommendation;
+          else labelLines.push(gutter + s.dim("(recommended)"));
+        }
+        lines.push(...labelLines);
+      }
+      if (numbered && choice.detail)
+        lines.push(...wrapText(choice.detail, width, { indent: gutter }).map(s.dim));
+    }
   });
-  lines.push("  q  Quit");
-  if (selected !== undefined) lines.push(s.dim("  Use arrow keys and Enter, or press a number."));
+  if (!o.choices.some((choice) => choice.key === "quit")) {
+    lines.push(numbered ? `${dot} q  Quit` : `${s.dim(dot)} Quit  ${s.dim("q")}`);
+  }
+  if (selected !== undefined && !numbered)
+    lines.push(
+      s.dim(glyph("  ↑ ↓ to move · Enter to choose", "  Up/Down to move, Enter to choose")),
+    );
   if (notice) lines.push(...wrapText(notice, width, { indent: "  " }).map(s.dim));
   return lines;
 }
@@ -379,7 +404,7 @@ async function numberedMenu<K extends string>(
   const lines = menuLines(
     { title: o.title, above: aboveLines(o), choices },
     false,
-    undefined,
+    recommendation?.key,
     width,
     true,
   ).map((line) => stripVTControlCharacters(safeLine(line)));
@@ -458,7 +483,12 @@ export async function chooseMenuAnswer<K extends string>(
   const color = canColor(io);
   const host = hostOf(io);
   const initial = { title: o.title, above: aboveLines(o), choices: o.choices };
-  const opening = menuLines(initial, color, defaultChoice(o.choices)?.key);
+  const opening = menuLines(
+    initial,
+    color,
+    defaultChoice(o.choices)?.key,
+    terminalWidth(output) - 1,
+  );
   if (
     !isInteractive(io) ||
     !input.setRawMode ||

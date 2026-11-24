@@ -1,7 +1,7 @@
 {
   "name": "cc-hindsight",
-  "version": "2.0.0",
-  "description": "Compatibility command for Human Hindsight. Install human-hindsight for the renamed application.",
+  "version": "2.1.0",
+  "description": "Compatibility command for Human Hindsight. Use npx human-hindsight to reflect on your coding-agent history.",
   "deprecated": "Renamed to human-hindsight. Use npx human-hindsight or npm install -g human-hindsight. This package forwards the legacy cc-hindsight command.",
   "type": "commonjs",
   "author": "Aditya Singhal (https://adityasinghal.com)",
@@ -11,7 +11,7 @@
     "url": "git+https://github.com/adityaarunsinghal/human-hindsight.git",
     "directory": "compat/cc-hindsight"
   },
-  "homepage": "https://github.com/adityaarunsinghal/human-hindsight#readme",
+  "homepage": "https://adityasinghal.com/#current",
   "bugs": {
     "url": "https://github.com/adityaarunsinghal/human-hindsight/issues"
   },
@@ -27,6 +27,6 @@
     "node": "^22.13.0 || >=23.4.0"
   },
   "dependencies": {
-    "human-hindsight": "2.0.0"
+    "human-hindsight": "2.1.0"
   }
 }

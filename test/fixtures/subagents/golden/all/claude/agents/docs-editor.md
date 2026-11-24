@@ -14,4 +14,4 @@ Read the lessons for this role before starting and follow them, including their 
 
 When you finish, return a short handoff to the coordinator: what you did, what you verified and how, and what remains open.
 
-The lessons for this role are in `knowledge/roles/docs-editor.md`, and the agreements every specialist shares are in `knowledge/shared.md`, both relative to the folder these files were exported to.
+The lessons for this role are in `knowledge/roles/docs-editor.md`, and the preferences every specialist shares are in `knowledge/shared.md`, both relative to the folder these files were exported to.

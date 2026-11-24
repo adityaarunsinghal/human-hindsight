@@ -131,7 +131,7 @@ describe("an edit made while the prompt is being authored", () => {
     // Without --force the edit stays and is reported under its real reason.
     const kept = await stage(dir, ["a.md", "b.md"], runner);
     expect(kept.kept.map((task) => task.reason)).toEqual([
-      "oneshot was edited by hand; re-run with --force to overwrite",
+      `oneshot was edited by hand; run npx human-hindsight reflect --home=${dir} --force to overwrite`,
     ]);
     expect(kept.skipped).toEqual([]);
     expect(prompt(dir)).toContain("My own addition.");

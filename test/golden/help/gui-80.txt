@@ -1,14 +1,14 @@
-human-hindsight gui
-Open your library in a browser.
+npx human-hindsight gui
+Explore your reflections and library in a browser.
 
 Examples
-  human-hindsight gui
-    Browse prompts, working preferences, and suggested subagents.
+  npx human-hindsight gui
+    Browse reflections, preferences, prompts, and suggested subagents.
 
-  human-hindsight gui --tab preferences
-    Open directly to your working preferences.
+  npx human-hindsight gui --tab preferences
+    Open your reflections and preferences.
 
-  human-hindsight gui --no-open --port 8765
+  npx human-hindsight gui --no-open --port 8765
     Print the address and use a specific port.
 
 Common options
@@ -20,7 +20,7 @@ Common options
                                        automatic)
 
 More help
-  human-hindsight gui --help --all  Every option for this command
-  human-hindsight doctor            Check your setup
-  human-hindsight help --all        All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  npx human-hindsight gui --help --all  Every option for this command
+  npx human-hindsight doctor            Check your setup
+  npx human-hindsight help --all        All commands and options
+  https://adityasinghal.com/#current

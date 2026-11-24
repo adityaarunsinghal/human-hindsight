@@ -1,4 +1,4 @@
-  Distill plan
+  Reflect on your history
 
   Reads    5 sessions, about 2 prompts, plus your working
            preferences.

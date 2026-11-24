@@ -1,4 +1,5 @@
 import type { Writable } from "node:stream";
+import { nextCommandText } from "../commands/next.js";
 import { fingerprint, sameLineage, stageLineage } from "../core/fingerprint.js";
 import type { ResolvedCall, RunnerName } from "../runners/types.js";
 import type { SourceName } from "../sources/types.js";
@@ -603,6 +604,7 @@ class InvalidMerge extends Error {
 }
 
 export function clusterHandlers(home: string) {
+  const reflect = nextCommandText("reflect", { home });
   const window: RetryHandler = {
     guard(input) {
       const logical = input.logicalInput as {
@@ -617,14 +619,14 @@ export function clusterHandlers(home: string) {
           (current?.lineage?.[id]?.fingerprint ?? null) !== logical.upstream[id]
         )
           throw new Error(
-            `The summary of ${id} changed since grouping failed; run distill without --retry-failed to prepare it again`,
+            `The summary of ${id} changed since grouping failed; run ${reflect} without --retry-failed to prepare it again`,
           );
       }
     },
     prepare(input, settings) {
       if (input.request.prompt.length > settings.budget)
         throw new Error(
-          `This grouping batch is over the size limit per call of ${settings.budget.toLocaleString("en-US")} characters, and its sessions are fixed; run distill without --retry-failed to group again`,
+          `This grouping batch is over the size limit per call of ${settings.budget.toLocaleString("en-US")} characters, and its sessions are fixed; run ${reflect} without --retry-failed to group again`,
         );
       return input.request;
     },

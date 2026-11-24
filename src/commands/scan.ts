@@ -6,7 +6,7 @@ import type { ProjectInfo, SessionSource, SourceName } from "../sources/types.js
 import { lineWidth } from "../ui/mode.js";
 import { startProgress } from "../ui/progress.js";
 import { counted, cyan, dim, green, hint, table } from "../ui/style.js";
-import { fitLines } from "../ui/wrap.js";
+import { fitLines, sayThenRun } from "../ui/wrap.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 import { flowArgs, nextCommandText, offerNext } from "./next.js";
 
@@ -156,7 +156,12 @@ export function runScan(args: {
         ),
       );
     }
-    console.log(dim("Use human-hindsight retention to review local history retention settings."));
+    for (const line of sayThenRun(
+      "To review local history retention settings, run",
+      nextCommandText("retention", args),
+      lineWidth() ?? Number.POSITIVE_INFINITY,
+    ))
+      console.log(dim(line));
     return 0;
   }
 
@@ -201,9 +206,12 @@ export function runScan(args: {
     }
   }
   console.log(hint(nextCommandText("export", args)));
-  const width = lineWidth();
-  const retention = "Use human-hindsight retention to keep more history for future exports.";
-  for (const line of fitLines([retention], width)) console.log(dim(line));
+  for (const line of sayThenRun(
+    "To keep more history for future exports, review your retention settings",
+    nextCommandText("retention", args),
+    lineWidth() ?? Number.POSITIVE_INFINITY,
+  ))
+    console.log(dim(line));
   return sessionTotal;
 }
 

@@ -157,19 +157,56 @@ async function loadKit() {
   };
 }
 const kit = await loadKit();
-const guidedHome = kit.sampleHome().build(path.join(scratch, "guided")).dir;
-/** One agreement over every current candidate, fresh for the home as it is now. */
+const guidedHome = kit
+  .sampleHome()
+  .session({
+    project: "beta",
+    sessionId: "b4444444-0000-4000-8000-000000000004",
+    start: "2026-01-03T12:00:00.000Z",
+    messages: ["Use plain words for the change and keep the exact option names."],
+  })
+  .digest(3, {
+    goal: "Revise the beta release notes",
+    domain: "writing",
+    preferences: [
+      {
+        text: "Write release notes in plain words.",
+        quote: "Use plain words for the change and keep the exact option names.",
+        evidence:
+          "For beta releases, you explain the change in plain language and keep option names exact.",
+        scope: "project",
+      },
+    ],
+  })
+  .task({ slug: "revise-beta-notes", title: "Revise the beta release notes", members: [3] })
+  .library("revise-beta-notes")
+  .build(path.join(scratch, "guided")).dir;
+/** Two scoped preferences, each traced to the observation it summarizes. */
 function saveAgreements(dir) {
   const { inputs, projects } = kit.currentGeneralizeInputs(dir, "all-candidates");
   const ids = inputs.map((input) => input.id);
-  const draft = {
+  const changes = {
     title: "Keep changes small and reviewable",
     instruction: "Keep each change small and focused so that it is easy to review and test.",
     applies_when: "Any code change.",
     exceptions: "",
     disposition: "generalized",
-    source_ids: ids,
+    source_ids: inputs
+      .filter((input) => input.text === "Keep changes small.")
+      .map((input) => input.id),
   };
+  const notes = {
+    title: "Use plain language in release notes",
+    instruction:
+      "Describe the changes in plain language that a maintainer can check against the release.",
+    applies_when: "Writing release notes for beta.",
+    exceptions: "Preserve exact option names.",
+    disposition: "contextual",
+    source_ids: inputs
+      .filter((input) => input.text === "Write release notes in plain words.")
+      .map((input) => input.id),
+  };
+  assert.deepEqual([changes.source_ids.length, notes.source_ids.length], [1, 1]);
   kit.writeGeneralized(dir, {
     version: 1,
     generated_at: "2026-01-02T03:04:05.000Z",
@@ -177,8 +214,13 @@ function saveAgreements(dir) {
     inputs_hash: kit.generalizedInputsHash(inputs, projects),
     selection: "all-candidates",
     model: "synthetic-model",
-    windows: { ["a".repeat(64)]: { input_ids: ids, result: { lessons: [draft], set_aside: [] } } },
-    lessons: [{ id: "keep-changes-small-and-reviewable", ...draft }],
+    windows: {
+      ["a".repeat(64)]: { input_ids: ids, result: { lessons: [changes, notes], set_aside: [] } },
+    },
+    lessons: [
+      { id: "keep-changes-small-and-reviewable", ...changes },
+      { id: "use-plain-language-in-release-notes", ...notes },
+    ],
     set_aside: [],
   });
   return ids.length;
@@ -694,7 +736,10 @@ try {
     assert.equal(await evaluate("location.href.includes('token')"), false);
     // Without a route the page writes the tab it chose, e.g. #prompts.
     const hash = await evaluate("location.hash");
-    assert.ok(route ? hash === `#${route}` : /^#?(prompts|subagents)?$/.test(hash), hash);
+    assert.ok(
+      route ? hash === `#${route}` : /^#?(prompts|preferences|subagents)?$/.test(hash),
+      hash,
+    );
   }
   /**
    * A separate new tab with its own connection, as when a person opens a new
@@ -764,7 +809,8 @@ try {
     assert.ok(guide, `${label} is visible`);
     assert.equal(guide.label, label);
     assert.ok(
-      guide.sentence.length > 40 && guide.sentence.split(". ").length === 1,
+      guide.sentence.length > 40 &&
+        (label === "Preferences guide" || guide.sentence.split(". ").length === 1),
       guide.sentence,
     );
     assert.ok(
@@ -772,7 +818,11 @@ try {
       `${label}: ${guide.rows.length} highlights`,
     );
     for (const row of guide.rows) {
-      assert.ok(row.link.trim() && /\d/.test(row.reason), `${label}: ${JSON.stringify(row)}`);
+      assert.ok(
+        row.link.trim() &&
+          (label === "Preferences guide" ? row.reason.trim() : /\d/.test(row.reason)),
+        `${label}: ${JSON.stringify(row)}`,
+      );
       assert.equal(row.stale, stale, `${label}: ${row.link} stale label`);
       assert.equal(row.reason.endsWith("out of date"), stale);
     }
@@ -792,6 +842,7 @@ try {
       /harness/i,
       /\bLLM/,
       /\bdistill\b/,
+      /\bagreements?\b/i,
       /digest/i,
       /cluster/i,
       /lineage/i,
@@ -901,8 +952,14 @@ try {
   await call("Page.bringToFront");
   await call("Input.dispatchMouseEvent", { type: "mouseMoved", x: 5, y: 5 });
 
-  // First visit without a suggestion: the Prompts overview.
+  // A pre-upgrade library with observed preferences opens on a reflection.
   await open(legacy);
+  assert.equal(await evaluate("location.hash"), "#preferences");
+  assert.equal(
+    await evaluate('document.getElementById("title").textContent'),
+    "Your latest reflection",
+  );
+  await evaluate('document.getElementById("prompts-tab").click()');
   await until(
     () => evaluate('document.querySelectorAll(".entry").length === 4'),
     "library content",
@@ -1088,7 +1145,10 @@ try {
   await evaluate(
     'navigator.clipboard.writeText=async(text)=>{window.__copied=text;}; document.getElementById("preferences-tab").click()',
   );
-  assert.equal(await evaluate('document.getElementById("count").textContent'), "5 preferences");
+  assert.equal(
+    await evaluate('document.getElementById("count").textContent'),
+    "1 reflection · 5 preferences",
+  );
   // The Preferences overview: no agreements yet, so it guides to the preferences.
   assert.equal(
     await evaluate("document.activeElement.id"),
@@ -1096,15 +1156,15 @@ try {
     "a tab click focuses its heading",
   );
   const preferencesGuide = await checkGuide("Preferences guide", {
-    highlights: [2, 3],
-    action: "Review your preferences",
+    highlights: [1, 1],
+    action: "Copy preference",
   });
-  // Nothing is accepted yet here, so no highlight says Accepted.
-  assert.ok(preferencesGuide.rows.every((row) => !row.reason.includes("Accepted")));
+  assert.match(preferencesGuide.sentence, /earlier library recorded this preference in 2 tasks/);
   assert.match(
-    await evaluate('document.querySelector("#guide .notice").textContent'),
-    /No working agreements have been made yet/,
+    await evaluate('document.querySelector(".reflection-sources summary").textContent'),
+    /Recorded evidence/,
   );
+  assert.equal(await evaluate('document.querySelector(".reflection-sources").open'), false);
   assert.equal(await evaluate('document.getElementById("reader-toolbar").hidden'), true);
   assert.equal(
     await evaluate(
@@ -1113,14 +1173,18 @@ try {
     1,
   );
   assert.equal(await evaluate('document.getElementById("sort").value'), "frequency");
-  await evaluate('document.querySelector(".entry").click()');
+  assert.equal(
+    await evaluate('document.getElementById("sort").selectedOptions[0].textContent'),
+    "Most tasks",
+  );
+  await evaluate('document.querySelector(".preference-entry").click()');
   const preferenceBookmark = await evaluate("location.hash");
   assert.match(preferenceBookmark, /^#preferences\/[a-f0-9]{64}$/);
   assert.equal(await evaluate('document.querySelectorAll("#body strong").length'), 1);
   assert.equal(await evaluate('document.querySelectorAll("#body code").length'), 1);
   assert.equal(await evaluate('document.querySelectorAll("#related-list > li > a").length'), 2);
   assert.equal(await evaluate('document.querySelectorAll(".evidence strong").length'), 1);
-  assert.equal(await evaluate('document.getElementById("copy").disabled'), true);
+  assert.equal(await evaluate('document.getElementById("copy").disabled'), false);
   await evaluate('document.getElementById("accept-preference").click()');
   await until(
     () =>
@@ -1381,7 +1445,7 @@ try {
         );
         if (tab === "preferences" && branch === "long-label") {
           await evaluate(
-            '[...document.querySelectorAll(".entry")].find(el => el.textContent.includes("Preserve existing behavior")).click(); document.getElementById("edit-preference").click(); document.getElementById("preference-scope").value="task"; document.getElementById("preference-scope").dispatchEvent(new Event("change"));',
+            '[...document.querySelectorAll(".preference-entry")].find(el => el.textContent.includes("Preserve existing behavior")).click(); document.getElementById("edit-preference").click(); document.getElementById("preference-scope").value="task"; document.getElementById("preference-scope").dispatchEvent(new Event("change"));',
           );
         }
         if (branch === "accepted-instructions") {
@@ -1610,7 +1674,7 @@ try {
   assert.equal(await evaluate("location.href.includes('token')"), false);
   assert.equal(await evaluate('document.getElementById("notice").hidden'), true);
 
-  // The guided home has a suggestion: a first visit lands on Subagents.
+  // Preferences win over a saved suggestion on a first visit.
   const guided = await startGui(guidedHome);
   await checkWire(guided, "keep the change small");
   await call("Emulation.clearDeviceMetricsOverride");
@@ -1618,6 +1682,9 @@ try {
     features: [{ name: "prefers-color-scheme", value: "light" }],
   });
   await open(guided);
+  assert.equal(await evaluate("location.hash"), "#preferences");
+  assert.equal(await evaluate('document.querySelector(".reflection-sources").open'), false);
+  await evaluate('document.getElementById("subagents-tab").click()');
   await until(
     () => evaluate('document.querySelector("#subagents-view section.overview") !== null'),
     "Subagents overview",
@@ -1630,7 +1697,9 @@ try {
   // One export action: on the overview the toolbar is hidden and its controls sit in the guide.
   assert.equal(await evaluate('document.getElementById("subagents-toolbar").hidden'), true);
   assert.equal(
-    await evaluate('document.querySelectorAll("#export-all, .overview-action").length'),
+    await evaluate(
+      '[...document.querySelectorAll("#export-all, .overview-action")].filter(el => el.checkVisibility()).length',
+    ),
     1,
   );
   await evaluate(
@@ -1667,42 +1736,51 @@ try {
   await evaluate('document.getElementById("preferences-tab").click()');
   await settle();
   assert.equal(await evaluate("document.activeElement.id"), "title");
-  const agreementsGuide = await checkGuide("Preferences guide", {
-    highlights: [1, 3],
-    action: "Copy the 1 general agreement as Markdown",
+  const reflectionGuide = await checkGuide("Preferences guide", {
+    highlights: [1, 1],
+    action: "Copy preference",
   });
-  assert.equal(agreementsGuide.rows[0].link, "Keep changes small and reviewable");
-  assert.match(agreementsGuide.rows[0].reason, /^Seen in \d+ sessions?$/);
-  assert.match(
-    agreementsGuide.sentence,
-    new RegExp(`^1 working agreement from ${agreementSources} preferences: 1 general\\.$`),
+  assert.equal(reflectionGuide.rows[0].link, "Use plain language in release notes");
+  assert.ok(reflectionGuide.rows[0].reason.includes("For beta"));
+  assert.ok(
+    reflectionGuide.sentence.includes(
+      "you explain the change in plain language and keep option names exact.",
+    ),
   );
-  // The action copies exactly the agreement the overview shows.
+  await evaluate('document.querySelector(".reflection-sources summary").click()');
+  const sourceQuotes = await evaluate(
+    '[...document.querySelectorAll(".reflection-sources blockquote")].map(q => q.textContent)',
+  );
+  assert.deepEqual(sourceQuotes.sort(), [
+    "Use plain words for the change and keep the exact option names.",
+    "plain words, no marketing tone",
+  ]);
+  await evaluate('document.querySelector(".reflection-sources summary").click()');
   await evaluate(
-    'navigator.clipboard.writeText=async(text)=>{window.__copied=text;}; window.__copied=undefined; document.getElementById("copy-agreements").click()',
+    'window.__copied=undefined; document.getElementById("copy-reflection-preference").click()',
   );
-  await until(() => evaluate("window.__copied !== undefined"), "copy the general agreements");
-  const copiedAgreements = await evaluate("window.__copied");
-  assert.match(copiedAgreements, /^# Working agreements\n/);
-  assert.ok(copiedAgreements.includes("Keep each change small and focused"));
+  await until(() => evaluate("window.__copied !== undefined"), "copy the scoped preference");
+  const copiedPreference = await evaluate("window.__copied");
+  assert.match(copiedPreference, /^# Use plain language in release notes\n/);
+  assert.ok(copiedPreference.includes("Scope: For beta"));
+  assert.ok(copiedPreference.includes("Applies when: Writing release notes for beta."));
+  assert.ok(copiedPreference.includes("Exceptions: Preserve exact option names."));
   await screenshot("desktop-light-preferences-overview");
   await evaluate('document.querySelector("#guide .highlights a").click()');
   await settle();
   assert.match(await evaluate("location.hash"), /^#preferences\/agreement\//);
-  assert.equal(
-    await evaluate('document.querySelectorAll("#guide .agreement-evidence").length'),
-    agreementSources,
-  );
+  assert.equal(await evaluate('document.querySelectorAll("#guide .agreement-evidence").length'), 1);
   await evaluate(
     'for (const d of document.querySelectorAll("#guide .agreement-evidence")) d.open = true',
   );
   const quotes = await evaluate(
     '[...document.querySelectorAll("#guide .agreement-evidence blockquote.source-quote")].map(q => q.textContent)',
   );
-  assert.ok(quotes.includes("keep the change small"), JSON.stringify(quotes));
+  assert.deepEqual(quotes.sort(), sourceQuotes);
   await screenshot("desktop-light-agreement-drilldown");
 
   // Dismissing a candidate makes the agreements and the suggestion out of date.
+  await open(guided, "preferences/agreement/keep-changes-small-and-reviewable");
   await evaluate('document.querySelector("#guide .agreement-evidence a").click()');
   await until(
     () => evaluate('document.getElementById("preference-review").hidden === false'),
@@ -1715,10 +1793,10 @@ try {
   );
   await evaluate('document.getElementById("overview-button").click()');
   await settle();
-  await checkGuide("Preferences guide", { highlights: [1, 3], stale: true });
+  await checkGuide("Preferences guide", { highlights: [1, 1] });
   assert.match(
     await evaluate('document.querySelector("#guide .notice").textContent'),
-    /some may be out of date/,
+    /summaries may be out of date/,
   );
   await screenshot("desktop-light-preferences-stale");
   await evaluate('document.getElementById("subagents-tab").click()');
@@ -1729,7 +1807,7 @@ try {
   await checkGuide("Subagents guide", { highlights: [2, 3], stale: true });
   assert.match(
     await evaluate('document.getElementById("subagents-banner").textContent'),
-    /changed since they were made\. Exporting now gives the roles as shown, including \d+ agreements? whose source/,
+    /changed since they were made\. Exporting now gives the roles as shown, including \d+ preferences? whose source/,
   );
   // The agreements whose source was dismissed are marked where a role lists them.
   await evaluate('document.querySelector("#list .entry").click()');
@@ -1741,7 +1819,7 @@ try {
   );
   assert.match(
     await evaluate('document.querySelector("#subagents-view .lesson-changed").textContent'),
-    /was dismissed\. An export made now still includes this agreement\./,
+    /was dismissed\. An export made now still includes this preference\./,
   );
   await screenshot("desktop-light-subagents-stale-role");
   // The export controls moved back from the overview whole: nothing missing, no stray text.
@@ -1781,7 +1859,7 @@ try {
         const label = `${tab[0].toUpperCase()}${tab.slice(1)} guide`;
         await checkGuide(label, {
           highlights: tab === "prompts" ? [2, 3] : [1, 3],
-          stale: tab !== "prompts",
+          stale: tab === "subagents",
         });
         assert.equal(
           await evaluate("document.documentElement.scrollWidth <= innerWidth"),
@@ -1820,19 +1898,12 @@ try {
     "large Preferences overview",
   );
   const total = LARGE.general + LARGE.project + LARGE.oneTime;
-  const largeGuide = await checkGuide("Preferences guide", {
-    highlights: [3, 3],
-    action: `Copy the ${LARGE.general} general agreements as Markdown`,
-  });
+  await checkGuide("Preferences guide", { highlights: [1, 1], action: "Copy preference" });
+  await evaluate('document.querySelector(".preference-catalogue > summary").click()');
   assert.equal(
-    largeGuide.sentence,
-    `${total} working agreements from ${LARGE.preferences} preferences: ${LARGE.general} general, ${LARGE.project} for specific projects, ${LARGE.oneTime} one-time notes.`,
+    await evaluate('document.querySelector(".preference-catalogue > p").textContent'),
+    `${total} saved preferences drawn from ${LARGE.preferences} observations (${LARGE.general} general, ${LARGE.project} for specific projects, ${LARGE.oneTime} one-time notes).`,
   );
-  for (const row of largeGuide.rows) {
-    assert.match(row.reason, /^Seen in \d+ sessions?$/);
-    assert.ok(!row.link.startsWith("Allowed once"), "a one-time note is never a highlight");
-    assert.ok(!row.link.startsWith("Use the "), "a project agreement is never a highlight");
-  }
   /** The overview's sections and groups, as a person sees them. */
   const largeLayout = () =>
     evaluate(`(() => ({
@@ -1859,7 +1930,7 @@ try {
   let layout = await largeLayout();
   assert.deepEqual(
     layout.sections.map((section) => section.heading),
-    ["General agreements", "For specific projects"],
+    ["General preferences", "For specific projects"],
   );
   const [generalSection, projectSection] = layout.sections;
   // Every count is what it claims to count.
@@ -1876,7 +1947,7 @@ try {
     [...largeProjects].sort(),
   );
   for (const group of [...generalSection.groups, ...projectSection.groups]) {
-    assert.equal(group.count, `${group.total} ${group.total === 1 ? "agreement" : "agreements"}`);
+    assert.equal(group.count, `${group.total} ${group.total === 1 ? "preference" : "preferences"}`);
     assert.ok(group.shown <= 4, `${group.label} shows a few, not all ${group.total}`);
     assert.equal(group.toggle, group.total > 4 ? `Show all ${group.total}` : null);
   }
@@ -1890,7 +1961,7 @@ try {
     summary: `${LARGE.oneTime} one-time notes`,
     items: LARGE.oneTime,
   });
-  assert.equal(layout.count, `${total} agreements`);
+  assert.equal(layout.count, `1 reflection · ${total} preferences`);
   assert.deepEqual(layout.listSections, ["General", "For specific projects"]);
   assert.equal(layout.listNotes, false);
   await assertNothingCut("large overview at 1280px");
@@ -1933,7 +2004,7 @@ try {
   assert.match(openAgreement, /^#preferences\/agreement\//);
   assert.match(
     await evaluate('document.querySelector("#metadata > span:last-child").textContent'),
-    /^General · [^·]+ · (Seen in \d+ sessions?|From \d+ preferences?)$/,
+    /^General · [^·]+ · (Seen in \d+ sessions?|From \d+ observations?)$/,
   );
   assertPlainWords(
     "agreement detail",
@@ -2013,7 +2084,7 @@ try {
       });
       await evaluate('document.getElementById("overview-button").click(); window.scrollTo(0,0);');
       await settle();
-      await checkGuide("Preferences guide", { highlights: [3, 3] });
+      await checkGuide("Preferences guide", { highlights: [1, 1] });
       await assertNothingCut(`large overview at ${width}px in ${theme}`);
       assert.equal(
         await evaluate("document.documentElement.scrollWidth <= innerWidth"),
@@ -2050,11 +2121,11 @@ try {
     unfinished.text,
     `${LARGE.preferences} of ${LARGE.preferences + 30} preferences are summarized so far. Run this to finish; finished work is reused:`,
   );
-  assert.match(unfinished.command, /^npx human-hindsight@latest distill --home '/);
-  const stillShown = await checkGuide("Preferences guide", { highlights: [3, 3] });
-  assert.match(
-    stillShown.sentence,
-    new RegExp(`^${total} working agreements from ${LARGE.preferences} preferences`),
+  assert.match(unfinished.command, /^npx human-hindsight@latest reflect --home '/);
+  await checkGuide("Preferences guide", { highlights: [1, 1] });
+  assert.equal(
+    await evaluate('document.querySelector(".preference-catalogue > summary").textContent'),
+    `Browse ${total} saved preferences`,
   );
   await screenshot("large-preferences-unfinished-1280-dark");
   kit.writeGeneralized(largeHome, largeSaved);
@@ -2188,7 +2259,7 @@ try {
   await evaluate('document.getElementById("preferences-tab").click()');
   assert.match(
     await evaluate('document.querySelector("#guide .notice p").textContent'),
-    /No preferences have been found yet/,
+    /Read your sessions in the terminal/,
   );
   assert.equal(await evaluate('document.getElementById("all-preferences").disabled'), true);
   fs.renameSync(path.join(home, "library-saved"), path.join(home, "library"));
@@ -2258,7 +2329,7 @@ try {
           "refused without the key, with a wrong key, a key in the query string, a rebinding Host, or a cross-site Origin (on the wire)",
           "a reload keeps the library; a second tab opened without the fragment gets no key",
           "after a restart the old tab forgets its refused key and names the command to run",
-          "first visit lands on Prompts without a suggestion and on Subagents with one",
+          "first visit lands on Preferences when observations exist, preserving explicit bookmarks and the empty Prompts fallback",
           "each overview: one sentence, 2 or 3 highlights with reasons, one action, a labelled region",
           "tab activation moves focus to the panel heading",
           "agreement drill-down to the preferences behind it and their quotations",

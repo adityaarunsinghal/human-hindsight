@@ -200,7 +200,7 @@ function writableHome(home: string): boolean {
  */
 export function dataHomeFixFor(dir: string, chosenBy: DataHomeSource, command?: string): string {
   if (chosenBy === "flag")
-    return ["human-hindsight", command, `--home "${dir}"`].filter(Boolean).join(" ");
+    return ["npx human-hindsight", command, `--home "${dir}"`].filter(Boolean).join(" ");
   return `export HUMAN_HINDSIGHT_HOME="${dir}"`;
 }
 
@@ -229,7 +229,7 @@ function rowFix(row: EnvironmentRow, project?: string): string | undefined {
   if (!row.installed) return installAndSignIn(runner);
   if (row.signIn?.state === "needs-sign-in") return row.signIn.fix ?? info.loginCommand;
   if (row.included && row.history?.exact && !row.history.sessions) {
-    return project ? `human-hindsight scan --source ${row.name}` : startCommands[row.name];
+    return project ? `npx human-hindsight scan --source ${row.name}` : startCommands[row.name];
   }
   return undefined;
 }
@@ -472,7 +472,7 @@ export function environmentFixes(snapshot: EnvironmentSnapshot): string[] {
     if (!row.installed) {
       if (row.history?.sessions || (!row.history && row.storePresent)) {
         fixes.push(
-          `${row.tool} has a local history store. To distill through ${row.binary}, run ${row.fix}`,
+          `${row.tool} has a local history store. To reflect on it through ${row.binary}, run ${row.fix}`,
         );
       }
     } else if (row.signIn?.state === "needs-sign-in" && row.name !== "kirocrew") {

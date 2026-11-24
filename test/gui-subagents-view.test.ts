@@ -109,7 +109,7 @@ describe("suggested subagents detail helpers", () => {
   });
 
   it("finds the shared, playbook and coverage files", () => {
-    expect(knowledgeFile(files, "knowledge/shared.md")?.content).toContain("# Shared agreements");
+    expect(knowledgeFile(files, "knowledge/shared.md")?.content).toContain("# Shared preferences");
     expect(knowledgeFile(files, playbookPath("settings-panel-review"))?.content).toContain(
       "# Playbook: settings-panel-review",
     );
@@ -152,12 +152,12 @@ describe("suggested subagents detail helpers", () => {
   it("lays out the coverage ledger from the saved counts", () => {
     expect(coverageRows(artifact.coverage)).toEqual([
       ["Preferences considered", 14],
-      ["Preferences used in agreements", 12],
+      ["Source preferences used", 12],
       ["Preferences left out", 2],
-      ["General agreements", 7],
-      ["Project-specific agreements", 1],
+      ["General preferences", 7],
+      ["Project-specific preferences", 1],
       ["One-time notes", 1],
-      ["Agreements shared by every role", 2],
+      ["Preferences shared by every role", 2],
       ["Playbooks", 1],
     ]);
     expect(coverageRoleRows(artifact)).toEqual([
@@ -192,7 +192,7 @@ describe("an out-of-date suggestion", () => {
 
   it("says what exporting now would include", () => {
     expect(staleSuggestionText(2)).toBe(
-      "The preferences these roles were made from changed since they were made. Exporting now gives the roles as shown, including 2 agreements whose source preferences you dismissed or that left the library (marked below). Run this to make them again:",
+      "The preferences these roles were made from changed since they were made. Exporting now gives the roles as shown, including 2 preferences whose source preferences you dismissed or that left the library (marked below). Run this to make them again:",
     );
     expect(staleSuggestionText(0)).toContain("Exporting now gives the roles as shown.");
   });

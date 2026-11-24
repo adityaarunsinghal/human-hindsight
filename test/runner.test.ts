@@ -442,7 +442,7 @@ describe("runClaude: enforced isolation", () => {
       ),
     ).rejects.toMatchObject({
       kind: "cli-error",
-      message: expect.stringContaining("required distillation isolation"),
+      message: expect.stringContaining("required reflection isolation"),
     });
     expect(calls).toHaveLength(0);
   });

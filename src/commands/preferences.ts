@@ -37,7 +37,7 @@ import { withSpinner } from "../ui/progress.js";
 import { counted, cyan, dim, green, hint, ok } from "../ui/style.js";
 import { fitLines, sayThenRun } from "../ui/wrap.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
-import { flowArgs, nextCommandText, offerNext } from "./next.js";
+import { flowArgs, nextCommandText, offerNext, shellWord } from "./next.js";
 
 /** Injectable dependencies (testing). */
 export interface PreferencesDeps {
@@ -104,6 +104,15 @@ export function preferenceStoryText(story: PreferenceStory): string {
 /** Where a person reviews the observed preferences. */
 export function reviewCommand(args: object): string {
   return nextCommandText("gui", { ...args, tab: "preferences" });
+}
+
+function consolidationCommand(args: Parameters<typeof runPreferences>[0]): string {
+  return [
+    nextCommandText("preferences", args),
+    ...(args.target ? [shellWord(`--target=${args.target}`)] : []),
+    ...(args["include-unreviewed"] ? ["--include-unreviewed"] : []),
+    "--consolidate",
+  ].join(" ");
 }
 
 /**
@@ -217,8 +226,8 @@ export async function runPreferences(
   );
   const entries = readLibrary(home);
   if (entries.length === 0 && observed.length === 0) {
-    write("Library is empty. Distill sessions to see their preferences.");
-    write(hint(nextCommandText("distill", args), lineWidth(out)));
+    write("Your library is empty. Reflect on your sessions to see your preferences.");
+    write(hint(nextCommandText("reflect", args), lineWidth(out)));
     return 1;
   }
 
@@ -265,6 +274,7 @@ export async function runPreferences(
 
   if (!args.consolidate) {
     const rendered = renderPreferencesBlock(prefs, entries.length, target);
+    const merge = consolidationCommand(args);
     writeBlock(rendered);
     write();
     // Offer the copy first; on a successful copy the guidance prints after the
@@ -279,9 +289,10 @@ export async function runPreferences(
       deps: { ...deps, output: out },
       output: out,
       blockOutput: block,
+      merge,
     });
     if (interrupted) return 130;
-    if (!copied) for (const line of targetFooter(target)) write(line);
+    if (!copied) for (const line of targetFooter(target, merge)) write(line);
     write(hint(`${nextCommandText("suggest-subagents", args)} --dry-run`, lineWidth(out)));
     return 0;
   }
@@ -347,7 +358,7 @@ export async function runPreferences(
       home,
       command: "preferences",
       output: out,
-      resume: `${nextCommandText("preferences", { ...args, quality: session.quality })} --consolidate`,
+      resume: consolidationCommand({ ...args, quality: session.quality }),
       says: "Interrupted. Nothing was saved; run the same command again:",
       interrupt: () => session.interrupt(),
       mute,
@@ -394,7 +405,6 @@ export async function runPreferences(
         deps: { ...deps, output: out },
         output: out,
         blockOutput: block,
-        merged: true,
       });
       if (interrupted) return saved ? 130 : 1;
       write(
@@ -502,7 +512,11 @@ export async function runConsolidation(opts: {
   } catch (err) {
     // Keep the deterministic block available when the provider or model fails.
     write(`consolidation failed: ${err instanceof Error ? err.message : String(err)}`);
-    write(dim("Printing the block without merging; try again with --model <model>."));
+    write(
+      dim(
+        "Printing the block without merging. To try another model, add --model to your preferences command.",
+      ),
+    );
     write();
     writeBlock(renderPreferencesBlock(prefs, taskCount, target));
     return { merged: null, block: null, saved: false };
@@ -569,40 +583,26 @@ export const KIRO_CREW_STEERING_NOTE =
  * these lines are pre-styled and written verbatim (no outer dim() at the call
  * site). A block that was just merged is not offered the merge again.
  */
-function targetFooter(target: PreferencesTarget, merged = false): string[] {
-  const merge = "run with --consolidate to merge near-duplicates with one model call.";
-  switch (target) {
-    case "kiro":
-    case "kirocrew":
-      return [
-        dim("paste the block into ") +
-          cyan("~/.kiro/steering/hindsight-preferences.md") +
-          dim(" (global) or"),
-        cyan(".kiro/steering/") +
-          dim(
-            merged
-              ? " (workspace)."
-              : " (workspace), or run with --consolidate to merge near-duplicates.",
-          ),
-        dim(KIRO_CREW_STEERING_NOTE),
-      ];
-    case "agents":
-      return [
-        dim("add the block to your ") +
-          cyan("AGENTS.md") +
-          dim(". Codex, Kiro, OpenCode, and other agent CLIs inherit it."),
-        ...(merged ? [] : [dim(`or ${merge}`)]),
-      ];
-    default:
-      return merged
-        ? [dim("paste the block into your ") + cyan("CLAUDE.md") + dim(".")]
-        : [
-            dim("paste the block into your ") +
-              cyan("CLAUDE.md") +
-              dim(", or run with --consolidate"),
-            dim("to merge near-duplicates with one model call."),
-          ];
-  }
+function targetFooter(target: PreferencesTarget, merge?: string): string[] {
+  const paste =
+    target === "kiro" || target === "kirocrew"
+      ? [
+          dim("paste the block into ") +
+            cyan("~/.kiro/steering/hindsight-preferences.md") +
+            dim(" (global) or"),
+          cyan(".kiro/steering/") + dim(" (workspace)."),
+          dim(KIRO_CREW_STEERING_NOTE),
+        ]
+      : target === "agents"
+        ? [
+            dim("add the block to your ") +
+              cyan("AGENTS.md") +
+              dim(". Codex, Kiro, OpenCode, and other agent CLIs inherit it."),
+          ]
+        : [dim("paste the block into your ") + cyan("CLAUDE.md") + dim(".")];
+  if (merge)
+    paste.push(dim("To merge near-duplicates with one model call, run"), dim(`  ${merge}`));
+  return paste;
 }
 
 /**
@@ -625,8 +625,8 @@ export async function offerCopyBlock(opts: {
    * CLAUDE.md`), nothing is asked: the block already went where it was sent.
    */
   blockOutput?: Writable;
-  /** The block was just merged with --consolidate. */
-  merged?: boolean;
+  /** Command that merges the printed block's inputs, when they are still unmerged. */
+  merge?: string;
 }): Promise<{ copied: boolean; interrupted?: boolean }> {
   const { block, count, target, yes, deps, output } = opts;
   const write = (s = "") => output.write(`${s}\n`);
@@ -665,7 +665,7 @@ export async function offerCopyBlock(opts: {
     return { copied: false };
   }
   write(`  ${ok(`copied (${counted(count, "preference")}, via ${result.tool})`)}`);
-  for (const line of targetFooter(target, opts.merged)) write(line);
+  for (const line of targetFooter(target, opts.merge)) write(line);
   return { copied: true };
 }
 
@@ -717,7 +717,7 @@ export default defineCommand({
     if (code !== 0) process.exitCode = code;
     if (code === 1 && readLibrary(resolvePaths(args).home).length === 0) {
       // Only the block belongs on stdout; the follow-up question goes with the notes.
-      await offerNext("distill", args, { hintPrinted: true, output: process.stderr });
+      await offerNext("reflect", args, { hintPrinted: true, output: process.stderr });
     }
   },
 });

@@ -5,9 +5,7 @@ import { commandRow } from "./subagents-panel.js";
 export const guidance = {
   prompts: "Copy a prompt, paste it into a new session, and adjust it to the task at hand.",
   preferences:
-    "Accept the preferences that fit. Accepted instructions collect them, ready to paste into AGENTS.md or CLAUDE.md.",
-  agreements:
-    "Copy the general agreements and paste them into AGENTS.md or CLAUDE.md. Project agreements belong in that project's own instructions.",
+    "Read what your sessions say about how you work. Copy a preference with its scope, or open its sources to see where it came from.",
   subagents:
     "Choose your coding tool, download its files as one zip, and add them to that tool's settings.",
 };
@@ -34,14 +32,14 @@ export function initTips(getCommands: () => GuiSnapshot["commands"] | null) {
     return {
       prompts: { title: "Reuse a prompt", text: guidance.prompts },
       preferences: {
-        title: "Carry your preferences forward",
+        title: "Read your reflection",
         text: guidance.preferences,
         command: commands?.preferences,
       },
       subagents: { title: "Export suggested subagents", text: guidance.subagents },
       evidence: {
         title: "Read the original evidence",
-        text: "Open a working agreement, then expand one of the preferences it was made from to read the original quotations. Use Review preference to accept, edit, or dismiss its wording.",
+        text: "Expand the sources under a reflection to read the saved quotations. Open a preference to change its wording or scope.",
       },
       search: {
         title: "Search and filter the library",
@@ -59,11 +57,11 @@ export function initTips(getCommands: () => GuiSnapshot["commands"] | null) {
         cost: "No model call",
         command: commands?.export,
       },
-      distill: {
-        title: "Build prompts from your history",
-        text: "Build prompts and working agreements from your copied sessions. The terminal shows which model it will use and asks before starting.",
+      reflect: {
+        title: "Reflect on your history",
+        text: "Find preferences and reusable prompts in your copied sessions. The terminal shows which model it will use and asks before starting.",
         cost: "Uses subscription or credits",
-        command: commands?.distill,
+        command: commands?.reflect,
       },
       status: {
         title: "Check progress",

@@ -1,14 +1,15 @@
-human-hindsight distill
-Build a prompt library from your exported sessions.
+npx human-hindsight reflect
+Find preferences and reusable prompts in your sessions.
+The earlier name distill still works.
 
 Examples
-  human-hindsight distill --dry-run
+  npx human-hindsight reflect --dry-run
     Preview the plan before sending any session text.
 
-  human-hindsight distill --recent 10
+  npx human-hindsight reflect --recent 10
     Start with your ten most recent eligible sessions.
 
-  human-hindsight distill --quality best
+  npx human-hindsight reflect --quality best
     Review the plan using the most capable available models.
 
 Common options
@@ -18,14 +19,14 @@ Common options
                            recent sessions
   --quality balanced|best  Model plan for reading and
                            writing (default: balanced)
-  --project <name>         Only distill sessions from this
-                           project
+  --project <name>         Only reflect on sessions from
+                           this project
 
 More help
-  human-hindsight distill --help --all
+  npx human-hindsight reflect --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

@@ -35,4 +35,4 @@ Return a short report to the coordinator:
 
 If a step fails, stop at a clean point, leave the system in a known state, and report that state exactly rather than retrying in a different form.
 
-The lessons for this role are in `knowledge/roles/release-engineer.md`, and the agreements every specialist shares are in `knowledge/shared.md`, both relative to the folder these files were exported to.
+The lessons for this role are in `knowledge/roles/release-engineer.md`, and the preferences every specialist shares are in `knowledge/shared.md`, both relative to the folder these files were exported to.

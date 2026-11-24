@@ -25,6 +25,10 @@ export async function resolveDefinition<T>(value: Resolvable<T>): Promise<T> {
   return typeof value === "function" ? (value as () => T | Promise<T>)() : value;
 }
 
+export function commandAliases(meta: CommandMeta): string[] {
+  return meta.alias ? [meta.alias].flat() : [];
+}
+
 export const fullHelpArg = {
   type: "boolean",
   description: "Show the full reference when requesting help",
@@ -35,7 +39,7 @@ const helpArgs: ArgsDef = {
   all: fullHelpArg,
 };
 
-const purpose = "Turn your coding sessions into reusable prompts and working agreements.";
+const purpose = "Understand how you work. Codify your taste.";
 
 function title(text: string, plain: boolean): string {
   // bold() already applies the color rules for this output.
@@ -82,20 +86,20 @@ function rows(entries: [string, string][]): string[] {
 
 function footer(plain: boolean, command?: string): string {
   const links: [string, string][] = command
-    ? [[`human-hindsight ${command} --help --all`, "Every option for this command"]]
-    : [["human-hindsight help <command>", "Examples and common options"]];
+    ? [[`npx human-hindsight ${command} --help --all`, "Every option for this command"]]
+    : [["npx human-hindsight help <command>", "Examples and common options"]];
   links.push(
-    ["human-hindsight doctor", "Check your setup"],
-    ["human-hindsight help --all", "All commands and options"],
+    ["npx human-hindsight doctor", "Check your setup"],
+    ["npx human-hindsight help --all", "All commands and options"],
   );
   return [title("More help", plain), ...rows(links), `  ${pkg.homepage}`].join("\n");
 }
 
 /** The bare command, then two first commands a newcomer can copy. */
 const START_HERE: [string, string][] = [
-  ["npx human-hindsight", "Build or open your library"],
+  ["npx human-hindsight", "Reflect on your history or browse past reflections"],
   ["npx human-hindsight --dry-run", "See your setup and the next step"],
-  ["npx human-hindsight distill --dry-run", "Preview the model plan, send nothing"],
+  ["npx human-hindsight reflect --dry-run", "Preview the reflection plan"],
 ];
 
 export function renderShortHelp(topics: HelpTopic[], version: string, plain = false): string {
@@ -108,7 +112,7 @@ export function renderShortHelp(topics: HelpTopic[], version: string, plain = fa
     ...rows(START_HERE),
     "",
     title("Everyday commands", plain),
-    ...rows(commands.map((topic) => [topic.name, topic.summary])),
+    ...rows(commands.map((topic) => [`npx human-hindsight ${topic.name}`, topic.summary])),
     "",
     footer(plain),
   ].join("\n");
@@ -201,14 +205,19 @@ export async function renderCommandHelp(
   plain = false,
 ): Promise<string> {
   const args = await resolveDefinition<ArgsDef>(def.args ?? {});
+  const meta = await resolveDefinition<CommandMeta>(def.meta ?? {});
   // Each example's command stays whole on its line; its note wraps under it.
   const examples = topic.examples.map(({ run, note }) => `  ${run}\n${prose(note, "    ")}`);
   const sections = [
-    `${title(`human-hindsight ${topic.name}`, plain)}\n${prose(topic.summary)}`,
+    [
+      title(`npx human-hindsight ${topic.name}`, plain),
+      prose(topic.summary),
+      ...commandAliases(meta).map((alias) => prose(`The earlier name ${alias} still works.`)),
+    ].join("\n"),
     `${title("Examples", plain)}\n${examples.join("\n\n")}`,
   ];
   if (all) {
-    const parent = { meta: { name: "human-hindsight" } };
+    const parent = { meta: { name: "npx human-hindsight" } };
     sections.push(await reference(topic.name, { ...helpArgs, ...args }, plain, parent));
   } else {
     const options: [string, string][] = [];
@@ -236,7 +245,7 @@ export async function renderFullHelp(
   home: ArgsDef = {},
 ): Promise<string> {
   const meta = await resolveDefinition<CommandMeta>(root.meta ?? {});
-  const rootName = meta.name ?? "human-hindsight";
+  const rootName = `npx ${meta.name ?? "human-hindsight"}`;
   const shared = await resolveDefinition<ArgsDef>(root.args ?? {});
   const registered = await resolveDefinition(root.subCommands ?? {});
   const globalArgs = {
@@ -269,6 +278,9 @@ export async function renderFullHelp(
       [
         title(`${rootName} ${name}`, plain),
         prose(commandMeta.description ?? ""),
+        ...commandAliases(commandMeta).map((alias) =>
+          prose(`The earlier name ${alias} still works.`),
+        ),
         await reference(name, local, plain, { meta: { name: rootName } }),
       ].join("\n"),
     );

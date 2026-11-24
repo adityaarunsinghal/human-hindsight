@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import type { Writable } from "node:stream";
+import { nextCommandText } from "../commands/next.js";
 import { DEFAULT_CONCURRENCY } from "../core/budget.js";
 import { contentFingerprint, fingerprint } from "../core/fingerprint.js";
 import { isPlanLabel, planLabel, type Quality } from "../core/model-plan.js";
@@ -149,14 +150,14 @@ function settingsFor(
   }
   return AttemptSettingsSchema.parse(settings);
 }
-function compatibility(input: OperationInput): void {
+function compatibility(input: OperationInput, home: string): void {
   const supported = SUPPORTED[input.kind];
   if (
     input.promptVersion !== supported.version ||
     input.schemaHash !== fingerprint(toJsonSchema(supported.schema))
   )
     throw new Error(
-      "It was recorded by another version of human-hindsight; run distill without --retry-failed to prepare it again",
+      `It was recorded by another version of human-hindsight; run ${nextCommandText("reflect", { home })} without --retry-failed to prepare it again`,
     );
 }
 function filesFor(items: PreparedOperation[]): string[] {
@@ -284,7 +285,7 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
     }
     const input = store.loadInput(operation.id);
     try {
-      compatibility(input);
+      compatibility(input, options.home);
       checkSourceGuards(options.home, input.sources);
       const handler = options.handlers[operation.kind];
       if (!handler) throw new Error(`No handler for ${operation.kind}`);
@@ -304,7 +305,7 @@ export function prepareRetry(options: PrepareRetryOptions): RetryPlan {
         handler.validate(result.value, input);
         if (operation.kind.startsWith("cluster-")) {
           plan.excluded.push(
-            disposition(operation, "validated result saved; adoption pending normal distill"),
+            disposition(operation, "validated result saved; adoption pending the next reflection"),
           );
         } else {
           plan.localRepairs.push({ operation, input, settings, request: input.request });
@@ -472,7 +473,7 @@ export function prepareRecovery(options: PrepareRecoveryOptions): RetryPlan {
     const handler = options.handlers.author;
     if (!handler) throw new Error("No author recovery handler");
     try {
-      compatibility(input);
+      compatibility(input, options.home);
       checkSourceGuards(options.home, input.sources);
       handler.guard?.(input, operation, existing);
       const changes =

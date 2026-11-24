@@ -315,11 +315,13 @@ async function processWindows(opts: GeneralizeStageOptions): Promise<WindowOutco
     if (!key) throw new Error(`Missing identity for preference batch ${index + 1}.`);
     const label = `batch ${index + 1} of ${plan.windows.length}`;
     const counts = (value: GeneralizeOutput) =>
-      `${counted(value.lessons.length, "working agreement")}${value.set_aside.length ? `, ${value.set_aside.length} left out (no reusable instruction)` : ""}`;
+      `${counted(value.lessons.length, "preference")}${value.set_aside.length ? `, ${value.set_aside.length} left out (no reusable instruction)` : ""}`;
     const cached = plan.saved[key];
     if (cached) {
       const why =
-        cached.source === "checkpoint" ? "resumed from checkpoint" : "reused saved agreements";
+        cached.source === "checkpoint"
+          ? "resumed from checkpoint"
+          : "reused saved preference summaries";
       item(key, "skipped", `${label}: ${counts(cached.window.result)} (${why})`);
       return { kind: "success", key, window: cached.window, source: cached.source };
     }
@@ -437,7 +439,7 @@ export async function runGeneralizeStage(opts: GeneralizeStageOptions): Promise<
   };
   try {
     if (opts.model !== undefined && opts.model !== plan.model)
-      throw new Error("The model choice changed. Prepare a new working agreements plan.");
+      throw new Error("The model choice changed. Prepare a new plan to summarize preferences.");
     const outcomes = await processWindows(opts);
     const windows: Record<string, GeneralizedWindow> = {};
     const producers = new Map<string, ResolvedCall>();
@@ -536,7 +538,7 @@ export async function runGeneralizeStage(opts: GeneralizeStageOptions): Promise<
       progress?.end();
     } catch (error) {
       result.errors.push(
-        `Could not close the working agreements progress display: ${errorMessage(error)}`,
+        `Could not close the preference summary progress display: ${errorMessage(error)}`,
       );
     }
   }

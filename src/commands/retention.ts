@@ -5,6 +5,7 @@ import { askYesNoAnswer } from "../distill/consent.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { TerminalHost } from "../ui/live.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
+import { nextCommandText } from "./next.js";
 
 export interface RetentionArgs {
   home?: string;
@@ -50,12 +51,15 @@ export async function runRetention(
     "Project settings, profiles, managed policy, or startup flags may override these defaults.",
   );
   if (plans.some((p) => p.error)) {
-    write("No changes applied. Fix the configuration errors above and retry.");
+    write("No changes applied. Fix the configuration errors above and preview again.");
+    write(`  ${nextCommandText("retention", args)}`);
     return 1;
   }
   const changed = plans.filter((p) => p.changes.length > 0);
   if (!args.apply || args["dry-run"]) {
-    write("Preview only. Re-run the same command with --apply (add --yes for scripting).");
+    write("Preview only. To apply these settings, run");
+    write(`  ${nextCommandText("retention", args)} --apply`);
+    write("Add --yes to confirm in a script.");
     return 0;
   }
   if (changed.length === 0) {
@@ -63,7 +67,8 @@ export async function runRetention(
     return 0;
   }
   if (!args.yes && !deps.input && process.stdin.isTTY !== true) {
-    write("No changes applied. Use --apply --yes to opt in without an interactive prompt.");
+    write("No changes applied. To confirm without an interactive prompt, run");
+    write(`  ${nextCommandText("retention", args)} --apply --yes`);
     return 2;
   }
   if (!args.yes) {
@@ -91,6 +96,8 @@ export async function runRetention(
     write(
       `Could not finish applying retention settings: ${err instanceof Error ? err.message : "I/O error"}`,
     );
+    write("To preview the current settings, run");
+    write(`  ${nextCommandText("retention", args)}`);
     return 1;
   }
   write(

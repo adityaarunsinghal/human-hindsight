@@ -5,15 +5,15 @@ body:
   - type: markdown
     attributes:
       value: |
-        Extraction is a fidelity contract (rules R1 to R11). If `export` dropped
-        something you actually typed, or let machine-injected text through, a
-        fixture-grade report helps a lot. Run with `--verbose` first: every
-        dropped piece is logged with the rule that dropped it.
+        If your export dropped something you typed or included text the coding
+        tool added, run `npx human-hindsight export --verbose`. The log names
+        the rule that dropped each piece of text. Replace personal details
+        with invented text before sharing a snippet.
   - type: input
     id: version
     attributes:
       label: Human Hindsight version + agent CLI version
-      placeholder: human-hindsight 1.6.0 / claude, codex, or kiro-cli version
+      description: Run `npx human-hindsight --version` and include the name and version of the coding tool that saved the session, if known.
     validations:
       required: true
   - type: dropdown
@@ -29,7 +29,7 @@ body:
   - type: textarea
     id: verbose-log
     attributes:
-      label: Relevant `export --verbose` lines
+      label: Relevant lines from the export log
       description: The drop log lines for the affected session (scrub anything sensitive).
   - type: textarea
     id: fixture
@@ -37,9 +37,9 @@ body:
       label: Synthetic fixture reproducing the shape
       description: |
         The JSONL entry (or minimal sequence) with every real string replaced by
-        a placeholder. Keep the *structure* (field names, nesting, types)
-        exactly as your transcript has it. That is what pins the shape
-        in a regression test. See CONTRIBUTING.md → "Adding a fixture".
+        a placeholder. Keep the field names, nesting, types and order intact.
+        See [Add a source](https://github.com/adityaarunsinghal/human-hindsight/blob/main/CONTRIBUTING.md#add-a-source)
+        for the steps used to turn your example into a regression test.
       render: json
     validations:
       required: true

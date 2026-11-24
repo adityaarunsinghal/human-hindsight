@@ -51,7 +51,7 @@ Applies when: Presenting an evaluation or a before-and-after comparison.
 
 Exceptions: When no baseline exists, say so instead of omitting the column.
 
-# Shared agreements
+# Shared preferences
 
 ## Separate what was verified from what was inferred (separate-verified-from-inferred)
 

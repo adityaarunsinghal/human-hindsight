@@ -16,6 +16,8 @@ import { makeRunner, parseRunnerMode, RUNNER_INFO } from "../runners/registry.js
 import { AgentRunnerError, type RunnerIo } from "../runners/shared.js";
 import type { AgentRunner, ModelCatalog, RunnerName } from "../runners/types.js";
 import { writeAbove } from "../ui/live.js";
+import { canColor } from "../ui/mode.js";
+import { palette } from "../ui/style.js";
 import { installedRunnerNames, readExportSessionShare } from "./environment.js";
 import { isPlanLabel, type ModelRole, planLabel, planModels, type Quality } from "./model-plan.js";
 
@@ -50,6 +52,8 @@ export interface RunSession {
   readonly pinned: boolean;
   readonly identityRunner: RunnerName | null;
   readonly ledgerRunner: RunnerName;
+  /** Eligible CLI choices from this discovery. Selecting one builds a pinned session locally. */
+  readonly runnerChoices: readonly { name: RunnerName; select(): RunSession }[];
   quality: Quality;
   modelFor(stage: StageKey): string | undefined;
   displayModelFor(stage: StageKey, quality?: Quality): string;
@@ -228,7 +232,7 @@ async function prepareCandidates(
   if (!order.length) {
     throw new AgentRunnerError(
       "missing-binary",
-      `No agent CLI is installed. Run human-hindsight doctor for the install commands.${pinHint ? ` ${pinHint}` : ""}`,
+      `No agent CLI is installed. Run npx human-hindsight doctor for the install commands.${pinHint ? ` ${pinHint}` : ""}`,
     );
   }
   const names = pinned ? order.slice(0, 1) : order;
@@ -313,6 +317,19 @@ export async function openRunSession(o: RunSessionOptions): Promise<RunSession> 
         : "");
 
   const candidates = await prepareCandidates(o, selected, pinned, pinHint);
+  return createSession(o, candidates, explicit, subagentModel, pinned, pinHint);
+}
+
+function createSession(
+  o: RunSessionOptions,
+  candidates: Prepared[],
+  explicit: ExplicitModels,
+  subagentModel: string | undefined,
+  pinned: boolean,
+  pinHint: string,
+): RunSession {
+  const env = o.env ?? process.env;
+  const ink = palette(canColor({ output: o.output }));
   let quality = o.quality;
   let disclosed = false;
   let checked: Promise<CheckResult> | undefined;
@@ -457,7 +474,10 @@ export async function openRunSession(o: RunSessionOptions): Promise<RunSession> 
       // The call takes a few seconds; say what is happening, once per CLI.
       if (!announced.has(runner)) {
         announced.add(runner);
-        writeAbove(o.output, `Checking that ${RUNNER_INFO[runner].displayName} is ready.`);
+        writeAbove(
+          o.output,
+          ink.magenta(`Checking that ${RUNNER_INFO[runner].displayName} is ready.`),
+        );
       }
       let answered: string | undefined;
       try {
@@ -569,10 +589,13 @@ export async function openRunSession(o: RunSessionOptions): Promise<RunSession> 
     const models = new Set(answers.map((answer) => answer.model));
     if (answers.length && models.size === 1 && answers.length === stages.length) {
       const reported = answers[0]?.reported;
-      writeAbove(o.output, reported ? `${ready} is ready (${reported}).` : `${ready} is ready.`);
+      writeAbove(
+        o.output,
+        ink.green(reported ? `${ready} is ready (${reported}).` : `${ready} is ready.`),
+      );
     } else if (answers.length) {
       const parts = answers.map((answer) => `${answer.model} ${answer.words}`);
-      writeAbove(o.output, `${ready} is ready: ${parts.join(", ")}.`);
+      writeAbove(o.output, `${ink.green(`${ready} is ready`)}: ${ink.yellow(parts.join(", "))}.`);
     }
     return unconfirmed ? { ok: true, line: unconfirmed } : { ok: true };
   }
@@ -580,6 +603,21 @@ export async function openRunSession(o: RunSessionOptions): Promise<RunSession> 
   return {
     pinned,
     identityRunner: pinned ? pool.active() : null,
+    runnerChoices:
+      pinned || candidates.length < 2
+        ? []
+        : candidates.map((item) => ({
+            name: item.runner.name,
+            select: () =>
+              createSession(
+                o,
+                [item],
+                explicit,
+                subagentModel,
+                true,
+                "Run npx human-hindsight reflect to choose another CLI.",
+              ),
+          })),
     get ledgerRunner() {
       return pool.active();
     },

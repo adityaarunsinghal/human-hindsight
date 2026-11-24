@@ -1,12 +1,12 @@
-human-hindsight edit
+npx human-hindsight edit
 Edit a saved prompt in your preferred text editor.
 
 Examples
-  human-hindsight edit review-changes
+  npx human-hindsight edit review-changes
     Use a name from list. Later runs keep your edits by
     default.
 
-  human-hindsight edit review-changes --no-follow-up
+  npx human-hindsight edit review-changes --no-follow-up
     Return to the shell when the editor closes.
 
 Common options
@@ -16,10 +16,10 @@ Common options
                 --no-follow-up)
 
 More help
-  human-hindsight edit --help --all
+  npx human-hindsight edit --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

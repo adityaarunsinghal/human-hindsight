@@ -1,12 +1,12 @@
-human-hindsight preferences
+npx human-hindsight preferences
 Print accepted working preferences for your instruction
 file.
 
 Examples
-  human-hindsight preferences --target codex
+  npx human-hindsight preferences --target codex
     Format your accepted instructions for AGENTS.md.
 
-  human-hindsight preferences --project my-app
+  npx human-hindsight preferences --project my-app
     Include accepted rules for this project.
 
 Common options
@@ -23,10 +23,10 @@ Common options
                         instructions
 
 More help
-  human-hindsight preferences --help --all
+  npx human-hindsight preferences --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import pty
+import re
 import select
 import shutil
 import struct
@@ -106,7 +107,15 @@ const emit = (kind, value) => {
 };
 const answer = () => {
   if (p.ok) emit("check", { ok: true });
-  if (p.goal) emit("digest", { goal: "Improve a workflow", deliverable: "A patch", domain: "Software", keywords: ["release"], outcome: "completed", preferences: [] });
+  if (p.goal) {
+    const messages = json.filter((row) => row.message_id && row.text.includes("keep the change small")).slice(0, 2);
+    const preferences = messages.length === 2 ? [{
+      text: "Prefer small release changes.", evidence: "The session asks twice for small changes.",
+      scope: "project", basis: "inferred",
+      citations: messages.map((row) => ({ message_id: row.message_id, quote: "keep the change small" })),
+    }] : [];
+    emit("digest", { goal: "Improve a workflow", deliverable: "A patch", domain: "Software", keywords: ["release"], outcome: "completed", preferences });
+  }
   if (p.tasks) {
     const ids = [...prompt.matchAll(/^- id: (.+)$/gm)].map((m) => m[1].trim());
     emit("group", { tasks: [{ slug: "release-workflow", title: "Improve the release workflow", rationale: "One goal.", members: ids }], misc: [] });
@@ -143,9 +152,10 @@ else answer();
         "HOME": str(root / "home"),
         "NO_COLOR": "1",
         "TERM": "dumb",
+        "LANG": "en_US.UTF-8",
     })
     # The child PTYs simulate a person's terminal, including when this test runs in CI.
-    for key in ["CI", "HUMAN_HINDSIGHT_PLAIN", "HUMAN_HINDSIGHT_FOLLOW_UP", "HUMAN_HINDSIGHT_PROJECT", "HUMAN_HINDSIGHT_RUNNER", "HUMAN_HINDSIGHT_MODEL"]:
+    for key in ["CI", "LC_ALL", "LC_CTYPE", "HUMAN_HINDSIGHT_PLAIN", "HUMAN_HINDSIGHT_FOLLOW_UP", "HUMAN_HINDSIGHT_PROJECT", "HUMAN_HINDSIGHT_RUNNER", "HUMAN_HINDSIGHT_MODEL"]:
         env.pop(key, None)
     args = [
         shutil.which("node"), str(cli), "--home", str(root / "library"),
@@ -230,18 +240,18 @@ else answer();
     for flag in ["--dry-run", "--yes", "--no-follow-up"]:
         result = quiet(args + [flag])
         assert result.returncode == 0, flag + result.stdout + result.stderr
-        assert "Your coding tools on this machine" in result.stdout, result.stdout
+        assert "Your history" in result.stdout, result.stdout
         assert "next:" in result.stdout and "Choose [" not in result.stdout, result.stdout
         assert not (root / "library").exists(), flag + " must write nothing."
 
-    # A distill option on the bare command points at distill; a word that
+    # A reflection option on the bare command points at reflect; a word that
     # resembles no command gets no guess.
     result = quiet(args + ["--fresh"])
     assert result.returncode == 1, result.stderr
-    assert "That option belongs to distill: human-hindsight distill --fresh" in result.stderr, result.stderr
+    assert "That option belongs to reflect: npx human-hindsight reflect --fresh" in result.stderr, result.stderr
     result = quiet([shutil.which("node"), str(cli), "frobnicate"])
     assert result.returncode == 1 and "Did you mean" not in result.stderr, result.stderr
-    assert "See `human-hindsight --help`" in result.stderr, result.stderr
+    assert "See `npx human-hindsight --help`" in result.stderr, result.stderr
 
     # A small synthetic library: list shows whole names at 60 columns, show
     # suggests the closest name, and preferences writes only its block to stdout.
@@ -289,22 +299,22 @@ else answer();
     keys_env = dict(env, TERM="xterm-256color", HINDSIGHT_SLOW_PROBE="1")
     key_args = [a if a != str(root / "library") else str(root / "keys-home") for a in args]
     started = time.monotonic()
-    code, output = drive(key_args, [("Use arrow keys and Enter", b"3")], keys_env)
+    code, output = drive(key_args, [("Enter to choose", b"3")], keys_env)
     elapsed = time.monotonic() - started
     assert code == 0, output
-    assert "Still checking" in output, output
-    assert "3  Show matching projects" in output, output
+    assert "counting" in output, output
+    assert "• Show projects" in output and "› Show projects" in output, output
     assert "Found Claude Code (1 project, 1 session)" in output, output
     assert elapsed < 4, f"The menu waited for a slow probe ({elapsed:.1f}s):\n{output}"
     assert not (root / "keys-home" / "exports").exists(), output
 
     # Ctrl-C at the menu prints one line and exits with 130.
-    code, output = drive(key_args, [("Use arrow keys and Enter", b"\x03")], keys_env)
+    code, output = drive(key_args, [("Enter to choose", b"\x03")], keys_env)
     assert code == 130, output
     assert output.count("Interrupted.") == 1, output
 
     # The bare command opens the home screen. TERM=dumb gives the numbered menu.
-    # Choosing "Build my prompt library" exports, then shows the distill plan.
+    # Choosing "Reflect on my history" exports, then shows the reflection plan.
     code, output = drive(args, [
         ("Choose [1]:", b"1\n"),
         # The Start question's own prompt, after the plan and its choices:
@@ -313,10 +323,10 @@ else answer();
         ("Press s to start, or q to leave.", b"\n"),
         ("Press s to start, or q to leave.", b"q\n"),
     ])
-    assert "s  Start with Balanced" in output, output
+    assert "s  Start reflection" in output, output
     assert code == 2, output
-    assert "Your coding tools on this machine" in output, output
-    assert "Build my prompt library (recommended)" in output, output
+    assert "Your history" in output, output
+    assert "Reflect on my history (recommended)" in output, output
     assert "Claude Code (claude 9.9.9)" in output and "session reads" in output, output
     manifest = root / "library/exports/manifest.json"
     assert manifest.exists() and len(json.loads(manifest.read_text())) == 1, output
@@ -334,12 +344,12 @@ else answer();
     # after, it does not start: it is set aside, or it gets the hint; then
     # the person declines.
     code, output = drive(ahead_args, [
-        ("Use arrow keys and Enter", b"\r"),
-        ("Checking which coding CLIs are ready.", b"\r"),
+        ("Enter to choose", b"\r"),
+        ("Checking available coding CLIs…", b"\r"),
         ("Not now", b"q", "anywhere"),
     ], dict(env, TERM="xterm-256color"))
     assert code == 2, output
-    assert "s  Start with Balanced" in output, output
+    assert "s  Start reflection" in output, output
     assert typed_ahead in output or "Press s to start" in output, output
     assert not marker.exists(), "An Enter typed before the plan appeared approved it."
 
@@ -375,12 +385,12 @@ else answer();
                     pass
                 except OSError:
                     break
-            if holding is None and "Use arrow keys and Enter" in output:
+            if holding is None and "Enter to choose" in output:
                 holding = time.monotonic()
             # Hold until the plan has been on screen for 1.5 seconds, then let go.
             if holding is not None and released is None:
                 press(b"\r")
-                if plan_at is None and "Start with Balanced" in output:
+                if plan_at is None and "Start reflection" in output:
                     plan_at = time.monotonic()
                 if plan_at is not None and time.monotonic() - plan_at > 1.5:
                     released = time.monotonic()
@@ -393,7 +403,7 @@ else answer();
             process.kill()
             process.wait()
         os.close(primary)
-    assert holding is not None and "Start with Balanced" in output, output
+    assert holding is not None and "Start reflection" in output, output
     assert code == 2, output
     assert typed_ahead in output or "Press s to start" in output, output
     assert not marker.exists(), "A held Enter approved the plan; the fake CLI got a model call."
@@ -422,13 +432,13 @@ else answer();
                     pass
                 except OSError:
                     break
-            if menu_at is None and "Use arrow keys and Enter" in output:
+            if menu_at is None and "Enter to choose" in output:
                 menu_at = time.monotonic()
             # Pressed once the person has seen the menu, and held from then on.
             if not pressed and menu_at is not None and time.monotonic() - menu_at > 0.2:
                 press(b"\r")
                 pressed = True
-            if plan_at is None and "Start with Balanced" in output:
+            if plan_at is None and "Start reflection" in output:
                 plan_at = time.monotonic()
             if plan_at is not None:
                 due = plan_at + 0.5 + repeats * 0.04
@@ -451,7 +461,7 @@ else answer();
     # Ctrl-C at the Start question: one line, exit 130, and nothing was sent.
     distill_args = args[:2] + ["distill"] + args[2:]
     xterm = dict(env, TERM="xterm-256color")
-    code, output = drive(distill_args, [("Start with Balanced", b"\x03")], xterm)
+    code, output = drive(distill_args, [("Start reflection", b"\x03")], xterm)
     assert code == 130, output
     assert output.count("Interrupted.") == 1, output
     assert not marker.exists(), "Ctrl-C at the Start question must send nothing."
@@ -463,6 +473,43 @@ else answer();
     plain = " ".join(output.split())
     assert "To see the whole plan first, run:" in plain and "--dry-run" in plain, output
     assert not marker.exists(), "Declining the short plan must send nothing."
+
+    # Two eligible binaries through the release launcher. The second one
+    # records only the readiness models and refuses them with a sign-in error.
+    choice_dir = root / "choice-bin"
+    choice_dir.mkdir()
+    (choice_dir / "claude").symlink_to(fake)
+    selected_models = root / "selected-models.jsonl"
+    (choice_dir / "codex").write_text("#!" + shutil.which("node") + "\n" + r"""
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args[0] === "--version") console.log("codex 9.9.9");
+else if (args.includes("--help")) console.log("--json --ephemeral --sandbox --output-schema --output-last-message --skip-git-repo-check --color --model --config");
+else if (args[0] === "debug") console.log(JSON.stringify({ models: ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-astra"] }));
+else if (args[0] === "exec") {
+  const input = fs.readFileSync(0, "utf8");
+  fs.appendFileSync(process.env.HH_MODEL_TRACE, JSON.stringify({ model: args[args.indexOf("--model") + 1], check: input.includes('{"ok":true}') }) + "\n");
+  console.log(JSON.stringify({ type: "turn.failed", error: { message: "unexpected status 401 Unauthorized: Missing bearer or basic authentication in header" } }));
+  process.exit(1);
+} else process.exit(1);
+""")
+    (choice_dir / "codex").chmod(0o755)
+    picker_env = dict(xterm, PATH=isolated_path(choice_dir), CODEX_HOME=str(root / "codex-config"), HH_MODEL_TRACE=str(selected_models))
+    picker = [shutil.which("node"), str(Path("launcher/cli.cjs").resolve()), "reflect", "--home", str(root / "library"), "--no-follow-up"]
+    question = "Which coding CLI should run this reflection?"
+    code, output = drive(picker, [
+        (question, b"s"), ("Choose a coding CLI before pressing s", b"x"),
+        ("gpt-5.6-terra for session reads", b"2"), ("gpt-5.6-astra for grouping and writing", b"\r"),
+        ("Press s to start, or q to leave.", b"q"),
+    ], picker_env)
+    assert code == 2 and "This run stays on this CLI" in output, output
+    assert not selected_models.exists() and not marker.exists(), "A choice or Enter invoked a model."
+    code, output = drive(picker, [(question, b"x"), ("gpt-5.6-terra for session reads", b"2"),
+                                 ("gpt-5.6-astra for grouping and writing", b"s")], picker_env)
+    assert code == 1 and "Codex is not signed in" in output, output
+    checks = [json.loads(line) for line in selected_models.read_text().splitlines()]
+    assert {check["model"] for check in checks} == {"gpt-5.6-sol", "gpt-5.6-astra"}, checks
+    assert all(check["check"] for check in checks) and not marker.exists(), "The pinned plan sent work to a different runner."
 
     model_env = dict(env, TERM="xterm-256color", PATH=isolated_path(model_dir))
 
@@ -503,13 +550,20 @@ else answer();
             "".join(json.dumps(line) + "\n" for line in lines)
         )
     run_args = [
-        shutil.which("node"), str(cli), "distill", "--home", str(root / "run-home"),
+        shutil.which("node"), str(cli), "reflect", "--home", str(root / "run-home"),
         "--claude-dir", str(root / "run-claude"), "--source", "claude", "--runner", "claude",
         "--yes", "--no-follow-up",
     ]
-    code, output = drive(run_args, [("2/3", b"\x03")], model_env)
+    reflection_env = dict(model_env, FORCE_COLOR="1")
+    code, output = drive(run_args, [("2/3", b"\x03")], reflection_env)
     assert code == 130, output
     assert output.count("Interrupted.") == 1, output
+    assert "\x1b[34mrun\x1b[39m" in output, output
+    text = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    assert "Reading run" in text, text
+    assert text.index("Reading run") < text.index("Improve a workflow"), text
+    assert text.index("Preference Prefer small release changes.") < text.index("Interrupted."), text
+    assert output.count("Prefer small release changes.") == 2, output
     time.sleep(0.5)
     for pid_file in pids_dir.iterdir():
         try:
@@ -519,17 +573,18 @@ else answer();
         raise AssertionError(f"A fake CLI process {pid_file.name} outlived Ctrl-C:\n{output}")
     before = calls_log.read_text().splitlines().count("digest")
     assert before == 2, calls_log.read_text()
-    code, output = drive(run_args, [], dict(model_env, HINDSIGHT_FAST="1"))
+    code, output = drive(run_args, [], dict(reflection_env, HINDSIGHT_FAST="1"))
     assert code == 0, output
     assert calls_log.read_text().splitlines().count("digest") == before + 1, calls_log.read_text()
+    assert re.search(r"Reused +run", re.sub(r"\x1b\[[0-9;]*m", "", output)), output
     assert "reused from saved work" in output, output
     print(
         "PTY workflow passed: an Enter typed before the plan and a held Enter both sent "
-        "nothing; unknown flag refused; the bare command's own options; a distill "
-        "option pointed at distill; no guess for an unrelated word; whole names in list at 60 "
+        "nothing; unknown flag refused; the bare command's own options; a reflection "
+        "option pointed at reflect; no guess for an unrelated word; whole names in list at 60 "
         "columns; show suggests a name; preferences writes only its block to a redirect; Ctrl-C "
         "130 at a follow-up and at the menu; a digit pressed during the refresh picked the item "
-        "on screen; home screen, export, distill plan; model consent declined; no model calls; "
+        "on screen; home screen, export, reflection plan; model consent declined; no model calls; "
         "opt-out respected; Ctrl-C at the Start question; the short plan at 12 rows; the subagents "
         "closing menu runs an opener only when chosen; Ctrl-C mid-run leaves no process and the "
         "rerun reuses finished reads."

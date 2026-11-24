@@ -1018,7 +1018,7 @@ describe("author planning decisions", () => {
     });
     expect(count.n).toBe(0);
     expect(result.failed[0]?.error).toBe(
-      "member preference evidence is stale (a.md); re-run distill to refresh the digest",
+      `member preference evidence is stale (a.md); run npx human-hindsight reflect --home=${home} to refresh the session summary`,
     );
     expect(fs.existsSync(path.join(home, "distill/operations.json"))).toBe(false);
   });
@@ -1085,7 +1085,7 @@ describe("strict local repair", () => {
 });
 
 describe("plain-mode stage output", () => {
-  it("prints notes, failures, blocks and totals; finished items fold into the count", async () => {
+  it("prints saved reads, failures and blocks, and counts the reads actually saved", async () => {
     const home = tmpHome();
     for (const name of ["a.md", "b.md", "c.md"]) writeExport(home, name);
     writeExport(home, "big.md", `### t\n\n${"x".repeat(2_000)}\n`);
@@ -1107,7 +1107,7 @@ describe("plain-mode stage output", () => {
     progress.end();
     const text = goldenText(out.raw(), { roots: { [home]: "<HOME>" } });
     await expect(text).toMatchFileSnapshot("./golden/engine/digest-plain.txt");
-    expect(text).toContain("4/4 · 1 failed · 1 blocked");
+    expect(text).toContain("2/4 · 1 failed · 1 blocked");
     expect(text).toContain("failed: b.md: synthetic failure for one unit");
     expect(text).not.toContain("a.md ->");
   });

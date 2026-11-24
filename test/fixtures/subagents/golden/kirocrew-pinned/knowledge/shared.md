@@ -1,4 +1,4 @@
-# Shared agreements
+# Shared preferences
 
 Every specialist carries these 2 lessons. The current request and the project's own instructions take precedence over them.
 

@@ -239,7 +239,8 @@ export async function runGui(
 export default defineCommand({
   meta: {
     name: "gui",
-    description: "Browse prompts, working agreements, and suggested subagents in your browser",
+    description:
+      "Browse reflections, preferences, prompts, and suggested subagents in your browser",
   },
   args: {
     ...sharedArgs,

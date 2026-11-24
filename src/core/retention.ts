@@ -262,7 +262,7 @@ export function checkRetentionPlan(plan: RetentionPlan): void {
   if (!plan.file || !plan.target || plan.after === undefined) return;
   const current = readConfig(plan.file);
   if (current.target !== plan.target || current.before !== plan.before) {
-    throw new Error(`${plan.file} changed since the preview; run retention again.`);
+    throw new Error(`${plan.file} changed since the preview.`);
   }
 }
 

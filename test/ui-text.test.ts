@@ -264,11 +264,11 @@ describe("list", () => {
     expect(output.text().split("\n")[0]).toContain("Domain");
   });
 
-  it("an empty library points at distill", () => {
+  it("an empty library points at reflect", () => {
     const output = fakeOutput({ isTTY: false });
     const dir = homeBuilder().build();
     homes.push(dir);
-    expect(runList({ home: path.join(dir.dir, "nothing") }, output)).toBe("distill");
+    expect(runList({ home: path.join(dir.dir, "nothing") }, output)).toBe("reflect");
     expect(output.text()).toContain("Your library is empty.");
   });
 });

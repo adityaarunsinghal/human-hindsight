@@ -33,7 +33,7 @@ export interface RenderOptions {
   pinModel?: string;
 }
 
-const REFRESH_COMMAND = "human-hindsight suggest-subagents";
+const REFRESH_COMMAND = "npx human-hindsight suggest-subagents";
 
 /** YAML scalar: plain when unambiguous, else a JSON string (valid YAML double-quoted). */
 function yamlScalar(value: string): string {
@@ -96,7 +96,7 @@ function agentBody(role: Role): string {
   return [
     rolePrompt(role),
     "",
-    `The lessons for this role are in \`knowledge/roles/${role.name}.md\`, and the agreements every specialist shares are in \`knowledge/shared.md\`, both relative to the folder these files were exported to.`,
+    `The lessons for this role are in \`knowledge/roles/${role.name}.md\`, and the preferences every specialist shares are in \`knowledge/shared.md\`, both relative to the folder these files were exported to.`,
   ].join("\n");
 }
 
@@ -144,7 +144,11 @@ function readme(artifact: SuggestionArtifact): string {
     const columns = [result.stage, result.runner, result.model ?? "CLI default"];
     const key = JSON.stringify(columns);
     const row = provenance.get(key) ?? { columns, units: [] };
-    row.units.push(result.unit);
+    row.units.push(
+      result.stage === "generalize" && result.unit === "saved agreements"
+        ? "saved preferences"
+        : result.unit,
+    );
     provenance.set(key, row);
   }
   const generation = provenance.size
@@ -174,7 +178,7 @@ function readme(artifact: SuggestionArtifact): string {
     "## Layout",
     "",
     "- `HANDOFF.md`: a request you can paste to a coding agent to create these specialists.",
-    "- `knowledge/`: the lessons (`lessons.json`), shared agreements, playbooks, one file per role, and the coverage ledger.",
+    "- `knowledge/`: the lessons (`lessons.json`), shared preferences, playbooks, one file per role, and the coverage ledger.",
     "- `claude/`, `codex/`, `kiro/`, `kirocrew/`: the same roles in each harness's format, when exported.",
     "",
     "## Refreshing",
@@ -202,7 +206,7 @@ function handoff(artifact: SuggestionArtifact, opts: RenderOptions): string {
     "",
     ...roles,
     "",
-    "Every specialist carries the agreements in `knowledge/shared.md`. Its own lessons are in `knowledge/roles/<name>.md`.",
+    "Every specialist follows the preferences in `knowledge/shared.md`. Its own lessons are in `knowledge/roles/<name>.md`.",
     "",
     "## Claude Code",
     "",
@@ -233,7 +237,7 @@ function handoff(artifact: SuggestionArtifact, opts: RenderOptions): string {
 function sharedDoc(artifact: SuggestionArtifact, lessons: Map<string, Lesson>): string {
   const body = lessonBlocks(artifact.shared, lessons);
   return [
-    "# Shared agreements",
+    "# Shared preferences",
     "",
     `Every specialist carries these ${counted(artifact.shared.length, "lesson")}. The current request and the project's own instructions take precedence over them.`,
     ...(body ? ["", body] : []),
@@ -386,7 +390,7 @@ function kirocrewSkill(
     `# Lessons for ${role.name}`,
     "",
     lessonBlocks(role.lesson_ids, lessons),
-    ...(shared ? ["", "# Shared agreements", "", shared] : []),
+    ...(shared ? ["", "# Shared preferences", "", shared] : []),
     "",
   ].join("\n");
 }

@@ -10,7 +10,7 @@ Please create the following 3 specialists for the harness I choose, from the fil
 - `release-engineer` (Release engineer): Plans and runs changes to stored data and deployed systems with dry runs, backups and a way back.
 - `docs-editor` (Docs editor): Edits documents for other readers: plain register, defined terms, and numbers that trace to a source.
 
-Every specialist carries the agreements in `knowledge/shared.md`. Its own lessons are in `knowledge/roles/<name>.md`.
+Every specialist follows the preferences in `knowledge/shared.md`. Its own lessons are in `knowledge/roles/<name>.md`.
 
 ## Claude Code
 

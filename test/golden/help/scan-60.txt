@@ -1,11 +1,11 @@
-human-hindsight scan
+npx human-hindsight scan
 Find projects and sessions on this machine.
 
 Examples
-  human-hindsight scan
+  npx human-hindsight scan
     List projects across the tools you use.
 
-  human-hindsight scan --source codex
+  npx human-hindsight scan --source codex
     Read only Codex history.
 
 Common options
@@ -15,10 +15,10 @@ Common options
                    with --no-follow-up)
 
 More help
-  human-hindsight scan --help --all
+  npx human-hindsight scan --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

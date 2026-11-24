@@ -1,11 +1,11 @@
-human-hindsight list
+npx human-hindsight list
 List saved prompts and the names you can use to open them.
 
 Examples
-  human-hindsight list
+  npx human-hindsight list
     Find a prompt by title and the name that opens it.
 
-  human-hindsight list --no-follow-up
+  npx human-hindsight list --no-follow-up
     Print the library table and finish.
 
 Common options
@@ -15,10 +15,10 @@ Common options
                 --no-follow-up)
 
 More help
-  human-hindsight list --help --all
+  npx human-hindsight list --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

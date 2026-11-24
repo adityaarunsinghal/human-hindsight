@@ -1,12 +1,10 @@
-│ Human Hindsight 2.0.0
-│ The prompt you'd write if you knew then what you know now.
+│ Human Hindsight 2.1.0
+│ Understand how you work. Codify your taste.
 │
-│ Your coding tools on this machine
+│ Your history
+│ Claude Code  0 sessions · 0 projects
 │ No history matches this selection.
-│ To see every project, run human-hindsight scan
-│
-│ Private by default
-│ No session text leaves this machine until you approve a plan.
-│ This screen only asks your coding tools for their version and sign-in status.
+│ To see every project, run npx human-hindsight scan
+────────────────────────────────────────────────────────────────────────
 
-→ next: human-hindsight export --home=<ROOT>/home --claude-dir=<ROOT>/claude --codex-dir=<ROOT>/codex --kiro-dir=<ROOT>/kiro --kirocrew-dir=<ROOT>/kirocrew --opencode-dir=<ROOT>/opencode --project=nothing-matches
+→ next: npx human-hindsight doctor --home=<ROOT>/home --claude-dir=<ROOT>/claude --codex-dir=<ROOT>/codex --kiro-dir=<ROOT>/kiro --kirocrew-dir=<ROOT>/kirocrew --opencode-dir=<ROOT>/opencode --project=nothing-matches

@@ -20,7 +20,7 @@ Claude Code has no history in this selection. Run:
 For a custom store, use --claude-dir, --codex-dir,
 --kiro-dir, --kirocrew-dir, or --opencode-dir.
 
-Distill would use Claude Code: it is the first ready CLI in
-the default order. The sign-in column is a hint from each
-tool's own status command; distill checks access after you
-approve its plan.
+Reflection would use Claude Code: it is the first ready CLI
+in the default order. The sign-in column is a hint from each
+tool's own status command; reflection checks access after
+you approve its plan.

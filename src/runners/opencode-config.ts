@@ -48,7 +48,7 @@ function parseConfig(text: string, label: string): Record<string, unknown> {
   if (errors.length || !object(value)) {
     throw new AgentRunnerError(
       "cli-error",
-      `Invalid OpenCode JSONC configuration in ${label}; fix it before distilling.`,
+      `Invalid OpenCode JSONC configuration in ${label}; fix it before reflecting.`,
     );
   }
   return object(value) ?? {};

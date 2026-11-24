@@ -10,10 +10,22 @@ import {
   stageLineage,
 } from "../core/fingerprint.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
-import { exportMessages, validatePreferenceCandidates } from "../core/preference-evidence.js";
+import {
+  type ExportMessage,
+  exportMessages,
+  validatePreferenceCandidates,
+} from "../core/preference-evidence.js";
 import type { ResolvedCall, RunnerName } from "../runners/types.js";
 import { glyph } from "../ui/mode.js";
-import { counted, dim, fail, green, skip as skipGlyph } from "../ui/style.js";
+import {
+  counted,
+  dim,
+  fail,
+  green,
+  skip as skipGlyph,
+  terminalExcerpt,
+  terminalText,
+} from "../ui/style.js";
 import {
   type DigestLineage,
   type DigestsCheckpoint,
@@ -31,7 +43,7 @@ import {
   type PreferenceCandidate,
   toJsonSchema,
 } from "./schemas.js";
-import type { StageProgressSink } from "./stage-events.js";
+import type { SavedSessionRead, StageProgressSink } from "./stage-events.js";
 import {
   executeOperation,
   FailureBreaker,
@@ -43,7 +55,6 @@ import {
   sourceReference,
   stageReporter,
   stageRunner,
-  truncate,
 } from "./stage-support.js";
 
 /** Read `exports/outcomes.json` ({export → evidence}, `_note` ignored). */
@@ -72,7 +83,7 @@ export interface DigestStageResult {
   generation: string;
   /** Sessions digested by THIS run. */
   completed: number;
-  /** Sessions already present in the checkpoint (resume). */
+  /** Sessions reused from the checkpoint or a saved operation (resume). */
   skipped: number;
   failed: StageFailure[];
   /** Sessions blocked for exceeding the input budget under --truncate=never. */
@@ -217,6 +228,22 @@ interface DigestResult {
   lineage: DigestLineage;
 }
 
+function readSummary(
+  project: string,
+  digest: Digest,
+  messages?: ExportMessage[],
+): SavedSessionRead {
+  const goal = terminalExcerpt(digest.goal, 160);
+  const read = { project, goal, outcome: digest.outcome };
+  for (const candidate of digest.preferences ?? []) {
+    // A checkpoint loaded from disk can have been edited since publication.
+    if (messages && validatePreferenceCandidates([candidate], messages).length) continue;
+    const preference = terminalExcerpt(candidate.text, 160);
+    if (preference) return { ...read, preference };
+  }
+  return read;
+}
+
 function prepareDigestRequest(logical: DigestInput, original: string, settings: AttemptSettings) {
   if (original.length > settings.budget && settings.truncate === "never")
     throw new Error(
@@ -289,7 +316,7 @@ export function digestHandler(home: string, active?: DigestsCheckpoint): RetryHa
         fingerprint(logical.outcome)
       )
         throw new Error(
-          "Its export changed since it failed; run distill without --retry-failed to read it again",
+          "Its export changed since it failed. Run npx human-hindsight reflect without --retry-failed to read it again.",
         );
     },
     prepare(input, settings) {
@@ -413,7 +440,10 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
     };
     const unattempted = await runItems(opts.entries, concurrency, breaker, async (entry, index) => {
       const id = entry.export;
-      const label = `[${index + 1}/${opts.entries.length}] ${id}`;
+      const project =
+        terminalText(typeof entry.project === "string" ? entry.project : "") || "Unknown project";
+      const exportLabel = terminalExcerpt(id, 120);
+      const label = `[${index + 1}/${opts.entries.length}] ${exportLabel}`;
       let called = false;
       try {
         const original = readExport(opts.home, id);
@@ -452,41 +482,54 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
           reporter.item(
             id,
             "blocked",
-            `  ${label}: ${skipGlyph(`blocked: ${original.length} chars exceed the input budget (${settings.budget}).`)} Re-run with --truncate=extreme or a larger --input-budget.`,
+            `  ${label}: ${skipGlyph(`blocked: ${original.length} chars exceed the input budget (${settings.budget}).`)} Use npx human-hindsight reflect --truncate=extreme to shorten it, or raise --input-budget.`,
             true,
-            `${id}: ${counted(original.length, "character")}, over the size limit per call of ${settings.budget.toLocaleString("en-US")}. Run again with --truncate=extreme or a larger --input-budget.`,
+            `${exportLabel}: ${counted(original.length, "character")}, over the size limit per call of ${settings.budget.toLocaleString("en-US")}. Use npx human-hindsight reflect --truncate=extreme to shorten it, or raise --input-budget.`,
           );
           return;
         }
         const request = prepareDigestRequest(logical, original, settings);
-        if (state.digests[id] && sameLineage(state.lineage?.[id], request.lineage)) {
+        const cached = state.digests[id];
+        if (cached && sameLineage(state.lineage?.[id], request.lineage)) {
           result.skipped++;
-          reporter.item(id, "skipped", `  ${label}: already read (unchanged; skipped)`);
+          reporter.read(
+            id,
+            "skipped",
+            readSummary(
+              project,
+              cached,
+              cached.preferences?.length ? exportMessages(id, original) : undefined,
+            ),
+            `  ${label}: already read (unchanged; skipped)`,
+          );
           return;
         }
         if (state.digests[id]) explainReread();
         if (request.dropped)
           reporter.detail(
-            `  ${id}: shortened by ${counted(request.dropped, "character")} to fit the size limit per call`,
+            `  ${exportLabel}: shortened by ${counted(request.dropped, "character")} to fit the size limit per call`,
           );
-        const operation =
-          reusableOperation(store, "digest", id, logical, settings, {
-            promptVersion: DIGEST_PROMPT_VERSION,
-            schema: toJsonSchema(DigestResponseSchema),
-            prompt: request.prompt,
-          }) ?? queue(request.prompt);
+        const saved = reusableOperation(store, "digest", id, logical, settings, {
+          promptVersion: DIGEST_PROMPT_VERSION,
+          schema: toJsonSchema(DigestResponseSchema),
+          prompt: request.prompt,
+        });
+        const operation = saved ?? queue(request.prompt);
         invalidate(id);
-        called = true;
-        reporter.running(id, `reading ${id}`);
+        called = !saved;
+        if (called) reporter.running(id, exportLabel, project);
         const value = (await reporter.until(`${label}: reading`, () =>
           executeOperation({ store, operation, request, settings, handler, run, publish: true }),
         )) as DigestResult;
-        result.completed++;
+        if (saved) result.skipped++;
+        else result.completed++;
         breaker.success();
-        reporter.item(
+        const read = readSummary(project, value.digest);
+        reporter.read(
           id,
-          "done",
-          `  ${label} ${glyph("→", "->")} ${green(value.digest.outcome)}: ${truncate(value.digest.goal, 70)}`,
+          saved ? "skipped" : "done",
+          read,
+          `  ${label} ${glyph("→", "->")} ${green(read.outcome)}: ${read.goal}`,
         );
       } catch (error) {
         invalidate(id);
@@ -495,9 +538,9 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
         reporter.item(
           id,
           "failed",
-          `  ${label} ${fail(`failed: ${truncate(message, 120)}`)}`,
+          `  ${label} ${fail(`failed: ${terminalExcerpt(message, 120)}`)}`,
           true,
-          `${id}: ${truncate(message, 120)}`,
+          `${exportLabel}: ${terminalExcerpt(message, 120)}`,
         );
         if (called) breaker.failure(error);
       }
@@ -508,7 +551,7 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
       result.abortReason = breaker.reason;
       reporter.note(
         dim(
-          `  ${breaker.reason}. ${counted(result.notAttempted.length, "session")} not attempted. Fix the cause and re-run to resume, or use --no-breaker.`,
+          `  ${terminalExcerpt(breaker.reason, 220)}. ${counted(result.notAttempted.length, "session")} not attempted. Fix the cause and resume with npx human-hindsight reflect, or use --no-breaker.`,
         ),
       );
     }

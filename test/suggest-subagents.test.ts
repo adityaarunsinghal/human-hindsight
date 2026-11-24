@@ -740,8 +740,8 @@ describe("suggest-subagents plan and consent screens", () => {
   it("prints guidance and exits 0 when there is nothing to work from", async () => {
     const empty = await run(tmpDir(), { "dry-run": true });
     expect(empty.code).toBe(0);
-    expect(empty.text).toMatch(/No preferences yet\. Distill your sessions first\./);
-    expect(empty.text).toContain("human-hindsight distill");
+    expect(empty.text).toMatch(/No preferences yet\. Reflect on your sessions first\./);
+    expect(empty.text).toContain("npx human-hindsight reflect");
     // The hint keeps the folders, the pinned CLI, and the quality of this run.
     const pinned = await run(tmpDir(), {
       "dry-run": true,
@@ -750,7 +750,9 @@ describe("suggest-subagents plan and consent screens", () => {
       quality: "best",
       model: "summary-model",
     });
-    const hinted = pinned.text.split("\n").find((line) => line.includes("human-hindsight distill"));
+    const hinted = pinned.text
+      .split("\n")
+      .find((line) => line.includes("npx human-hindsight reflect"));
     expect(hinted).toContain(" --claude-dir=/history/claude ");
     expect(hinted).toMatch(/ --runner=codex --quality=best$/);
     expect(pinned.text).not.toContain("--model");
@@ -850,10 +852,10 @@ describe("suggest-subagents stages", () => {
     // Meaning: role count, candidate count, lessons mapped, inputs set aside, and the next steps.
     expect(out).toMatch(/Suggested 2 roles from 14 preferences\./);
     expect(flatText(out)).toMatch(
-      /\b12 working agreements in all; 1 group of project-specific notes; 2 preferences left out\b/,
+      /\b12 preferences in all; 1 group of project-specific notes; 2 preferences left out\b/,
     );
     expect(out).toContain("<HOME>/library/subagents/suggestion.json");
-    expect(out).toContain("--export <dir>");
+    expect(out).toContain("--export human-hindsight-subagents");
     expect(
       fs.existsSync(path.join(path.dirname(suggestionPath(home)), SUGGESTION_PARTIAL_FILE)),
     ).toBe(false);
@@ -982,7 +984,7 @@ describe("suggest-subagents stages", () => {
     );
     expect(partial.checkpointed_windows).toBe(1);
     // The hint is the exact command to rerun with the same selection.
-    expect(partial.resume_hint).toMatch(/^human-hindsight suggest-subagents /);
+    expect(partial.resume_hint).toMatch(/^npx human-hindsight suggest-subagents /);
     expect(partial.resume_hint).toContain(`--input-budget=${budget}`);
     expect(partial.resume_hint).toContain("--model=gen-model");
 
@@ -1057,7 +1059,7 @@ describe("suggest-subagents stages", () => {
     expect(fake.count("propose")).toBe(1);
     const out = strip(text);
     expect(out).toContain(
-      `1 working agreement fit no role, so it is kept in the ${UNPLACED_PLAYBOOK} notes; review it in the exported files.`,
+      `1 preference fit no role, so it is kept in the ${UNPLACED_PLAYBOOK} notes; review it in the exported files.`,
     );
     expect(out).not.toContain("propose: accepted after one correction");
     const artifact = readSuggestion(home)?.artifact as SuggestionArtifact;
@@ -1116,7 +1118,7 @@ describe("suggest-subagents stages", () => {
     // is the author-only rerun.
     expect(out).toMatch(/evidence-checker: .*Kept without a written prompt\./);
     // The command is alone on its own line.
-    expect(out).toMatch(/\n {2}human-hindsight suggest-subagents .*--author-only\n/);
+    expect(out).toMatch(/\n {2}npx human-hindsight suggest-subagents .*--author-only\n/);
   });
 });
 
@@ -1255,7 +1257,7 @@ describe("suggest-subagents --author-only", () => {
     try {
       const busy = await run(home, { yes: true, "author-only": true });
       expect(busy.code).toBe(1);
-      expect(strip(busy.text)).toContain("human-hindsight distill is changing this library");
+      expect(strip(busy.text)).toContain("npx human-hindsight reflect is changing this library");
       expect(fs.readFileSync(suggestionPath(home), "utf8")).toBe(before);
     } finally {
       lock.release();
@@ -1435,7 +1437,7 @@ describe("suggest-subagents --export", () => {
     const { code, text } = await run(home, { export: dir });
     expect(code).toBe(1);
     expect(text).toContain(`No saved suggestion at ${suggestionPath(home)}`);
-    expect(text).toContain("human-hindsight suggest-subagents");
+    expect(text).toContain("npx human-hindsight suggest-subagents");
     expect(fs.existsSync(dir)).toBe(false);
   });
 
@@ -1559,7 +1561,7 @@ describe("suggest-subagents at a terminal", () => {
     expect(result.code).toBe(0);
     expect(result.text).not.toContain("What next?");
     expect(result.text).toContain("--tab=subagents");
-    expect(result.text).toContain("--export <dir>");
+    expect(result.text).toContain("--export human-hindsight-subagents");
     expect(result.runNext).not.toHaveBeenCalled();
   });
 });

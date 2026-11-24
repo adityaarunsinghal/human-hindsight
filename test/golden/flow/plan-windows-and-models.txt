@@ -1,4 +1,4 @@
-  distill will call your local `claude` CLI (your subscription/credits):
+  Reflection will call your local `claude` CLI (your subscription/credits):
     •  3,000 session reads
     •    ~61 grouping calls (estimated 60 batches and 1 merge; the size limit per call may need more batches)
     • ~1,000 prompt writing calls (one per task; the exact count is known after grouping)

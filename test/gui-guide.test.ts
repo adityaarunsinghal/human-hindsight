@@ -17,6 +17,7 @@ import { GENERALIZE_PROMPT_VERSION } from "../src/distill/prompts/generalize.js"
 import type { GuiHighlights } from "../src/gui/highlights.js";
 import { landingTab } from "../src/gui/landing.js";
 import { OUTCOME_NOT_VERIFIED_LABEL, promptsGuideSentence } from "../src/gui/overview.js";
+import { latestReflection } from "../src/gui/reflection.js";
 import type { GuiAgreements, GuiSnapshot, GuiSubagents } from "../src/gui/server.js";
 import { getJson, guiHarness } from "./gui-harness.js";
 import { type BuiltHome, homeBuilder, sampleHome } from "./support/home.js";
@@ -279,7 +280,7 @@ describe("how the saved agreements are grouped and ranked", () => {
     ]);
   });
 
-  it("highlights preferences still to review before accepted ones, and says Accepted", async () => {
+  it("highlights the strongest support first and retains the saved review label", async () => {
     const home = sample();
     const highlights = await getJson<GuiHighlights>(guiHarness(home.dir), "/api/highlights");
     const prefs = new Map(
@@ -288,8 +289,8 @@ describe("how the saved agreements are grouped and ranked", () => {
     expect(
       highlights.candidates.map((highlight) => [prefs.get(highlight.id)?.text, highlight.reason]),
     ).toEqual([
-      ["Write release notes in plain words.", "Seen in 1 session"],
       ["Keep changes small.", "Seen in 2 sessions · Accepted"],
+      ["Write release notes in plain words.", "Seen in 1 session"],
     ]);
   });
 });
@@ -351,7 +352,8 @@ describe("the tab a first visit opens on", () => {
     ["#preferences without a suggestion", "preferences", false, null],
     ["a prompt bookmark", "prompts/some-task", true, null],
   ] as const)("%s", (_label, route, saved, tab) => {
-    expect(landingTab(route, { saved })).toBe(tab);
+    expect(landingTab(route, { preferences: false, saved })).toBe(tab);
+    expect(landingTab(route, { preferences: true, saved })).toBe(route ? null : "preferences");
   });
 
   it("counts a stale suggestion as saved and an unreadable one as missing", async () => {
@@ -362,18 +364,67 @@ describe("the tab a first visit opens on", () => {
     const gui = guiHarness(home.dir);
     const stale = await getJson<GuiSubagents>(gui, "/api/subagents");
     expect(stale.stale).toBe(true);
-    expect(landingTab("", { saved: Boolean(stale.suggestion) })).toBe("subagents");
+    expect(landingTab("", { preferences: false, saved: Boolean(stale.suggestion) })).toBe(
+      "subagents",
+    );
     fs.writeFileSync(suggestionPath(home.dir), "{ damaged");
     const damaged = await getJson<GuiSubagents>(gui, "/api/subagents");
     expect(damaged.error).toBeTruthy();
-    expect(landingTab("", { saved: Boolean(damaged.suggestion) })).toBe("prompts");
+    expect(landingTab("", { preferences: false, saved: Boolean(damaged.suggestion) })).toBe(
+      "prompts",
+    );
   });
 
   it("an empty home has no suggestion, so it opens on Prompts", async () => {
     const home = homeBuilder().build();
     homes.push(home);
     const data = await getJson<GuiSubagents>(guiHarness(home.dir), "/api/subagents");
-    expect(landingTab("", { saved: Boolean(data.suggestion) })).toBe("prompts");
+    expect(landingTab("", { preferences: false, saved: Boolean(data.suggestion) })).toBe("prompts");
+  });
+});
+
+describe("the reflection read from saved observations", () => {
+  it("uses current human wording in scoped copy and keeps the cited observation intact", async () => {
+    const home = sample();
+    const original = readObservedPreferences(home.dir).find((pref) => pref.scope === "project");
+    if (!original) throw new Error("The sample has a project preference.");
+    savePreferenceReview(home.dir, original, {
+      status: "accepted",
+      text: "Keep beta release notes factual.",
+      scope: "project",
+      project: "beta",
+    });
+    const { preferences } = await getJson<GuiSnapshot>(guiHarness(home.dir), "/api/library");
+    const project = preferences.find((pref) => pref.id === preferenceId(original));
+    if (!project) throw new Error("The observation is still available.");
+    const reading = latestReflection([project], [], new Map());
+    expect(reading?.observation).toContain("Write release notes in plain words.");
+    expect(reading?.markdown).toBe("- Keep beta release notes factual.\n  Scope: For beta");
+    expect(reading?.sources.map((source) => source.quote)).toEqual([
+      "plain words, no marketing tone",
+    ]);
+    const dismissed = { ...project, review: { ...project.review, status: "dismissed" as const } };
+    expect(latestReflection([dismissed], [], new Map())).toBeUndefined();
+  });
+
+  it("features reusable observations first and keeps a one-time permission scoped when it stands alone", async () => {
+    const home = sample();
+    const { preferences } = await getJson<GuiSnapshot>(guiHarness(home.dir), "/api/library");
+    const [first, second] = preferences;
+    if (!first || !second) throw new Error("The sample has two preferences.");
+    const [saved] = saveAgreements(home.dir).lessons;
+    if (!saved) throw new Error("The sample has a generated preference.");
+    const historical = {
+      ...saved,
+      disposition: "historical" as const,
+      source_ids: [first.id],
+    };
+    expect(latestReflection([first, second], [historical], new Map())?.preference.id).toBe(
+      second.id,
+    );
+    const onlyNote = latestReflection([first], [historical], new Map());
+    expect(onlyNote?.markdown).toContain("Scope: One-time note");
+    expect(onlyNote?.sources.length).toBe(first.occurrences.length);
   });
 });
 

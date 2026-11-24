@@ -1,8 +1,8 @@
 Human Hindsight is fully open source (https://github.com/adityaarunsinghal/human-hindsight). Export stays local; model steps use your own coding tool and its configured provider. Human Hindsight has no session-upload service.
 
-Checking which coding CLIs are ready.
+Checking available coding CLIs…
 
-  Distill plan
+  Reflect on your history
 
   Reads    3 sessions, about 1 prompt, plus your working preferences.
   Runs on  Claude Code (claude 9.9.9)
@@ -18,10 +18,20 @@ Checking which coding CLIs are ready.
            and the calls use your tokens there. Before the first model call, two
            tiny requests, one for each model, check that Claude Code is ready;
            when everything is reused, nothing is sent.
+Preparing reflection · Claude Code · Balanced
+3 sessions across 1 project
+Project  alpha ×3
 Checking that Claude Code is ready.
 Claude Code is ready: sonnet reads sessions, opus groups and writes.
 
 Reading sessions  0/3
+Reading  alpha
+│ Read  alpha · completed
+│ › g
+│ Read  alpha · completed
+│ › g
+│ Read  alpha · completed
+│ › g
 Reading sessions  3/3 · 0s
 Read 3 of 3 sessions.
 
@@ -34,7 +44,10 @@ Writing prompts  1/1 · 0s
 
 Library: 1 prompt written.
 No working preferences to summarize yet.
-Done in 0m 0s. Library: <HOME>/library
+
+✓ Reflection complete
+3 session reads · 0m 0s
+Library: <HOME>/library
 Claude Code: 7 CLI calls (sonnet, opus).
-→ next: human-hindsight gui --home=<HOME>
-→ next: human-hindsight suggest-subagents --home=<HOME> --quality=balanced --dry-run
+→ next: npx human-hindsight gui --home=<HOME> --tab=preferences
+→ next: npx human-hindsight suggest-subagents --home=<HOME> --quality=balanced --dry-run

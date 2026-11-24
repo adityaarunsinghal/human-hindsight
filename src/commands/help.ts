@@ -16,6 +16,7 @@ import { parseRunnerMode } from "../runners/registry.js";
 import { SOURCE_PRODUCT_NAMES } from "../sources/labels.js";
 import { parseSourceMode } from "../sources/registry.js";
 import {
+  commandAliases,
   fullHelpArg,
   type HelpDefinition,
   type HelpTopic,
@@ -37,10 +38,11 @@ import {
   sharedArgs,
 } from "./_shared.js";
 import { PORT_RULE, TAB_RULE } from "./gui.js";
+import { shellWord } from "./next.js";
 import { ROLE_COUNT_RULE } from "./suggest-subagents.js";
 
 function example(command: string, note: string): { run: string; note: string } {
-  return { run: `human-hindsight ${command}`, note };
+  return { run: `npx human-hindsight ${command}`, note };
 }
 
 export const helpTopics: HelpTopic[] = [
@@ -65,23 +67,23 @@ export const helpTopics: HelpTopic[] = [
     common: ["project", "source", "min-messages"],
   },
   {
-    name: "distill",
-    summary: "Build a prompt library from your exported sessions.",
+    name: "reflect",
+    summary: "Find preferences and reusable prompts in your sessions.",
     group: "everyday",
     examples: [
-      example("distill --dry-run", "Preview the plan before sending any session text."),
-      example("distill --recent 10", "Start with your ten most recent eligible sessions."),
-      example("distill --quality best", "Review the plan using the most capable available models."),
+      example("reflect --dry-run", "Preview the plan before sending any session text."),
+      example("reflect --recent 10", "Start with your ten most recent eligible sessions."),
+      example("reflect --quality best", "Review the plan using the most capable available models."),
     ],
     common: ["dry-run", "recent", "quality", "project"],
   },
   {
     name: "gui",
-    summary: "Open your library in a browser.",
+    summary: "Explore your reflections and library in a browser.",
     group: "everyday",
     examples: [
-      example("gui", "Browse prompts, working preferences, and suggested subagents."),
-      example("gui --tab preferences", "Open directly to your working preferences."),
+      example("gui", "Browse reflections, preferences, prompts, and suggested subagents."),
+      example("gui --tab preferences", "Open your reflections and preferences."),
       example("gui --no-open --port 8765", "Print the address and use a specific port."),
     ],
     common: ["tab", "open", "port"],
@@ -208,7 +210,7 @@ export const helpTopics: HelpTopic[] = [
     summary: "Read examples or look up every command and option.",
     group: "start",
     examples: [
-      example("help distill", "See examples and common options for building your library."),
+      example("help reflect", "See examples and common options for reflecting on your history."),
       example("help --all", "Read the complete command reference."),
     ],
     common: ["all"],
@@ -242,18 +244,29 @@ async function findCommand(commands: SubCommandsDef, name: string) {
   if (entry) return { name, def: await resolveDefinition(entry) };
   for (const [key, entry] of Object.entries(commands)) {
     const def = await resolveDefinition(entry);
-    const { alias } = await resolveDefinition<CommandMeta>(def.meta ?? {});
-    if (alias === name || (Array.isArray(alias) && alias.includes(name))) return { name: key, def };
+    const meta = await resolveDefinition<CommandMeta>(def.meta ?? {});
+    if (commandAliases(meta).includes(name)) return { name: key, def };
   }
   return undefined;
 }
 
-function unknownCommand(name: string, commands: SubCommandsDef, helpOnly: boolean): string {
-  const match = closestMatch(name.toLowerCase(), Object.keys(commands));
-  const invocation = helpOnly ? "human-hindsight help" : "human-hindsight";
+async function unknownCommand(
+  name: string,
+  commands: SubCommandsDef,
+  helpOnly: boolean,
+): Promise<string> {
+  const candidates = new Map<string, string>();
+  for (const [key, entry] of Object.entries(commands)) {
+    candidates.set(key, key);
+    const def = await resolveDefinition(entry);
+    const meta = await resolveDefinition<CommandMeta>(def.meta ?? {});
+    for (const alias of commandAliases(meta)) candidates.set(alias, key);
+  }
+  const match = closestMatch(name.toLowerCase(), [...candidates.keys()]);
+  const invocation = helpOnly ? "npx human-hindsight help" : "npx human-hindsight";
   const hint = match
-    ? ` Did you mean \`${invocation} ${match}\`?`
-    : " See `human-hindsight --help` for the commands.";
+    ? ` Did you mean \`${invocation} ${candidates.get(match)}\`?`
+    : " See `npx human-hindsight --help` for the commands.";
   return `Unknown command ${JSON.stringify(name)}.${hint}`;
 }
 
@@ -403,28 +416,27 @@ function environmentProblem(
 
 function unknownOption(token: string, command: string | undefined, suggested: string[]): string {
   const name = token.replace(/^-+/, "");
-  const where = command ? ` for \`human-hindsight ${command}\`` : "";
+  const where = command ? ` for \`npx human-hindsight ${command}\`` : "";
   const match = token.startsWith("--") ? closestMatch(name, suggested) : undefined;
   if (match) return `Unknown option ${token}${where}. Did you mean --${match}?`;
   const reference = command
-    ? `human-hindsight ${command} --help --all`
-    : "human-hindsight --help --all";
+    ? `npx human-hindsight ${command} --help --all`
+    : "npx human-hindsight --help --all";
   return `Unknown option ${token}${where}. See \`${reference}\` for every option.`;
 }
 
-function belongsTo(command: string, typed: string): string {
-  return `That option belongs to ${command}: human-hindsight ${command} ${typed}`;
+function belongsTo(command: string, ...typed: string[]): string {
+  return `That option belongs to ${command}: npx human-hindsight ${command} ${typed.map(shellWord).join(" ")}`;
 }
 
 /**
- * The command that takes a flag the bare command does not, distill first:
- * `human-hindsight --fresh` is pointed at `human-hindsight distill --fresh`.
+ * The command that takes a flag the bare command does not, reflect first.
  */
 async function commandOwning(
   commands: SubCommandsDef,
   spelling: string,
 ): Promise<{ name: string; boolean: boolean } | undefined> {
-  const names = ["distill", ...Object.keys(commands).filter((name) => name !== "distill")];
+  const names = ["reflect", ...Object.keys(commands).filter((name) => name !== "reflect")];
   for (const name of names) {
     const entry = Object.hasOwn(commands, name) ? commands[name] : undefined;
     if (!entry) continue;
@@ -462,7 +474,7 @@ export async function findInputProblem(
       const before = rawArgs[index - 1] ?? "";
       const spelling = before.replace(/^-{1,2}/, "");
       const owner = before.startsWith("--") ? await commandOwning(commands, spelling) : undefined;
-      if (owner && !owner.boolean) return belongsTo(owner.name, `${before} ${name}`);
+      if (owner && !owner.boolean) return belongsTo(owner.name, before, name);
       return unknownCommand(name, commands, false);
     }
     command = known.name;
@@ -512,8 +524,10 @@ export async function findInputProblem(
       if (!command) {
         const owner = await commandOwning(commands, spelling);
         if (owner) {
-          const value = token.includes("=") || owner.boolean ? "" : ` ${rawArgs[i + 1] ?? ""}`;
-          return belongsTo(owner.name, `${token}${value}`.trimEnd());
+          const value = rawArgs[i + 1];
+          return token.includes("=") || owner.boolean || value === undefined
+            ? belongsTo(owner.name, token)
+            : belongsTo(owner.name, token, value);
         }
       }
       return unknownOption(flag, command, suggested);
@@ -546,11 +560,11 @@ function unexpectedArgument(word: string, command: string, takes: [string, ArgDe
     .map(([name, arg]) => (arg.required === false ? `[${name.toUpperCase()}]` : name.toUpperCase()))
     .join(" ");
   const what = shape ? `takes ${shape}` : "takes no arguments";
-  return `Unexpected argument: ${word}. \`human-hindsight ${command}\` ${what}; see \`human-hindsight ${command} --help\`.`;
+  return `Unexpected argument: ${word}. \`npx human-hindsight ${command}\` ${what}; see \`npx human-hindsight ${command} --help\`.`;
 }
 
 const LEADING_SEPARATOR =
-  "Nothing runs after a leading --. Put the command first; see `human-hindsight --help`.";
+  "Nothing runs after a leading --. Put the command first; see `npx human-hindsight --help`.";
 
 /**
  * A boolean flag is on or off and takes no value. The parser would read any
@@ -597,7 +611,7 @@ export async function helpText(
     };
   }
   const match = await findCommand(commands, name);
-  if (!match) return { error: unknownCommand(name, commands, true) };
+  if (!match) return { error: await unknownCommand(name, commands, true) };
   const meta = await resolveDefinition<CommandMeta>(match.def.meta ?? {});
   const topic: HelpTopic = helpTopics.find((item) => item.name === match.name) ?? {
     name: match.name,
@@ -609,7 +623,12 @@ export async function helpText(
   const globalArgs = await resolveDefinition(root.args ?? {});
   const args = await resolveDefinition(match.def.args ?? {});
   return {
-    text: await renderCommandHelp(topic, { args: { ...globalArgs, ...args } }, o.all, o.plain),
+    text: await renderCommandHelp(
+      topic,
+      { meta, args: { ...globalArgs, ...args } },
+      o.all,
+      o.plain,
+    ),
   };
 }
 

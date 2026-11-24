@@ -40,8 +40,10 @@ export function palette(enabled: boolean) {
     green: style("green"),
     yellow: style("yellow"),
     red: style("red"),
+    blue: style("blue"),
     cyan: style("cyan"),
     magenta: style("magenta"),
+    magentaBright: style("magentaBright"),
   };
 }
 
@@ -88,10 +90,10 @@ export function visibleWidth(s: string): number {
 }
 
 /** Keep complete graphemes and reset any style still open after a cut. */
-export function truncateVisible(text: string, width: number): string {
+export function truncateVisible(text: string, width: number, ellipsis = glyph("…", "...")): string {
   if (width <= 0) return "";
   if (visibleWidth(text) <= width) return text;
-  const suffix = glyph("…", "...").slice(0, width);
+  const suffix = ellipsis.slice(0, width);
   const limit = width - visibleWidth(suffix);
   let line = "";
   let used = 0;
@@ -107,6 +109,22 @@ export function truncateVisible(text: string, width: number): string {
     }
   }
   return line;
+}
+
+/** Strip terminal styles, cursor commands and directional controls from external text. */
+export function terminalText(text: string): string {
+  return oneLine(stripVTControlCharacters(text).replace(/\p{Bidi_Control}/gu, "")).trim();
+}
+
+/** Plain, bounded prose from a project or model result. Keep a complete sentence or word when cutting. */
+export function terminalExcerpt(text: string, width: number, ellipsis = glyph("…", "...")): string {
+  const clean = terminalText(text);
+  if (visibleWidth(clean) <= width) return clean;
+  const clipped = truncateVisible(clean, width, ellipsis).slice(0, -ellipsis.length);
+  const sentence = clipped.match(/^.*[.!?。！？](?=\s)/u)?.[0];
+  if (sentence) return sentence;
+  const boundary = clipped.lastIndexOf(" ");
+  return `${boundary > 0 ? clipped.slice(0, boundary) : clipped}${ellipsis}`;
 }
 
 /** Render aligned columns. An uncapped pipe preserves the complete content. */

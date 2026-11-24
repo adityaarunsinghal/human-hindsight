@@ -84,7 +84,7 @@ export function runEdit(args: EditArgs, deps: EditDeps = {}): number {
   if (fresh && isEdited(fresh)) {
     write(
       green(
-        `${glyph("✎", "*")} ${slug} edited. Distill will keep your version (use --force to write it again).`,
+        `${glyph("✎", "*")} ${slug} edited. Future reflections will keep your version. To write it again, run ${nextCommandText("reflect", args)} --force.`,
       ),
     );
   } else {

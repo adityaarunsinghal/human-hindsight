@@ -14,7 +14,8 @@ import { generalizedGap } from "../core/generalized.js";
 import { OUTCOME_NOT_VERIFIED, readLibrary } from "../core/library.js";
 import { parseQuality, type Quality } from "../core/model-plan.js";
 import { damagedFile } from "../core/plain-failure.js";
-import { readObservedPreferences } from "../core/preferences.js";
+import { preferenceReview, readPreferenceReviews } from "../core/preference-review.js";
+import { preferenceId, readObservedPreferences } from "../core/preferences.js";
 import {
   openRunSession,
   type PinKey,
@@ -29,6 +30,7 @@ import {
   type ConsentResult,
   confirmPlan,
   type DistillPlan,
+  RUNNER_INK,
   screenWidth,
 } from "../distill/consent.js";
 import {
@@ -49,16 +51,28 @@ import {
 import { guardRun, mutableOutput } from "../distill/run-guard.js";
 import type { Digest } from "../distill/schemas.js";
 import { startStageProgress } from "../distill/stage-events.js";
+import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerIo } from "../runners/shared.js";
-import type { AgentRunner } from "../runners/types.js";
+import type { AgentRunner, RunnerName } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import type { TerminalHost } from "../ui/live.js";
-import { canPrompt, glyph } from "../ui/mode.js";
+import { canColor, canPrompt, glyph } from "../ui/mode.js";
 import { terminalPrivacyReminder } from "../ui/privacy.js";
 import { withSpinner } from "../ui/progress.js";
 import { chooseMenuAnswer } from "../ui/prompt.js";
-import { counted, cyan, dim, fail, green, hint, skip } from "../ui/style.js";
+import { batchProjectLine } from "../ui/screen.js";
+import {
+  counted,
+  cyan,
+  dim,
+  fail,
+  green,
+  hint,
+  palette,
+  skip,
+  terminalExcerpt,
+} from "../ui/style.js";
 import { fitLines, sayThenRun, wrapText } from "../ui/wrap.js";
 import {
   CLUSTER_BATCH_RULE,
@@ -98,7 +112,7 @@ export interface DistillArgs {
   "opencode-db"?: string;
   /** Which backend(s) to distill from: claude, codex, kiro, or auto (default auto). */
   source?: string;
-  /** Which local CLI distills: claude, codex, kiro, or auto (default auto). */
+  /** Which local CLI runs the reflection: claude, codex, kiro, or auto (default auto). */
   runner?: string;
   quality?: string;
   recent?: string;
@@ -255,12 +269,6 @@ export interface DistillDeps {
 
 /** Large histories are offered this many of their newest sessions first. */
 const QUICK_START = 25;
-/**
- * Said before the CLIs are asked for their models. It makes no claim about the
- * network: the run session says so itself, naming the CLI, when a model list
- * really comes from a service.
- */
-const LISTING_LINE = "Checking which coding CLIs are ready.";
 const NOTHING_SENT = "Nothing was sent.";
 
 /**
@@ -359,7 +367,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     // surface as the default `scan`, so this is not a new trust boundary; the
     // model consent gate below is untouched.
     if (args["dry-run"]) {
-      write("Nothing is exported yet. Run export first (free, local), then run this again.");
+      write("Nothing is exported yet. Export your sessions locally, then run this again.");
       write(hint(nextCommandText("export", args)));
       return 1;
     }
@@ -414,7 +422,7 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     try {
       raw = fs.readFileSync(manifestPath, "utf8");
     } catch {
-      write("Export found no sessions, so there is nothing to distill.");
+      write("Export found no sessions, so there is no history to reflect on.");
       return 1;
     }
   }
@@ -443,17 +451,17 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     if (!args.yes && !args["dry-run"] && canPrompt(ask)) {
       const choice = await chooseMenuAnswer(
         {
-          title: "Which sessions would you like to start with?",
+          title: "Which history do you want to reflect on?",
           choices: [
             {
               key: "recent",
-              label: `My ${QUICK_START} most recent sessions`,
-              detail: "A shorter first run. Saved reads are reused when you do the rest.",
+              label: `${QUICK_START} most recent sessions`,
+              detail: "Later runs reuse the reads you have already finished.",
               recommended: true,
             },
             {
               key: "all",
-              label: `Everything (${counted(plan.digests, "eligible session")})`,
+              label: `All ${counted(plan.digests, "eligible session")}`,
             },
           ],
         },
@@ -476,13 +484,19 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
 
   if (plan.digests === 0) {
     const scope = args.project ? ` in project "${args.project}"` : "";
-    write(`nothing to distill: no sessions with at least ${minSubstance} human messages${scope}.`);
+    write(
+      `Nothing to reflect on. No sessions with at least ${minSubstance} human messages${scope}.`,
+    );
     return 0;
   }
 
   // Say what happens next, in every mode including --dry-run. A model list
   // that needs the network gets its own line from the run session.
-  write(dim(LISTING_LINE));
+  write(
+    palette(canColor({ output: out })).magenta(
+      `Checking available coding CLIs${glyph("…", "...")}`,
+    ),
+  );
   let session: RunSession;
   const stopEarlyInterrupt = interruptBeforeConsent(out, deps);
   try {
@@ -533,6 +547,10 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       explicitArgs,
       deps,
       session,
+      selectRunner: (chosen) => {
+        session = chosen;
+        args = { ...args, runner: chosen.ledgerRunner };
+      },
       plan,
       eligible: everything.digests,
       quickStart: quickStartHint,
@@ -594,7 +612,7 @@ export function keptLine(names: string[], verbose = false): string | undefined {
   if (!names.length) return undefined;
   const one = names.length === 1;
   const listed = names.length <= 3 || verbose ? `: ${names.join(", ")}` : "";
-  return `Kept ${counted(names.length, "prompt")} you edited, as you wrote ${one ? "it" : "them"}${listed}. To replace ${one ? "it" : "them"} with the new version, run distill again with --force.`;
+  return `Kept ${counted(names.length, "prompt")} you edited, as you wrote ${one ? "it" : "them"}${listed}. To replace ${one ? "it" : "them"} with the new version, run npx human-hindsight reflect --force.`;
 }
 
 /**
@@ -654,12 +672,12 @@ export function unverifiedLine(n: number): string | undefined {
  */
 export function preferencesLine(result: GeneralizeResult, inputs: number): string {
   if (result.status === "done")
-    return `Working preferences: ${counted(inputs, "preference")} summarized into ${counted(result.lessons, "working agreement")}${result.reused ? ` (${counted(result.reused, "batch", "batches")} reused)` : ""}.`;
+    return `Working preferences: ${counted(result.lessons, "preference")} summarized from ${counted(inputs, "observation")}${result.reused ? ` (${counted(result.reused, "batch", "batches")} reused)` : ""}.`;
   const gap = result.artifact ? generalizedGap(result.artifact) : undefined;
   if (gap)
-    return `Working preferences: ${gap.summarized.toLocaleString("en-US")} of ${counted(gap.total, "preference")} summarized; run distill again to finish (finished work is reused).`;
+    return `Working preferences: ${gap.summarized.toLocaleString("en-US")} of ${counted(gap.total, "preference")} summarized; run npx human-hindsight reflect to finish (finished work is reused).`;
   const first = result.errors[0] ? ` (${result.errors[0]})` : "";
-  return `Working preferences could not be summarized this time${first}. Your prompts are saved; run distill again to finish them.`;
+  return `Working preferences could not be summarized this time${first}. Your prompts are saved; run npx human-hindsight reflect to finish them.`;
 }
 
 /**
@@ -700,6 +718,7 @@ async function distillSelectedSessions(opts: {
   explicitArgs: DistillArgs;
   deps: DistillDeps;
   session: RunSession;
+  selectRunner(session: RunSession): void;
   plan: ComputedPlan;
   /** Eligible sessions before `--recent`. */
   eligible: number;
@@ -711,18 +730,8 @@ async function distillSelectedSessions(opts: {
   /** Silence this run's output after Ctrl-C has printed its line. */
   mute?: () => void;
 }): Promise<number> {
-  const {
-    home,
-    args,
-    explicitArgs,
-    deps,
-    session,
-    plan,
-    clusterBatchSize,
-    budget,
-    truncate,
-    timeoutMs,
-  } = opts;
+  const { home, explicitArgs, deps, plan, clusterBatchSize, budget, truncate, timeoutMs } = opts;
+  let { session, args } = opts;
   const out = deps.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
   // Long lines wrap at word boundaries; a command stays whole on its own line.
@@ -755,11 +764,28 @@ async function distillSelectedSessions(opts: {
     "author",
     ...(args.generalize === false ? [] : (["generalize"] as const)),
   ];
-  const ready = () =>
-    (gate.result ??= session.liveCheck(stages).then((checked) => {
-      if (!checked.ok) write(checked.line);
-      return checked;
-    }));
+  const ink = palette(canColor({ output: out }));
+  const projectNames = plan.eligible.map((entry) => entry.project);
+  const projects = new Set(projectNames.filter(Boolean));
+  const ready = () => {
+    if (!gate.result) {
+      const quality = session.quality === "balanced" ? "Balanced" : "Best";
+      const runner = RUNNER_INFO[session.ledgerRunner].displayName;
+      write(
+        `${ink.bold("Preparing reflection")} ${glyph("·", "-")} ${ink[RUNNER_INK[session.ledgerRunner]](runner)} ${glyph("·", "-")} ${ink.yellow(quality)}`,
+      );
+      write(
+        `${ink.cyan(counted(plan.digests, "session"))}${projects.size ? ` across ${ink.magenta(counted(projects.size, "project"))}` : ""}`,
+      );
+      const represented = batchProjectLine(projectNames, out);
+      if (represented) write(represented);
+      gate.result = session.liveCheck(stages).then((checked) => {
+        if (!checked.ok) write(checked.line);
+        return checked;
+      });
+    }
+    return gate.result;
+  };
   const gatedRun: RunnerFn = async (options) => {
     const checked = await ready();
     if (!checked.ok) throw new Error(checked.line.split("\n")[0]);
@@ -771,7 +797,9 @@ async function distillSelectedSessions(opts: {
     get runnerName() {
       return session.ledgerRunner;
     },
-    identityRunner: session.identityRunner,
+    get identityRunner() {
+      return session.identityRunner;
+    },
     output: out,
     budget,
     timeoutMs,
@@ -832,61 +860,89 @@ async function distillSelectedSessions(opts: {
 
   // Both reuse counts are computed before the screen is shown, so the numbers
   // on screen are right whichever plan is picked.
-  const description = session.describe();
-  const selectedQuality = session.quality;
-  const choices = {} as NonNullable<DistillPlan["choices"]>;
-  const reusedBy = {} as Record<Quality, Set<string>>;
-  for (const quality of ["balanced", "best"] as const) {
-    session.quality = quality;
-    const { reused, ...reuse } = planDigestReuse({
-      ...common,
-      entries: plan.eligible,
-      model: session.modelFor("digest"),
+  function preview(session: RunSession, chosenRunner?: RunnerName) {
+    const description = session.describe();
+    const selectedQuality = session.quality;
+    const choices = {} as NonNullable<DistillPlan["choices"]>;
+    const reusedBy = {} as Record<Quality, Set<string>>;
+    for (const quality of ["balanced", "best"] as const) {
+      session.quality = quality;
+      const { reused, ...reuse } = planDigestReuse({
+        home,
+        budget,
+        runnerName: session.ledgerRunner,
+        identityRunner: session.identityRunner,
+        entries: plan.eligible,
+        model: session.modelFor("digest"),
+        truncate,
+        fresh: args.fresh,
+      });
+      reusedBy[quality] = new Set(reused);
+      choices[quality] = {
+        ...reuse,
+        digest: session.displayModelFor("digest"),
+        cluster: session.displayModelFor("cluster"),
+        author: session.displayModelFor("author"),
+        generalize: session.displayModelFor("generalize"),
+        notes: description.plans[quality].notes,
+      };
+    }
+    session.quality = selectedQuality;
+    const distillPlan: DistillPlan = {
+      sessions: plan.digests,
+      projects: projects.size,
+      eligible: opts.eligible,
+      recent: args.recent !== undefined ? Number(args.recent) : undefined,
+      quickStart: opts.quickStart,
+      library: readLibrary(home).length,
+      qualityFixed: Boolean(args.quality),
+      digests: plan.digests - choices[selectedQuality].reusable,
+      cluster: plan.cluster,
+      clusterWindowsEstimate: plan.clusterWindowsEstimate,
+      clusterMergeEstimate: plan.clusterMergeEstimate,
+      authorEstimate: plan.authorEstimate,
+      runnerName: session.ledgerRunner,
+      session: description,
+      quality: selectedQuality,
+      choices,
+      generalize: args.generalize !== false,
+      grouping: !noGroup,
+      concurrency,
+      force: args.force,
+      model: session.displayModelFor("digest"),
+      clusterModel: noGroup ? undefined : session.displayModelFor("cluster"),
+      authorModel: session.displayModelFor("author"),
+      budget,
       truncate,
-      fresh: args.fresh,
-    });
-    reusedBy[quality] = new Set(reused);
-    choices[quality] = {
-      ...reuse,
-      digest: session.displayModelFor("digest"),
-      cluster: session.displayModelFor("cluster"),
-      author: session.displayModelFor("author"),
-      generalize: session.displayModelFor("generalize"),
-      notes: description.plans[quality].notes,
+      oversized,
+      // What is being approved, quick start included: `args` holds the choices of this run.
+      fullPlan: `${nextCommandText("reflect", { ...args, home, ...(chosenRunner && { runner: chosenRunner }) })} --dry-run`,
     };
+    return { plan: distillPlan, reusedBy };
   }
-  session.quality = selectedQuality;
-  const distillPlan: DistillPlan = {
-    sessions: plan.digests,
-    eligible: opts.eligible,
-    recent: args.recent !== undefined ? Number(args.recent) : undefined,
-    quickStart: opts.quickStart,
-    library: readLibrary(home).length,
-    qualityFixed: Boolean(args.quality),
-    digests: plan.digests - choices[selectedQuality].reusable,
-    cluster: plan.cluster,
-    clusterWindowsEstimate: plan.clusterWindowsEstimate,
-    clusterMergeEstimate: plan.clusterMergeEstimate,
-    authorEstimate: plan.authorEstimate,
-    runnerName: session.ledgerRunner,
-    session: description,
-    quality: selectedQuality,
-    choices,
-    generalize: args.generalize !== false,
-    grouping: !noGroup,
-    concurrency,
-    force: args.force,
-    model: session.displayModelFor("digest"),
-    clusterModel: noGroup ? undefined : session.displayModelFor("cluster"),
-    authorModel: session.displayModelFor("author"),
-    budget,
-    truncate,
-    oversized,
-    // What is being approved, quick start included: `args` holds the choices of this run.
-    fullPlan: `${nextCommandText("distill", { ...args, home })} --dry-run`,
-  };
-
-  const decision = await (deps.confirm ?? confirmPlan)(distillPlan, {
+  let selected = preview(session);
+  const cached = new Map<
+    RunnerName,
+    { session: RunSession; preview: ReturnType<typeof preview> }
+  >();
+  const runners = session.runnerChoices.map((choice) => ({
+    name: choice.name,
+    select() {
+      let candidate = cached.get(choice.name);
+      if (!candidate) {
+        const pinned = choice.select();
+        candidate = { session: pinned, preview: preview(pinned, choice.name) };
+        cached.set(choice.name, candidate);
+      }
+      session = candidate.session;
+      selected = candidate.preview;
+      args = { ...args, runner: choice.name };
+      opts.selectRunner(session);
+      return selected.plan;
+    },
+  }));
+  const decision = await (deps.confirm ?? confirmPlan)(selected.plan, {
+    runners: args.runner?.trim().toLowerCase() === "auto" ? [] : runners,
     yes: Boolean(args.yes),
     dryRun: Boolean(args["dry-run"]),
     input: deps.input,
@@ -899,7 +955,7 @@ async function distillSelectedSessions(opts: {
 
   if (decision === "dry-run") {
     // Only the sessions this plan would really read; the rest are reused.
-    const reused = reusedBy[session.quality];
+    const reused = selected.reusedBy[session.quality];
     const toRead = plan.eligible.filter((e) => !reused.has(e.export));
     write();
     if (toRead.length) {
@@ -928,19 +984,25 @@ async function distillSelectedSessions(opts: {
   }
 
   // The quality chosen on the plan screen is part of what to continue with.
-  const resume = nextCommandText("distill", { ...args, home, quality: session.quality });
+  const resume = nextCommandText("reflect", { ...args, home, quality: session.quality });
   // What Ctrl-C can truthfully say is saved depends on the step it lands in.
   let phase: keyof typeof SAVED_AT = "start";
+  let readingProgress: ReturnType<typeof startStageProgress> | undefined;
   // All writers share this lock; preview and declined consent never create it.
   // Ctrl-C releases it, ends the calls in flight, says what is saved, gives
   // the runners a bounded moment to clean up, and exits 130. The ledger and
   // every saved result stay as a crash would leave them; the next run reuses them.
   const guard = guardRun({
     home,
-    command: "distill",
+    command: "reflect",
     output: out,
     resume,
-    saved: () => SAVED_AT[phase],
+    saved: () => {
+      const saved = phase === "reading" ? readingProgress?.savedReads?.() : undefined;
+      return saved !== undefined
+        ? `${saved.toLocaleString("en-US")} of ${counted(plan.digests, "session read")} saved.`
+        : SAVED_AT[phase];
+    },
     interrupt: () => session.interrupt(),
     cleanup: () => session.finalize(),
     mute: opts.mute,
@@ -959,7 +1021,7 @@ async function distillSelectedSessions(opts: {
     // Sessions to read, or saved work to discard, mean a call is certain: check
     // now, so a CLI that is not ready stops the run before any stage starts.
     // Otherwise the gate checks before the first call a stage turns out to need.
-    if (freshConfirmed || distillPlan.digests > 0) {
+    if (freshConfirmed || selected.reusedBy[session.quality].size < plan.digests) {
       if (!(await ready()).ok) return 1;
     }
     // An unconfirmed check (`line`) was already printed by the session.
@@ -972,7 +1034,13 @@ async function distillSelectedSessions(opts: {
     // Stage 1: read each session.
     phase = "reading";
     write();
-    const digestProgress = startStageProgress(out, "Reading sessions", progressOptions);
+    const digestProgress = startStageProgress(out, "Reading sessions", {
+      ...progressOptions,
+      host: deps.host,
+      readProjects: projectNames,
+      reusableReads: selected.reusedBy[session.quality],
+    });
+    readingProgress = digestProgress;
     const digestResult = await runDigestStage({
       ...common,
       entries: plan.eligible,
@@ -1137,7 +1205,7 @@ async function distillSelectedSessions(opts: {
       if (authorResult.notAttempted.length) {
         hadFailure = true;
         say(
-          `${counted(authorResult.notAttempted.length, "remaining prompt was", "remaining prompts were")} not attempted. Run distill again to continue.`,
+          `${counted(authorResult.notAttempted.length, "remaining prompt was", "remaining prompts were")} not attempted. Run npx human-hindsight reflect to continue.`,
         );
       }
     } catch (err) {
@@ -1149,6 +1217,21 @@ async function distillSelectedSessions(opts: {
       hadFailure = true;
     }
 
+    const reviews = readPreferenceReviews(home);
+    const observed = readObservedPreferences(home);
+    const batch = new Set(Object.keys(digestsForCluster));
+    const highlight = reviews.invalid
+      ? undefined
+      : observed.find(
+          (pref) =>
+            pref.verified &&
+            pref.occurrences.some(
+              (occurrence) => occurrence.quote && batch.has(occurrence.exportName ?? ""),
+            ) &&
+            preferenceReview(home, pref, reviews.reviews).status !== "dismissed",
+        );
+    let instruction: string | undefined;
+    let preferenceSummariesIncomplete = false;
     // Working preferences come last. A failure here never fails the library.
     if (args.generalize !== false) {
       phase = "preferences";
@@ -1161,9 +1244,10 @@ async function distillSelectedSessions(opts: {
           model,
           identityRunner: session.identityRunner,
           selection: "all-candidates",
+          current: reviews.invalid ? undefined : { prefs: observed, reviews: reviews.reviews },
         });
         if (preferences?.damaged)
-          say("Your saved working agreements could not be read and will be rebuilt.");
+          say("Your saved preference summaries could not be read and will be rebuilt.");
         if (preferences) {
           const result = await runGeneralizeStage({
             home,
@@ -1176,14 +1260,22 @@ async function distillSelectedSessions(opts: {
             progress,
           });
           progress.end();
+          preferenceSummariesIncomplete = result.status !== "done";
           say(preferencesLine(result, preferences.inputs.length));
+          if (highlight)
+            instruction = result.lessonList.find(
+              (lesson) =>
+                lesson.disposition === "generalized" &&
+                lesson.source_ids.includes(preferenceId(highlight)),
+            )?.instruction;
         } else {
           write("No working preferences to summarize yet.");
         }
       } catch (error) {
+        preferenceSummariesIncomplete = true;
         progress.end();
         say(
-          `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run distill again to finish them.`,
+          `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run npx human-hindsight reflect to finish them.`,
         );
       } finally {
         progress.end();
@@ -1199,7 +1291,7 @@ async function distillSelectedSessions(opts: {
     if (behind > 0) {
       command(
         `${counted(behind, "earlier prompt is", "earlier prompts are")} no longer part of the grouping. ${behind === 1 ? "It is" : "They are"} kept; remove ${behind === 1 ? "it" : "them"} with:`,
-        ["human-hindsight", "prune", ...printedHome(home)].map(shellWord).join(" "),
+        ["npx", "human-hindsight", "prune", ...printedHome(home)].map(shellWord).join(" "),
       );
     }
     // A check that ran and failed inside a stage fails the run like an early one.
@@ -1208,9 +1300,26 @@ async function distillSelectedSessions(opts: {
     if (!checked && !hadFailure)
       say("Everything was already up to date, so no model call was needed.");
     const elapsed = Math.floor((now() - startedAt) / 1000);
+    write();
     write(
-      `${hadFailure ? "Finished with failures" : "Done"} in ${Math.floor(elapsed / 60)}m ${elapsed % 60}s. Library: ${path.join(home, "library")}`,
+      hadFailure
+        ? ink.yellow("Reflection finished with failures")
+        : preferenceSummariesIncomplete
+          ? ink.yellow("Reflection finished with incomplete preference summaries")
+          : ink.bold(ink.green(`${glyph("✓", "+")} Reflection complete`)),
     );
+    say(
+      `${counted(doneTotal, "session read")} ${glyph("·", "-")} ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`,
+    );
+    if (highlight) {
+      write(ink.bold(ink.magenta("What you care about")));
+      say(terminalExcerpt(preferenceReview(home, highlight, reviews.reviews).text, 190));
+      if (instruction) {
+        write(ink.bold(ink.cyan("Working preference")));
+        say(ink.green(terminalExcerpt(instruction, 240)));
+      }
+    }
+    write(`Library: ${path.join(home, "library")}`);
     return hadFailure ? 1 : 0;
   } finally {
     guard.end();
@@ -1220,15 +1329,16 @@ async function distillSelectedSessions(opts: {
 
 export default defineCommand({
   meta: {
-    name: "distill",
-    description: "Build a prompt library from your exported sessions (shows the plan first)",
+    name: "reflect",
+    alias: "distill",
+    description: "Reflect on your exported history to find preferences and reusable prompts",
   },
   args: {
     ...sharedArgs,
     project: {
       type: "string",
       valueHint: "name",
-      description: "Only distill sessions from this project",
+      description: "Only reflect on sessions from this project",
     },
     group: {
       type: "boolean",
@@ -1275,7 +1385,7 @@ export default defineCommand({
       type: "string",
       valueHint: "cli",
       description:
-        "Which local CLI distills: claude, codex, kiro, opencode, or auto (default: auto)",
+        "Which local CLI runs the reflection: claude, codex, kiro, opencode, or auto (default: auto)",
     },
     fresh: {
       type: "boolean",

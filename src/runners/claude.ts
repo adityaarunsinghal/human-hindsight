@@ -339,7 +339,7 @@ function requireIsolation(caps: Capabilities, disableTools = true): void {
   if (!disableTools) {
     throw new AgentRunnerError(
       "cli-error",
-      "The Claude distillation runner requires tools to be disabled.",
+      "The Claude reflection runner requires tools to be disabled.",
     );
   }
   if (
@@ -349,7 +349,7 @@ function requireIsolation(caps: Capabilities, disableTools = true): void {
   ) {
     throw new AgentRunnerError(
       "cli-error",
-      "The installed Claude CLI cannot provide the required distillation isolation " +
+      "The installed Claude CLI cannot provide the required reflection isolation " +
         "(--safe-mode, --tools, --strict-mcp-config, and related controls). " +
         "Update Claude Code or choose --runner codex, kiro, or opencode. No model call was made.",
     );

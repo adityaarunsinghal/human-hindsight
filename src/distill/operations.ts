@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { nextCommandText } from "../commands/next.js";
 import { contentFingerprint, fingerprint } from "../core/fingerprint.js";
 import { atomicWriteFilePrivate, mkdirPrivate } from "../core/fsutil.js";
 
@@ -209,7 +210,9 @@ export function checkSourceGuards(home: string, sources: readonly SourceGuard[])
   for (const source of sources) {
     const content = fs.readFileSync(guardedPath(home, source.path), "utf8");
     if (content.length !== source.length || contentFingerprint(content) !== source.hash)
-      throw new Error(`Source changed: ${source.path}; run normal distill to prepare new inputs`);
+      throw new Error(
+        `Source changed: ${source.path}; run ${nextCommandText("reflect", { home })} to prepare new inputs`,
+      );
   }
 }
 function ownProcess(): WriterOwner {
@@ -343,7 +346,7 @@ function judgeLock(home: string, relative: string, now = Date.now()): LockVerdic
     owner = undefined;
   }
   const who = owner?.command
-    ? `human-hindsight ${owner.command}`
+    ? `npx human-hindsight ${owner.command === "distill" ? "reflect" : owner.command}`
     : "Another human-hindsight command";
   const remove = `If no human-hindsight command is running, remove ${dir} and run this again.`;
   if (owner && owner.host === os.hostname()) {
@@ -618,7 +621,7 @@ export class OperationStore {
     } else {
       if (!generation)
         throw new Error(
-          "This run has no recorded failure history. Strict retry cannot infer failures from missing output. For specific saved tasks, use --recover-tasks=<slugs> --dry-run.",
+          `This run has no recorded failure history. To preview recovery for specific saved tasks, replace task-name with their comma-separated names and run:\n  ${nextCommandText("reflect", { home })} --recover-tasks=task-name --dry-run`,
         );
       this.index = { version: 1, generation: Id.parse(generation), operations: [] };
     }

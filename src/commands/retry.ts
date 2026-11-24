@@ -20,7 +20,7 @@ import { terminalPrivacyReminder } from "../ui/privacy.js";
 import { counted } from "../ui/style.js";
 import { parseConcurrency, resolvePaths } from "./_shared.js";
 import type { DistillArgs, DistillDeps } from "./distill.js";
-import { printedHome, shellWord } from "./next.js";
+import { nextCommandText, printedHome, shellWord } from "./next.js";
 
 /** Validate before workflow defaults or any runner/export activity. */
 export function validateRetryArguments(args: DistillArgs): void {
@@ -72,7 +72,7 @@ function sessionKey(settings: AttemptSettings): string {
 }
 
 function resumeRetryCommand(home: string, args: DistillArgs): string {
-  const parts = ["human-hindsight", "distill", ...printedHome(home)];
+  const parts = ["npx", "human-hindsight", "reflect", ...printedHome(home)];
   if (args["recover-tasks"] !== undefined) parts.push(`--recover-tasks=${args["recover-tasks"]}`);
   else parts.push("--retry-failed", `--retry-stage=${args["retry-stage"] ?? "all"}`);
   for (const key of [
@@ -207,7 +207,7 @@ export async function runStrictRetry(args: DistillArgs, deps: DistillDeps): Prom
           ignoreWorkflowDefaults: true,
           pinHint:
             !explicitPin && !settings.automatic
-              ? "This retry inherits its saved CLI and model. Use normal distill for automatic CLI selection."
+              ? `This retry inherits its saved CLI and model. Run ${nextCommandText("reflect", { home })} for automatic CLI selection.`
               : undefined,
           injectedRunner: deps.runner,
           injectedRunnerName: settings.runner,
@@ -356,7 +356,7 @@ export async function runStrictRetry(args: DistillArgs, deps: DistillDeps): Prom
       write(`  ${item.kind} ${item.unitId}: ${item.reason}`);
     if (result.pendingAdoption.length)
       write(
-        "The recovered grouping is saved; the current grouping is unchanged. A normal distill run can use it.",
+        "The recovered grouping is saved; the current grouping is unchanged. The next reflection can use it.",
       );
     return result.failed.length || result.blocked.length || result.unattempted.length ? 1 : 0;
   } catch (error) {

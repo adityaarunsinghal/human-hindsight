@@ -11,9 +11,9 @@ Generated 2026-11-20T15:30:00.000Z with the kiro runner (generalize sonnet-5.5, 
 ## Layout
 
 - `HANDOFF.md`: a request you can paste to a coding agent to create these specialists.
-- `knowledge/`: the lessons (`lessons.json`), shared agreements, playbooks, one file per role, and the coverage ledger.
+- `knowledge/`: the lessons (`lessons.json`), shared preferences, playbooks, one file per role, and the coverage ledger.
 - `claude/`, `codex/`, `kiro/`, `kirocrew/`: the same roles in each harness's format, when exported.
 
 ## Refreshing
 
-Run `human-hindsight suggest-subagents` again after reviewing more preferences. The saved suggestion is marked stale when the reviewed set changes, and the GUI shows that. This folder is a copy and is not updated in place.
+Run `npx human-hindsight suggest-subagents` again after reviewing more preferences. The saved suggestion is marked stale when the reviewed set changes, and the GUI shows that. This folder is a copy and is not updated in place.

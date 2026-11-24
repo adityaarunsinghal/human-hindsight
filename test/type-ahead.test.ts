@@ -218,6 +218,7 @@ describe("the Start question starts only on s", () => {
     ["a word with an s in it", "yes"],
     ["a bracketed paste holding s", "\u001b[200~s\u001b[201~"],
     ["a bracketed paste in pieces", "\u001b[200~ls -la\r", "s\r\u001b[201~"],
+    ["split bracketed-paste markers", "\u001b[20", "0~", "s", "\u001b[201", "~"],
   ])("%s pasted at the question does not start", async (_name, ...chunks) => {
     const input = fakeInput();
     const output = fakeOutput({ columns: 100, rows: 40 });
@@ -231,6 +232,20 @@ describe("the Start question starts only on s", () => {
     expect(output.text()).toContain(TYPED_AHEAD);
     input.press("q");
     expect(await start).toBe("quit");
+  });
+
+  it("plain mode ignores each line until a multiline paste ends", async () => {
+    const input = fakeInput();
+    const output = fakeOutput();
+    const pending = askStart(START, { input, output, host: fakeHost(), env: PLAIN });
+    await flush();
+    for (const key of ["\u001b[200~\n", "another line\n", "s\n", "\u001b[201~\n"]) {
+      input.press(key);
+      await flush();
+    }
+    expect(await settledOrPending(pending)).toBe("pending");
+    input.press("q\n");
+    expect(await pending).toBe("quit");
   });
 
   it.each([
@@ -612,14 +627,14 @@ describe("Enters typed ahead across the home menu, quick start, and the plan", (
       // Quick start: the person picks "My 25 most recent", then Enter twice more
       // before the plan appears.
       [
-        "Which sessions would you like to start with?",
+        "Which history do you want to reflect on?",
         () => {
           input.press("1");
           input.press(KEYS.enter, KEYS.enter);
         },
       ],
       // Only now does the person see the plan, and declines.
-      ["Start?", () => input.press("q")],
+      ["Start reflection", () => input.press("q")],
     ]);
     const code = await runHome(
       { home },
@@ -628,7 +643,6 @@ describe("Enters typed ahead across the home menu, quick start, and the plan", (
         output,
         host,
         env: ENV,
-        now: () => new Date("2026-11-20T10:00:00Z"),
         processes: fakeRunnerIo(),
         countHistory: async () => {},
         dispatch: async () => {

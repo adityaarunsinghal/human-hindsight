@@ -77,7 +77,7 @@ describe("scan command", () => {
   it("prints a totals line and the export funnel hint", () => {
     const out = captureScan({ "claude-dir": CLAUDE_HOME });
     expect(out).toContain("5 projects, 5 sessions");
-    expect(out).toContain("→ next: human-hindsight export");
+    expect(out).toContain("→ next: npx human-hindsight export");
   });
 
   it("counts one project and one session in the singular", () => {
@@ -110,7 +110,7 @@ describe("scan command", () => {
     expect(out).toContain("api");
     // The orphan .history (transcript deleted) is surfaced, not silently absent.
     expect(out).toContain("1 Kiro CLI session left out: the transcript was deleted");
-    expect(out).toContain("→ next: human-hindsight export");
+    expect(out).toContain("→ next: npx human-hindsight export");
   });
 
   it("shows a kiro-specific message pointing at --kiro-dir when nothing is found", () => {

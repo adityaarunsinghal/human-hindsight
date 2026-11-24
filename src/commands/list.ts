@@ -14,12 +14,12 @@ import { offerNext } from "./next.js";
 export function runList(
   args: { home?: string },
   output: Writable = process.stdout,
-): "distill" | "gui" {
+): "reflect" | "gui" {
   const write = (line = "") => output.write(`${line}\n`);
   const entries = readLibrary(resolvePaths(args).home);
   if (entries.length === 0) {
-    write("Your library is empty. Run distill to build it from your exported sessions.");
-    return "distill";
+    write("Your library is empty. A reflection builds it from your exported sessions.");
+    return "reflect";
   }
   const terminal = output as TerminalOutput;
   const width = terminal.isTTY ? Math.max(20, Math.floor(terminal.columns || 80)) : undefined;

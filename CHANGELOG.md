@@ -4,6 +4,20 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.0] - 2026-11-24
+
+**Understand how you work. Codify your taste.**
+
+- Start with `npx human-hindsight` and choose **Reflect on my history**. If several coding CLIs are ready, choose which one will run the reflection. Review the models, expected calls and text the tool will send to its usual provider. Press `s` to approve.
+- As each session read finishes, the terminal shows the project, what you were trying to do, how it ended and an inferred preference when available. The run continues automatically, summarizing your preferences and writing prompts you can reuse.
+- **Open my reflections** takes you to the Preferences overview in your local browser. Read the observation, where it applies and the passages behind it, then copy the guidance into your next session. Prompts and Subagents keep their own tabs. To generate specialist instructions, run `npx human-hindsight suggest-subagents` and approve its plan.
+
+### Upgrading
+
+- Use `npx human-hindsight reflect` for reflection. `distill` is an alias, including for scripts that set flags or retry a failed stage. The `preferences` and `suggest-subagents` commands keep their names.
+- Existing libraries open in place, including `~/.cc-hindsight`. Hand-edited prompts, ratings and preference reviews carry forward. The version-matched `cc-hindsight` package still forwards the legacy command.
+- `npx human-hindsight export` still writes your messages as local Markdown. You can export or browse a saved library without signing in to a coding CLI.
+
 ## [2.0.0] - 2026-11-24
 
 ### First run
@@ -825,6 +839,7 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
+[2.1.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.5...v2.0.0
 [1.8.5]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.4...v1.8.5
 [1.8.4]: https://github.com/adityaarunsinghal/human-hindsight/compare/v1.8.3...v1.8.4

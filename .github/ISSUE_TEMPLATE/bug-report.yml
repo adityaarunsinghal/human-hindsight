@@ -13,8 +13,8 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS + Node version (`node --version`), and `claude --version` if distill is involved.
-      placeholder: macOS 15 / Node 22.22.0 / claude 2.1.210
+      description: Include your operating system and Node version (`node --version`). If this happened during a reflection, include the coding tool and version shown in the plan.
+      placeholder: macOS 15 / Node 22.22.0 / Claude Code 2.1.210
     validations:
       required: true
   - type: textarea

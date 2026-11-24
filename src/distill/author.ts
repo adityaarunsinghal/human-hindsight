@@ -4,6 +4,7 @@ import type { Writable } from "node:stream";
 import type { z } from "zod";
 import pkg from "../../package.json" with { type: "json" };
 import type { ManifestEntry } from "../commands/export.js";
+import { nextCommandText } from "../commands/next.js";
 import type { AnaphoraRecord } from "../core/anaphora.js";
 import { parseAnaphoraMap, parseSourcesJson, type SourcesJson } from "../core/artifacts.js";
 import {
@@ -294,9 +295,9 @@ function settleInterruptedPublication(
  * new call.
  */
 class EditKeptError extends Error {
-  constructor() {
+  constructor(home: string) {
     super(
-      "Prompt changed while authoring; generated result saved, human edit kept. Run distill with --force to replace the edit with it",
+      `Prompt changed while authoring; generated result saved, human edit kept. Run ${nextCommandText("reflect", { home })} --force to replace the edit with it`,
     );
     this.name = "EditKeptError";
   }
@@ -325,7 +326,7 @@ function publishAuthorResult(
     planned !== undefined ? planned : (input.publication?.expectedOneshotHash ?? null);
   const hash = current === null ? null : contentFingerprint(current);
   if (hash !== expected && hash !== contentFingerprint(value.oneshot)) {
-    throw new EditKeptError();
+    throw new EditKeptError(home);
   }
   const sources = mergeProvenance(latestProvenance(paths.sourcesPath), value.sources);
   mkdirPrivate(paths.dir);
@@ -650,6 +651,7 @@ export function authorHandler(
   toolVersion: string = pkg.version,
   planned?: ReadonlyMap<string, string | null>,
 ): RetryHandler {
+  const reflect = nextCommandText("reflect", { home });
   return {
     guard(input, operation, store) {
       const logical = input.logicalInput as AuthorLogicalInput;
@@ -662,7 +664,7 @@ export function authorHandler(
         fingerprint(currentTask) !== fingerprint(logical.task)
       )
         throw new Error(
-          "Its group changed since it failed; run distill without --retry-failed to prepare it again",
+          `Its group changed since it failed; run ${reflect} without --retry-failed to prepare it again`,
         );
       const currentDigests = loadDigests(home);
       const currentAnaphora = readAnaphora(home);
@@ -676,7 +678,7 @@ export function authorHandler(
             fingerprint(member.anaphora ?? null)
         )
           throw new Error(
-            `The summary of ${member.exportName} changed since it failed; run distill without --retry-failed to prepare it again`,
+            `The summary of ${member.exportName} changed since it failed; run ${reflect} without --retry-failed to prepare it again`,
           );
       }
       const slug = (input.logicalInput as AuthorLogicalInput).task.slug;
@@ -684,14 +686,14 @@ export function authorHandler(
       if (current === null) {
         if (readOptional(guardedPath(home, `library/${slug}/sources.json`)) !== null)
           throw new Error(
-            "Its prompt file is missing but its sources are kept; run distill without --retry-failed to write it again",
+            `Its prompt file is missing but its sources are kept; run ${reflect} without --retry-failed to write it again`,
           );
         return;
       }
       const saved = store?.find(operation.id) ? store.readResult(operation.id) : null;
       if (saved && (saved.value as AuthorResult).oneshot === current) return;
       throw new Error(
-        "A prompt is already saved for it; run distill without --retry-failed to refresh it",
+        `A prompt is already saved for it; run ${reflect} without --retry-failed to refresh it`,
       );
     },
     prepare(input, settings) {
@@ -703,7 +705,7 @@ export function authorHandler(
       // A strict retry cannot overwrite any previously committed prompt version.
       if (current !== null)
         throw new Error(
-          "A prompt is already saved for it; run distill without --retry-failed to refresh it",
+          `A prompt is already saved for it; run ${reflect} without --retry-failed to refresh it`,
         );
       return prepareAuthorRequest(home, logical, settings);
     },
@@ -807,6 +809,7 @@ function savedAuthorResult(
 
 /** Author viable tasks. Each result is durable before publication, and edits are checked again at publication. */
 export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorStageResult> {
+  const reflect = nextCommandText("reflect", { home: opts.home });
   const settings = operationSettings(opts);
   const concurrency = Math.max(1, Math.floor(opts.concurrency ?? DEFAULT_CONCURRENCY));
   const reporter = stageReporter(opts, concurrency);
@@ -905,7 +908,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         );
         if (stale)
           throw new Error(
-            `member preference evidence is stale (${stale.exportName}); re-run distill to refresh the digest`,
+            `member preference evidence is stale (${stale.exportName}); run ${reflect} to refresh the session summary`,
           );
         const total = members.reduce((sum, member) => sum + member.content.length, 0);
         if (total > settings.budget && settings.truncate === "never") {
@@ -916,14 +919,14 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           );
           result.failed.push({
             export: id,
-            error: `task input (${total} chars across ${counted(members.length, "session")}) exceeds the input budget (${settings.budget}). Re-run with --truncate=extreme or a larger --input-budget.`,
+            error: `task input (${total} chars across ${counted(members.length, "session")}) exceeds the input budget (${settings.budget}). Run ${reflect} --truncate=extreme or increase --input-budget.`,
           });
           reporter.item(
             id,
             "blocked",
-            `  ${label}: ${skipGlyph(`blocked: ${total} chars exceed the input budget (${settings.budget}).`)} Re-run with --truncate=extreme or a larger --input-budget.`,
+            `  ${label}: ${skipGlyph(`blocked: ${total} chars exceed the input budget (${settings.budget}).`)} Run ${reflect} --truncate=extreme or increase --input-budget.`,
             true,
-            `${id}: ${counted(total, "character")}, over the size limit per call of ${settings.budget.toLocaleString("en-US")}. Run again with --truncate=extreme or a larger --input-budget.`,
+            `${id}: ${counted(total, "character")}, over the size limit per call of ${settings.budget.toLocaleString("en-US")}. Run ${reflect} --truncate=extreme or increase --input-budget.`,
           );
           return;
         }
@@ -944,8 +947,8 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         if (unchanged && existing && differs && !ourOwn && !opts.force) {
           // Counted as what it is, the same as when a run that writes meets it.
           const reason = existing.oneshot_hash
-            ? "oneshot was edited by hand; re-run with --force to overwrite"
-            : "existing oneshot has no verified generation hash; re-run with --force to overwrite";
+            ? `oneshot was edited by hand; run ${reflect} --force to overwrite`
+            : `existing oneshot has no verified generation hash; run ${reflect} --force to overwrite`;
           result.kept.push({ slug: id, reason });
           reporter.item(id, "skipped", `  ${label}: ${reason}; kept`);
           return;
@@ -1000,8 +1003,8 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
           (!existing?.oneshot_hash || oneshotHash(current) !== existing.oneshot_hash)
         ) {
           const reason = existing?.oneshot_hash
-            ? "oneshot was edited by hand; re-run with --force to overwrite"
-            : "existing oneshot has no verified generation hash; re-run with --force to overwrite";
+            ? `oneshot was edited by hand; run ${reflect} --force to overwrite`
+            : `existing oneshot has no verified generation hash; run ${reflect} --force to overwrite`;
           result.kept.push({ slug: id, reason });
           reporter.item(id, "skipped", `  ${label}: ${reason}; kept`);
           return;
@@ -1042,8 +1045,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         if (error instanceof EditKeptError) {
           // The call succeeded; the person's edit wins until --force.
           breaker.success();
-          const reason =
-            "edited by hand while it was being written; re-run with --force to overwrite";
+          const reason = `edited by hand while it was being written; run ${reflect} --force to overwrite`;
           result.kept.push({ slug: id, reason });
           reporter.item(id, "skipped", `  ${label}: ${reason}; kept`);
           return;
@@ -1063,7 +1065,7 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
     result.notAttempted = unattempted.map((task) => task.slug);
     if (result.notAttempted.length)
       reporter.note(
-        `  ${breaker.reason}. ${counted(result.notAttempted.length, "task")} not attempted. Fix the cause and re-run to resume, or use --no-breaker.`,
+        `  ${breaker.reason}. ${counted(result.notAttempted.length, "task")} not attempted. Fix the cause and run ${reflect} to resume. Add --no-breaker to continue past repeated failures.`,
       );
   } finally {
     store.flush();

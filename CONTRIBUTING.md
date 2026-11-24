@@ -51,9 +51,9 @@ The unit tests also refuse to run when `src/gui/client.generated.ts` is older th
 | Area | Responsibility |
 | --- | --- |
 | `src/sources/` | Discover sessions, extract the person's turns, and build the timeline for Claude Code, Codex, Kiro CLI, Kiro Crew, and OpenCode. |
-| `src/runners/` | Find each CLI, probe its capabilities, run one isolated model call, classify failures, and switch between ready CLIs (`pool.ts`). |
+| `src/runners/` | Find each CLI, probe its capabilities, run isolated model calls and handle failures within the approved plan. |
 | `src/core/` | Dedupe messages, attach evidence for short replies and outcomes, resolve model plans, and read and write local artifacts. |
-| `src/distill/` | Stage inputs, prompt templates, response schemas, consent screens, checkpoints, reuse, and recovery. |
+| `src/distill/` | Inputs for reflection, prompt templates, response schemas, consent screens, checkpoints, reuse and recovery. The public command is `reflect` and `distill` is its compatibility alias. |
 | `src/commands/` and `src/ui/` | Commands, the guided home screen, help, and terminal rendering. |
 | `src/gui/` | The local browser view. |
 
@@ -70,7 +70,7 @@ To fix an extraction bug:
 3. Assert the exported messages in order and the drop reasons.
 4. Fix the source or the shared rule (`src/sources/wrappers.ts` for leading machine blocks), and update the rule comment with the shape it now handles.
 
-`export --verbose` lists every drop and can print snippets of the input, so share synthetic reproductions only.
+`npx human-hindsight export --verbose` lists every drop and can print snippets of the input, so share synthetic reproductions only.
 
 ### Add a runner
 
@@ -79,7 +79,7 @@ A runner implements `AgentRunner` in `src/runners/types.ts`: `run`, plus `prefli
 - `preflight`, probes, and plan screens never make a model call. A probe that contacts the CLI's service is announced on screen before it runs. The readiness check runs after consent, just before the first model call, once for each distinct model of the stages the plan will run, and not at all when everything is reused.
 - Start the CLI through the shared spawn helper in `src/runners/shared.ts`. On POSIX every child gets a process group of its own, so Ctrl-C and timeouts end the CLI and anything it started, with SIGKILL when SIGTERM is ignored.
 - Model choice comes only from the CLI's own model list. A plan label such as `balanced/bulk` never reaches a CLI.
-- Every CLI that may receive text is named in the approved plan. An explicit `--runner` or `--model` pins the run to one CLI.
+- Name every CLI that may receive text in the plan. An interactive reflection asks the person to choose one when several are ready. Their choice pins that reflection to the selected CLI. An explicit `--runner` or `--model` also pins the run.
 - Failures are classified from the CLI's typed error report first, then stderr. Each text rule cites a captured, sanitized fixture in `test/fixtures/runner-errors/`.
 - Use the CLI's isolation controls. When a CLI saves the generated session, clean up only sessions the run can prove it created.
 - Prompt templates and response schemas are shared across runners. A behavior change to a template bumps that stage's prompt version.

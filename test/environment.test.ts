@@ -144,8 +144,8 @@ describe("environment fixes: exactly one line per situation", () => {
 
   it.each([
     // --home wins over the variable, so exporting it would change nothing.
-    ["flag", undefined, 'human-hindsight --home "$HOME/.human-hindsight"'],
-    ["flag", "doctor", 'human-hindsight doctor --home "$HOME/.human-hindsight"'],
+    ["flag", undefined, 'npx human-hindsight --home "$HOME/.human-hindsight"'],
+    ["flag", "doctor", 'npx human-hindsight doctor --home "$HOME/.human-hindsight"'],
     ["environment", undefined, 'export HUMAN_HINDSIGHT_HOME="$HOME/.human-hindsight"'],
     ["default", undefined, 'export HUMAN_HINDSIGHT_HOME="$HOME/.human-hindsight"'],
   ] as const)("a data home chosen by %s (%s) is fixed with the setting that wins", (by, command, fix) => {
@@ -170,7 +170,7 @@ describe("environment fixes: exactly one line per situation", () => {
       claudeIo({ loggedIn: true }),
       counts({ claude: FIVE }),
     );
-    expect(snapshot.dataHomeFix).toMatch(/^human-hindsight --home "/);
+    expect(snapshot.dataHomeFix).toMatch(/^npx human-hindsight --home "/);
     expect(environmentFixes(snapshot)[0]).not.toContain("export HUMAN_HINDSIGHT_HOME");
   });
 

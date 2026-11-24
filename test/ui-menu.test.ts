@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { HIDE_CURSOR, SHOW_CURSOR, type TerminalHost } from "../src/ui/live.js";
 import { chooseMenu, chooseMenuAnswer, type MenuChoice, readLine } from "../src/ui/prompt.js";
 import { type FakeInput, type FakeOutput, fakeInput, fakeOutput, KEYS } from "./support/tty.js";
+import { terminalModel } from "./ui-vt.js";
 
 const ENV = { TERM: "xterm-256color" };
 
@@ -73,6 +74,32 @@ describe("single-key menu", () => {
     const answer = chooseMenuAnswer({ title: "Pick", choices: choices(3, 1) }, io);
     input.press(KEYS.enter);
     expect(await answer).toBe("k2");
+  });
+
+  it("keeps a wrapped recommendation inside the arrow gutter when the cursor moves", async () => {
+    const { input, output, io } = terminal();
+    output.resize(32, 24);
+    const answer = chooseMenuAnswer(
+      {
+        title: "Pick",
+        choices: [
+          { key: "resume", label: "Resume my reflection", recommended: true },
+          { key: "read", label: "Read my preferences" },
+          { key: "quit", label: "Quit", detail: "q" },
+        ],
+      },
+      io,
+    );
+    input.press(KEYS.down);
+    await settle();
+    const vt = terminalModel(32);
+    vt.apply(output.raw());
+    const frame = vt.rows().join("\n");
+    expect(frame).toContain("• Resume my reflection\n  (recommended)\n› Read my preferences");
+    expect(frame.match(/^› /gm)).toHaveLength(1);
+    expect(frame.match(/^• /gm)).toHaveLength(2);
+    input.press(KEYS.down, KEYS.enter);
+    expect(await answer).toBe("quit");
   });
 
   it("quits at the end of input", async () => {

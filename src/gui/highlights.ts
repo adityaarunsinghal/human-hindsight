@@ -146,14 +146,12 @@ export function readHighlights(home: string): GuiHighlights {
     prefs: readObservedPreferences(home),
     reviews: readPreferenceReviews(home).reviews,
   };
-  // The overview asks the person to accept the ones that fit, so preferences
-  // still to review come first; an accepted one says so in its reason.
+  // Strongly supported preferences come first. A saved review adds context.
   const candidates = current.prefs
     .map((pref) => ({ pref, status: preferenceReview(home, pref, current.reviews).status }))
     .filter(({ status }) => status !== "dismissed")
     .sort(
       (a, b) =>
-        Number(a.status === "accepted") - Number(b.status === "accepted") ||
         b.pref.count - a.pref.count ||
         b.pref.lastAuthoredAt.localeCompare(a.pref.lastAuthoredAt) ||
         preferenceId(a.pref).localeCompare(preferenceId(b.pref)),
@@ -179,7 +177,7 @@ export function readHighlights(home: string): GuiHighlights {
           .slice(0, 3)
           .map((role) => ({
             id: roleKey(role.name),
-            reason: `Brings together ${countLabel(role.lesson_ids.length, "working agreement")}`,
+            reason: `Brings together ${countLabel(role.lesson_ids.length, "preference")}`,
           })),
       );
       if (subagents.length < 3 && artifact.shared.length) {
