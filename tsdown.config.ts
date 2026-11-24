@@ -14,8 +14,7 @@ export default defineConfig({
   // stay in the repository. Third-party licenses ship separately in dist/.
   minify: true,
   sourcemap: false,
-  // package.json has "type": "module", so ESM output can use plain .js —
-  // keeping the bin path ./dist/cli.js accurate.
+  // The CommonJS launcher imports this ESM bundle after checking Node's version.
   fixedExtension: false,
   deps: { alwaysBundle: [/.*/] },
   // jsonc-parser's UMD entry has dynamic requires; bundle its ESM entry instead.

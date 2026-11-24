@@ -5,10 +5,10 @@ import { DatabaseSync } from "node:sqlite";
 import { Writable } from "node:stream";
 import { runMain } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderPlan } from "../src/claude/consent.js";
 import { runExport } from "../src/commands/export.js";
 import { resolveTarget } from "../src/commands/preferences.js";
 import { runRetention } from "../src/commands/retention.js";
+import { renderPlan } from "../src/distill/consent.js";
 import { main } from "../src/main.js";
 import { opencodeSource } from "../src/sources/opencode/index.js";
 import { resolveOpenCodePaths } from "../src/sources/opencode/paths.js";
@@ -104,7 +104,7 @@ describe("OpenCode source stores", () => {
       ["scan", ...rawArgs, "--source", "opencode"],
     ]) {
       await runMain(main, { rawArgs: args });
-      expect(vi.mocked(console.log).mock.calls.flat().join("\n")).toContain("1 sessions");
+      expect(vi.mocked(console.log).mock.calls.flat().join("\n")).toMatch(/\b1 session\b(?!s)/);
     }
   });
 
@@ -174,6 +174,7 @@ describe("OpenCode source stores", () => {
         claudeDir: path.join(root, "absent-claude"),
         codexDir: path.join(root, "absent-codex"),
         kiroDir: path.join(root, "absent-kiro"),
+        kirocrewDir: path.join(root, "absent-kirocrew"),
         opencodeDir: root,
       }).map((s) => s.name),
     ).toEqual(["opencode"]);
@@ -251,8 +252,12 @@ describe("OpenCode source stores", () => {
       );
     if (failure === "locked") db.exec("BEGIN EXCLUSIVE");
     try {
+      // A locked store is read without the product's one-second lock wait; the
+      // same export path then sees the busy store at once.
+      const sources =
+        failure === "locked" ? [opencodeSource(root, file, { busyTimeoutMs: 0 })] : undefined;
       expect(() =>
-        runExport({ home: exportedHome(), "opencode-dir": root, source: "auto", output }),
+        runExport({ home: exportedHome(), "opencode-dir": root, source: "auto", output, sources }),
       ).toThrow(/Cannot read OpenCode store/);
     } finally {
       if (failure === "locked") db.exec("ROLLBACK");
@@ -312,6 +317,72 @@ describe("OpenCode source stores", () => {
     expect(stats.totalMessages).toBe(1);
   });
 
+  it("skips and counts a damaged JSON message or part file, and exports the rest", () => {
+    const write = (relative: string, value: string) => {
+      const target = path.join(root, "storage", relative);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, value);
+    };
+    write(
+      "session/project/ses_json.json",
+      JSON.stringify({ id: "ses_json", directory: "/work/old", time: { updated: now } }),
+    );
+    write(
+      "message/ses_json/msg_1.json",
+      JSON.stringify({ id: "msg_1", role: "user", time: { created: now } }),
+    );
+    write("part/msg_1/prt_1.json", JSON.stringify({ id: "prt_1", type: "text", text: "Keep me" }));
+    // Writes cut short when OpenCode was killed: a message and a part.
+    write("message/ses_json/msg_2.json", '{"id":"msg_2","role":"user","ti');
+    write("part/msg_1/prt_2.json", '{"id":"prt_2","type":"te');
+    // A message whose id cannot name a part folder.
+    write("message/ses_json/msg_3.json", JSON.stringify({ id: "../x", role: "user" }));
+    // Under auto, the other stores are read too.
+    const claudeDir = path.join(root, "claude");
+    fs.mkdirSync(path.join(claudeDir, "projects", "-work-app"), { recursive: true });
+    fs.writeFileSync(
+      path.join(claudeDir, "projects", "-work-app", "s1.jsonl"),
+      `${JSON.stringify({ type: "user", timestamp: "2026-10-20T10:00:00Z", message: { role: "user", content: "claude side" } })}\n`,
+    );
+    const empty = path.join(root, "empty");
+    for (const source of ["opencode", "auto"] as const) {
+      const stats = runExport({
+        home: exportedHome(),
+        "opencode-dir": root,
+        "claude-dir": claudeDir,
+        "codex-dir": empty,
+        "kiro-dir": empty,
+        "kirocrew-dir": empty,
+        source,
+        output,
+      });
+      expect(stats.sessionsByOrigin.opencode).toBe(1);
+      expect(stats.badLines).toBe(3);
+      expect(stats.readErrors).toBe(0);
+      expect(stats.totalMessages).toBe(source === "auto" ? 2 : 1);
+    }
+  });
+
+  it("keeps the export name and id of a session OpenCode moved into its database", () => {
+    // v1 database copy first; then OpenCode migrates it to v2 and drops v1.
+    session("ses_moved", 1);
+    user("msg_moved", "ses_moved", 1, "Plan the release", 1);
+    const run = () =>
+      runExport({ home: exportedHome(), "opencode-dir": root, source: "opencode", output });
+    const read = () =>
+      JSON.parse(fs.readFileSync(path.join(exportedHome(), "exports", "manifest.json"), "utf8"));
+    run();
+    const [before] = read();
+    db.exec("DELETE FROM part; DELETE FROM message; DELETE FROM session");
+    session("ses_moved", 2);
+    user("msg_moved", "ses_moved", 2, "Plan the release", 1);
+    run();
+    const after = read();
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ export: before.export, sessionId: before.sessionId });
+    expect(after[0].source).not.toBe(before.source);
+  });
+
   it("does not create missing stores or try to read in-memory history", () => {
     expect(
       discoverOpenCode(path.join(root, "absent"), path.join(root, "absent/opencode.db")),
@@ -341,5 +412,16 @@ describe("OpenCode path resolution", () => {
     expect(
       resolveOpenCodePaths({}, { XDG_DATA_HOME: "/xdg", OPENCODE_DB: "next.db" }).opencodeDb,
     ).toBe("/xdg/opencode/next.db");
+    // An empty folder or file counts as unset, never as the current folder.
+    expect(
+      resolveOpenCodePaths(
+        { dir: "", db: "" },
+        {
+          XDG_DATA_HOME: "/xdg",
+          HUMAN_HINDSIGHT_OPENCODE_DIR: "",
+          HUMAN_HINDSIGHT_OPENCODE_DB: " ",
+        },
+      ),
+    ).toMatchObject({ opencodeDir: "/xdg/opencode", opencodeDb: "/xdg/opencode/opencode.db" });
   });
 });

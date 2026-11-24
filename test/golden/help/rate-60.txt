@@ -1,0 +1,24 @@
+human-hindsight rate
+Record whether a saved prompt worked for you.
+
+Examples
+  human-hindsight rate review-changes up
+    Give a positive rating. Use a name from list.
+
+  human-hindsight rate review-changes down
+    Record a negative rating for that prompt.
+
+Common options
+  --home <dir>  Data directory (env HUMAN_HINDSIGHT_HOME;
+                legacy CC_HINDSIGHT_HOME is also supported)
+  --follow-up   Offer next steps in a terminal (disable with
+                --no-follow-up)
+
+More help
+  human-hindsight rate --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

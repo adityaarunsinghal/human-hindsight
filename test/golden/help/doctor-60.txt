@@ -1,0 +1,23 @@
+human-hindsight doctor
+Check your history, installed tools, and sign-in hints.
+
+Examples
+  human-hindsight doctor
+    See which tools are installed and how to fix setup
+    problems.
+
+  human-hindsight doctor --home ./hindsight-data
+    Check the data directory you plan to use.
+
+Common options
+  --home <dir>  Data directory (env HUMAN_HINDSIGHT_HOME;
+                legacy CC_HINDSIGHT_HOME is also supported)
+
+More help
+  human-hindsight doctor --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

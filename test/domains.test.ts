@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { buildDigestPrompt } from "../src/claude/prompts/digest.js";
 import { domainPath, MAX_DOMAIN_DEPTH, matchesDomain } from "../src/core/domains.js";
+import { buildDigestPrompt } from "../src/distill/prompts/digest.js";
 
 describe("hierarchical domains", () => {
   it("groups old flat labels without needing a migration or model call", () => {

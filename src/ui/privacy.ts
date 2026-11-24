@@ -1,11 +1,19 @@
 import type { Writable } from "node:stream";
 import { PRIVACY_REMINDER, PUBLIC_REPOSITORY_URL } from "../core/privacy.js";
+import { canAnimate, type TerminalOutput, terminalWidth } from "./mode.js";
+import { wrapText } from "./wrap.js";
 
-/** OSC 8 makes the phrase clickable in terminals; plain output retains the URL. */
+/**
+ * The open-source notice. It always includes the destination for terminals
+ * that ignore hyperlinks. On a terminal it wraps at word boundaries to the
+ * width (the address stays whole); in a pipe it stays one line.
+ */
 export function terminalPrivacyReminder(output: Writable): string {
-  const linked =
-    (output as Writable & { isTTY?: boolean }).isTTY && process.env.TERM !== "dumb"
-      ? `\u001b]8;;${PUBLIC_REPOSITORY_URL}\u001b\\fully open source\u001b]8;;\u001b\\`
-      : `fully open source (${PUBLIC_REPOSITORY_URL})`;
-  return PRIVACY_REMINDER.replace("fully open source", linked);
+  // Hyperlink escapes need a drawing terminal; stdin is irrelevant here.
+  const url = canAnimate({ output })
+    ? `\u001b]8;;${PUBLIC_REPOSITORY_URL}\u001b\\${PUBLIC_REPOSITORY_URL}\u001b]8;;\u001b\\`
+    : PUBLIC_REPOSITORY_URL;
+  const text = PRIVACY_REMINDER.replace("fully open source", `fully open source (${url})`);
+  const terminal = output as TerminalOutput;
+  return terminal.isTTY ? wrapText(text, terminalWidth(terminal)).join("\n") : text;
 }

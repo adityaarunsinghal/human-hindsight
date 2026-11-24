@@ -1,0 +1,8 @@
+{
+  "id": "sess_c1500008-0000-4000-8000-000000000008",
+  "title": "k15 crew agentMode plus harness envelope",
+  "agentMode": "kirocrew-worker",
+  "workspacePaths": ["/proj/crew-app"],
+  "createdAt": "2026-11-08T10:00:00.000Z",
+  "status": "idle"
+}

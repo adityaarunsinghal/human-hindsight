@@ -1,0 +1,8 @@
+{
+  "id": "sess_c1500012-0000-4000-8000-000000000012",
+  "title": "control crew agentMode alone",
+  "agentMode": "kirocrew",
+  "workspacePaths": ["/proj/plain-app"],
+  "createdAt": "2026-11-12T10:00:00.000Z",
+  "status": "idle"
+}

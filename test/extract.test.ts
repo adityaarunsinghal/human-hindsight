@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { extractMessages, extractTimeline } from "../src/core/extract.js";
+import { extractMessages, extractTimeline } from "../src/sources/claude/extract.js";
 
 /** Load a synthetic fixture as raw JSONL lines (never the real ~/.claude). */
 function load(name: string): string[] {
@@ -8,154 +8,136 @@ function load(name: string): string[] {
   return readFileSync(url, "utf8").split(/\r?\n/);
 }
 
-const texts = (name: string): string[] => extractMessages(load(name)).messages.map((m) => m.text);
-const reasons = (name: string): string[] => extractMessages(load(name)).drops.map((d) => d.reason);
-
-describe("R1 — admission (user + attachment are candidates; others ignored)", () => {
-  it("admits user and attachment entries, silently ignores assistant", () => {
-    const res = extractMessages(load("r1-admission.jsonl"));
-    expect(res.messages.map((m) => m.text)).toEqual([
-      "Please add a health check endpoint.",
-      "Also add structured logging.",
-    ]);
-    expect(res.drops).toEqual([]); // the assistant turn is not a candidate, not a Drop
-    expect(res.badLines).toBe(0);
-  });
-});
-
-describe("R2 — rejection before reading content", () => {
-  it("drops isMeta entries, keeps genuine ones", () => {
-    expect(texts("r2-meta.jsonl")).toEqual(["Real human message."]);
-    expect(reasons("r2-meta.jsonl")).toEqual(["R2: isMeta"]);
-  });
-
-  it("drops isSidechain (subagent) entries", () => {
-    expect(texts("r2-sidechain.jsonl")).toEqual([]);
-    expect(reasons("r2-sidechain.jsonl")).toEqual(["R2: isSidechain"]);
-  });
-
-  it("drops isCompactSummary and isVisibleInTranscriptOnly entries", () => {
-    expect(texts("r2-compact-summary.jsonl")).toEqual([]);
-    expect(reasons("r2-compact-summary.jsonl")).toEqual([
-      "R2: isCompactSummary",
-      "R2: isVisibleInTranscriptOnly",
-    ]);
-  });
-
-  it("drops sdk entrypoint automation", () => {
-    expect(texts("r2-sdk-entrypoint.jsonl")).toEqual([]);
-    expect(reasons("r2-sdk-entrypoint.jsonl")).toEqual(["R2: sdk entrypoint"]);
-  });
-
-  it("GUARD: keeps promptSource==='sdk' when entrypoint is not sdk (VS Code typing)", () => {
-    expect(texts("r2-promptsource-guard.jsonl")).toEqual([
-      "Typed by a human in VS Code — keep me.",
-    ]);
-    expect(reasons("r2-promptsource-guard.jsonl")).toEqual([]);
-  });
-});
-
-describe("R3 — attachment admission (human queued_command prompts only)", () => {
-  it("admits the human prompt, drops assistant-origin and non-prompt attachments", () => {
-    expect(texts("r3-queued-command.jsonl")).toEqual(["Run the tests again."]);
-    expect(reasons("r3-queued-command.jsonl")).toEqual([
-      "R3: non-human or non-prompt attachment",
-      "R3: non-human or non-prompt attachment",
-    ]);
-  });
-
-  // Regression: real transcripts carry the queued text in `prompt`, NOT `text`.
-  // The original fixture was hand-written with `text`, so the suite pinned a
-  // shape the CLI never emits and R3 silently dropped every genuinely-queued
-  // human message (measured on a real 286-session store: 253 messages, ~42.9k
-  // chars, i.e. 100% of human queued input). Both spellings are accepted now:
-  // `prompt` is what ships, `text` keeps the older fixture's contract.
-  it("reads the queued text from the real `prompt` field", () => {
-    expect(texts("r3-queued-command-prompt-field.jsonl")).toEqual(["its ok let it cook"]);
-  });
-
-  it("still drops a task-notification commandMode and assistant origin", () => {
-    // Same file: only the first entry is genuine typed input. A
-    // `commandMode: "task-notification"` queued_command is machine text (the
-    // agent reporting a finished background task), and must never be admitted.
-    expect(reasons("r3-queued-command-prompt-field.jsonl")).toEqual([
-      "R3: non-human or non-prompt attachment",
-      "R3: non-human or non-prompt attachment",
-    ]);
-  });
-});
-
-describe("R4 — string content cleaned per R6", () => {
-  it("trims kept text and drops a whitespace-only piece", () => {
-    expect(texts("r4-string-content.jsonl")).toEqual(["Fix the flaky test in auth.spec.ts"]);
-    expect(reasons("r4-string-content.jsonl")).toEqual(["R6: empty piece"]);
-  });
-});
-
-describe("R5 — tool-rejection recovery ('the user said:')", () => {
-  it("recovers only the human follow-up after the marker; ignores plain tool output", () => {
-    expect(texts("r5-tool-rejection.jsonl")).toEqual([
-      "Use a migration instead of editing the schema directly.",
-    ]);
-    // Plain tool_result is machine output — ignored, not dropped.
-    expect(reasons("r5-tool-rejection.jsonl")).toEqual([]);
-  });
-});
-
-describe("R6 — per-piece cleaning", () => {
-  it("keeps human prose beside a dropped <ide_opened_file> block; empty entries emit nothing", () => {
-    const res = extractMessages(load("r6-ide-block-survival.jsonl"));
-    expect(res.messages.map((m) => m.text)).toEqual(["Refactor this file to use async/await."]);
-    expect(res.drops.map((d) => d.reason)).toEqual([
-      "R6: machine block (leading <)",
-      "R6: machine block (leading <)",
-    ]);
-  });
-
-  it("drops interruption markers per-piece while human prose survives", () => {
-    expect(texts("r6-interruption.jsonl")).toEqual(["Stop and just show me the diff."]);
-    expect(reasons("r6-interruption.jsonl")).toEqual([
-      "R6: interruption marker",
-      "R6: interruption marker",
-    ]);
-  });
-});
-
-describe("R7 — AskUserQuestion decision recovery", () => {
-  it('renders [decision] "Q" → A lines, joining multi-select answers', () => {
-    expect(texts("r7-decision.jsonl")).toEqual([
+/**
+ * One row per rule fixture: the human text that must survive and the drop
+ * reasons that must be recorded, in order. Every row is also checked against
+ * the SessionSource law (extract and timeline give identical human turns). Wrapper
+ * shapes beyond these fixtures are covered row by row in test/wrappers.test.ts.
+ */
+const RULES: { rule: string; fixture: string; kept: string[]; drops: string[] }[] = [
+  {
+    rule: "R1: user and attachment are candidates; an assistant turn is not a drop",
+    fixture: "r1-admission.jsonl",
+    kept: ["Please add a health check endpoint.", "Also add structured logging."],
+    drops: [],
+  },
+  {
+    rule: "R2: isMeta is rejected",
+    fixture: "r2-meta.jsonl",
+    kept: ["Real human message."],
+    drops: ["R2: isMeta"],
+  },
+  {
+    rule: "R2: a subagent thread is rejected",
+    fixture: "r2-sidechain.jsonl",
+    kept: [],
+    drops: ["R2: isSidechain"],
+  },
+  {
+    rule: "R2: compact summaries and transcript-only entries are rejected",
+    fixture: "r2-compact-summary.jsonl",
+    kept: [],
+    drops: ["R2: isCompactSummary", "R2: isVisibleInTranscriptOnly"],
+  },
+  {
+    rule: "R2: an sdk entrypoint is automation",
+    fixture: "r2-sdk-entrypoint.jsonl",
+    kept: [],
+    drops: ["R2: sdk entrypoint"],
+  },
+  {
+    // VS Code sets promptSource "sdk" on genuine typing; only entrypoint counts.
+    rule: "R2 guard: promptSource sdk with a non-sdk entrypoint is kept",
+    fixture: "r2-promptsource-guard.jsonl",
+    kept: ["Typed by a human in VS Code — keep me."],
+    drops: [],
+  },
+  {
+    rule: "R3: only human queued prompts are admitted (legacy text field)",
+    fixture: "r3-queued-command.jsonl",
+    kept: ["Run the tests again."],
+    drops: ["R3: non-human or non-prompt attachment", "R3: non-human or non-prompt attachment"],
+  },
+  {
+    // Real transcripts carry the queued text in `prompt`; reading only `text`
+    // once dropped every queued human message. A task-notification commandMode
+    // and an assistant origin in the same file stay machine text.
+    rule: "R3: the queued text is read from the real prompt field",
+    fixture: "r3-queued-command-prompt-field.jsonl",
+    kept: ["its ok let it cook"],
+    drops: ["R3: non-human or non-prompt attachment", "R3: non-human or non-prompt attachment"],
+  },
+  {
+    rule: "R4: string content is trimmed; a whitespace-only piece is dropped",
+    fixture: "r4-string-content.jsonl",
+    kept: ["Fix the flaky test in auth.spec.ts"],
+    drops: ["R6: empty piece"],
+  },
+  {
+    // Plain tool_result is machine output: ignored, not a drop.
+    rule: "R5: only the follow-up after 'the user said:' is recovered",
+    fixture: "r5-tool-rejection.jsonl",
+    kept: ["Use a migration instead of editing the schema directly."],
+    drops: [],
+  },
+  {
+    rule: "R6: prose beside an IDE block survives; a reminder-only entry emits nothing",
+    fixture: "r6-ide-block-survival.jsonl",
+    kept: ["Refactor this file to use async/await."],
+    drops: ["R6: machine block (leading <)", "R6: machine block (leading <)"],
+  },
+  {
+    rule: "R6: interruption markers are dropped per piece",
+    fixture: "r6-interruption.jsonl",
+    kept: ["Stop and just show me the diff."],
+    drops: ["R6: interruption marker", "R6: interruption marker"],
+  },
+  {
+    rule: 'R7: decisions render as [decision] "Q" → A, multi-select joined',
+    fixture: "r7-decision.jsonl",
+    kept: [
       '[decision] "Which database should we use?" → PostgreSQL',
       '[decision] "Which features to include?" → Auth, Billing',
-    ]);
-    expect(reasons("r7-decision.jsonl")).toEqual([]);
-  });
-});
+    ],
+    drops: [],
+  },
+  {
+    rule: "R10: slash commands with and without args; command output still drops",
+    fixture: "r10-command.jsonl",
+    kept: ["[command] /review src/", "[command] /deploy"],
+    drops: ["R6: machine block (leading <)"],
+  },
+  {
+    rule: "R11: an image becomes [image pasted] in position",
+    fixture: "r11-image.jsonl",
+    kept: ["Here's the screenshot of the error:\n\n[image pasted]", "[image pasted]"],
+    drops: [],
+  },
+  {
+    rule: "tolerant parsing: corrupt and non-object lines are skipped",
+    fixture: "corrupt-lines.jsonl",
+    kept: ["First valid message.", "Second valid message."],
+    drops: [],
+  },
+];
 
-describe("R10 — command recovery (before the R6 '<' drop)", () => {
-  it("recovers slash-commands with/without args; <local-command-stdout> still drops", () => {
-    expect(texts("r10-command.jsonl")).toEqual(["[command] /review src/", "[command] /deploy"]);
-    expect(reasons("r10-command.jsonl")).toEqual(["R6: machine block (leading <)"]);
-  });
-});
-
-describe("R11 — non-text input markers", () => {
-  it("emits [image pasted] in position beside text, and standalone", () => {
-    expect(texts("r11-image.jsonl")).toEqual([
-      "Here's the screenshot of the error:\n\n[image pasted]",
-      "[image pasted]",
-    ]);
-    expect(reasons("r11-image.jsonl")).toEqual([]);
+describe("claude extract rules, one fixture each", () => {
+  it.each(RULES)("$rule", ({ fixture, kept, drops }) => {
+    const lines = load(fixture);
+    const res = extractMessages(lines);
+    expect(res.messages.map((m) => m.text)).toEqual(kept);
+    expect(res.drops.map((d) => d.reason)).toEqual(drops);
+    // SessionSource law: identical (timestamp, text) human turns, in file order.
+    const human = extractTimeline(lines)
+      .filter((e) => e.kind === "human")
+      .map(({ timestamp, text }) => ({ timestamp, text }));
+    expect(human).toEqual(res.messages.map(({ timestamp, text }) => ({ timestamp, text })));
   });
 });
 
 describe("tolerant parsing", () => {
-  it("skips and counts corrupt / non-object lines, never aborting", () => {
-    const res = extractMessages(load("corrupt-lines.jsonl"));
-    expect(res.messages.map((m) => m.text)).toEqual([
-      "First valid message.",
-      "Second valid message.",
-    ]);
-    expect(res.badLines).toBe(3); // broken JSON, bare `42`, and truncated object
+  it("counts corrupt / non-object lines, never aborting (kept text: rules table)", () => {
+    expect(extractMessages(load("corrupt-lines.jsonl")).badLines).toBe(3); // broken JSON, bare `42`, truncated object
   });
 
   it("tolerates entries missing a timestamp, preserving order with ts=''", () => {
@@ -167,19 +149,6 @@ describe("tolerant parsing", () => {
     ]);
   });
 
-  it("emits no message when an entry has zero surviving pieces", () => {
-    const lines = [
-      JSON.stringify({
-        type: "user",
-        timestamp: "t",
-        message: { role: "user", content: "<system-reminder>noise</system-reminder>" },
-      }),
-    ];
-    const res = extractMessages(lines);
-    expect(res.messages).toEqual([]);
-    expect(res.drops).toHaveLength(1);
-  });
-
   it("ignores blank lines without counting them as corrupt", () => {
     const res = extractMessages(["", "   ", ""]);
     expect(res.messages).toEqual([]);
@@ -187,7 +156,7 @@ describe("tolerant parsing", () => {
   });
 });
 
-describe("mixed-session — the regression wall (exact output, in order)", () => {
+describe("mixed-session: the regression wall (exact output, in order)", () => {
   it("yields exactly the human messages, nothing else, with drops recorded", () => {
     const res = extractMessages(load("mixed-session.jsonl"));
     expect(res.messages.map((m) => m.text)).toEqual([
@@ -210,42 +179,14 @@ describe("mixed-session — the regression wall (exact output, in order)", () =>
     for (const drop of res.drops) expect(drop.snippet.length).toBeLessThanOrEqual(120);
   });
 
-  it("preserves timestamps on emitted messages", () => {
-    const res = extractMessages(load("mixed-session.jsonl"));
+  it("preserves timestamps and agrees with the timeline (SessionSource law)", () => {
+    const lines = load("mixed-session.jsonl");
+    const res = extractMessages(lines);
     expect(res.messages[0]?.timestamp).toBe("2026-02-01T00:00:00.000Z");
     expect(res.messages.at(-1)?.timestamp).toBe("2026-02-01T00:00:08.000Z");
+    const human = extractTimeline(lines)
+      .filter((e) => e.kind === "human")
+      .map(({ timestamp, text }) => ({ timestamp, text }));
+    expect(human).toEqual(res.messages.map(({ timestamp, text }) => ({ timestamp, text })));
   });
-});
-
-describe("claude extract — SessionSource law (extract ↔ timeline agreement)", () => {
-  // Every extracted human message must appear as a `human` timeline event with
-  // identical (timestamp, text), in file order. The dedupe key and the
-  // anaphora↔export index alignment both depend on it, so a divergence
-  // misattributes context to the wrong turn. kiro has had this test since the
-  // multi-backend seam landed; the claude side did not, which is how the R3
-  // field-name bug could halve the corpus without any test noticing.
-  // Verified separately against the real 286-session store: 970 messages, 0
-  // violations. Fixtures keep that check hermetic.
-  for (const fixture of [
-    "r1-admission.jsonl",
-    "r3-queued-command.jsonl",
-    "r3-queued-command-prompt-field.jsonl",
-    "r4-string-content.jsonl",
-    "r5-tool-rejection.jsonl",
-    "r6-interruption.jsonl",
-    "r7-decision.jsonl",
-    "r10-command.jsonl",
-    "r11-image.jsonl",
-    "mixed-session.jsonl",
-    "corrupt-lines.jsonl",
-  ]) {
-    it(`holds for ${fixture}`, () => {
-      const lines = load(fixture);
-      const msgs = extractMessages(lines).messages;
-      const humanEvents = extractTimeline(lines).filter((e) => e.kind === "human");
-      expect(humanEvents.map((e) => ({ timestamp: e.timestamp, text: e.text }))).toEqual(
-        msgs.map((m) => ({ timestamp: m.timestamp, text: m.text })),
-      );
-    });
-  }
 });

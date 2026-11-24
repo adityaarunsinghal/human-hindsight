@@ -1,0 +1,31 @@
+[
+  {
+    "cwd": "/mnt/users/u/.human-hindsight/runner-scratch/run-AbC123",
+    "sessions": [
+      {
+        "sessionId": "4c888695-6fb3-428b-8f5d-55227239a2f4",
+        "source": "v2",
+        "title": "[human-hindsight distill] probe 5",
+        "updatedAt": "2026-11-21T21:28:24.000Z",
+        "messageCount": 2
+      },
+      {
+        "sessionId": "sess_fe33fc26-98bf-47c3-8bbe-d8f9a98fd455",
+        "source": "v3",
+        "title": "[human-hindsight distill] probe 3",
+        "updatedAt": "2026-11-21T21:27:42.247Z",
+        "executionTarget": "local",
+        "status": "idle"
+      },
+      {
+        "sessionId": "sess_00000000-0000-4000-8000-000000000001",
+        "source": "v3",
+        "title": "a human session that shares the cwd",
+        "updatedAt": "2026-11-21T21:20:00.000Z",
+        "executionTarget": "local",
+        "status": "idle"
+      }
+    ],
+    "complete": true
+  }
+]

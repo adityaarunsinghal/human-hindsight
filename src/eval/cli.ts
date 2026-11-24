@@ -4,10 +4,12 @@ import type { Readable, Writable } from "node:stream";
 import { parseArgs } from "node:util";
 import { z } from "zod";
 import pkg from "../../package.json" with { type: "json" };
-import { askYesNo } from "../claude/consent.js";
-import { FILE_MODE } from "../core/fsutil.js";
+import { atomicWriteFilePrivate, FILE_MODE } from "../core/fsutil.js";
 import { parseRunnerMode, resolveRunner } from "../runners/registry.js";
 import type { AgentRunner } from "../runners/types.js";
+import type { TerminalHost } from "../ui/live.js";
+import type { PromptIo } from "../ui/mode.js";
+import { askStart } from "../ui/start.js";
 import {
   EVALUATION_VERSIONS,
   type EvaluationResult,
@@ -63,6 +65,9 @@ export interface EvaluationCliDeps {
   input?: Readable;
   output?: Writable;
   resolve?: typeof resolveRunner;
+  /** Terminal signals and the environment for the Start question. Tests pass their own. */
+  host?: TerminalHost;
+  env?: PromptIo["env"];
 }
 
 function summarize(
@@ -85,17 +90,10 @@ function summarize(
   return passed;
 }
 
+/** Replace the record atomically (flushed temporary, then rename). */
 function save(file: string, record: RecordedEvaluation): void {
-  const temporary = `${file}.tmp`;
-  try {
-    fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, {
-      flag: "wx",
-      mode: FILE_MODE,
-    });
-    fs.renameSync(temporary, file);
-  } finally {
-    fs.rmSync(temporary, { force: true });
-  }
+  // `--out` can point anywhere: an existing folder keeps its permissions.
+  atomicWriteFilePrivate(file, `${JSON.stringify(record, null, 2)}\n`, { foreignFolder: true });
 }
 
 /** Development evaluator: zero model calls unless --live and spending consent both hold. */
@@ -169,8 +167,13 @@ export async function runEvaluationCli(
     write(
       "Only synthetic fixtures are sent. Backend validation/transport retries may add attempts.",
     );
+    // Starting spends: the Start question, which takes only `s`.
     const consent =
-      values.yes || (await askYesNo("Run this evaluation?", { input: deps.input, output }));
+      values.yes ||
+      typeof (await askStart(
+        { title: "Run this evaluation?" },
+        { input: deps.input, output, host: deps.host, env: deps.env },
+      )) === "object";
     if (!consent) {
       write("Declined; no model call or result file was created.");
       return 2;

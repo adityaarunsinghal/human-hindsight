@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeAll, describe, expect, it } from "vitest";
-import { decodeProjectDir, discoverProjects, type ProjectInfo } from "../src/core/discover.js";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { decodeProjectDir, discoverProjects } from "../src/sources/claude/discover.js";
+import type { ProjectInfo } from "../src/sources/types.js";
 
 // Tests NEVER read the real `~/.claude`. Everything below points at the
 // synthetic fixture tree committed under test/fixtures/claude-home.
@@ -140,5 +141,89 @@ describe("discoverProjects", () => {
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
     }
+  });
+});
+
+describe("discoverProjects: project name from the recorded working directory", () => {
+  const homes: string[] = [];
+  afterAll(() => {
+    for (const home of homes.splice(0)) fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  /** A synthetic claude dir: one project folder, sessions as file → [cwd, mtime]. */
+  function store(dirName: string, sessions: Record<string, [string | undefined, string]>) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "hh-discover-"));
+    homes.push(home);
+    const dir = path.join(home, "projects", dirName);
+    fs.mkdirSync(dir, { recursive: true });
+    for (const [file, [cwd, mtime]] of Object.entries(sessions)) {
+      const entry = { type: "user", ...(cwd ? { cwd } : {}), message: { content: "hi" } };
+      const target = path.join(dir, file);
+      fs.writeFileSync(target, `{"type":"summary"}\n${JSON.stringify(entry)}\n`);
+      fs.utimesSync(target, new Date(mtime), new Date(mtime));
+    }
+    return home;
+  }
+  const only = (home: string) => discoverProjects(home, { countEntries: false })[0];
+
+  it("names the project after the recorded directory, dashes included", () => {
+    const home = store("-w-human-hindsight", { "a.jsonl": ["/w/human-hindsight", "2026-01-01"] });
+    expect(only(home)?.shortName).toBe("human-hindsight");
+    expect(only(home)?.decodedPath).toBe("/w/human-hindsight");
+  });
+
+  it("falls back to decoding the folder name when no directory is recorded", () => {
+    const home = store("-w-human-hindsight", { "a.jsonl": [undefined, "2026-01-01"] });
+    expect(only(home)?.shortName).toBe("hindsight");
+    expect(only(home)?.decodedPath).toBe("/w/human/hindsight");
+  });
+
+  it("skips the transcript read when asked to", () => {
+    const home = store("-w-human-hindsight", { "a.jsonl": ["/w/human-hindsight", "2026-01-01"] });
+    const [project] = discoverProjects(home, { countEntries: false, readProjectPaths: false });
+    expect(project?.shortName).toBe("hindsight");
+  });
+
+  it.each([
+    ["the folder's own directory wins", "-w-two", "two"],
+    ["neither matches: the choice is still stable", "-w-other", "one"],
+  ])("two sessions with different directories: %s, whatever their times", (_, dir, name) => {
+    for (const [older, newer] of [
+      ["2026-01-01", "2026-02-01"],
+      ["2026-02-01", "2026-01-01"],
+    ]) {
+      const home = store(dir, {
+        "a.jsonl": ["/w/one", older as string],
+        "b.jsonl": ["/w/two", newer as string],
+      });
+      expect(only(home)?.shortName).toBe(name);
+    }
+  });
+
+  it("reads at most 64 KB from at most three sessions", () => {
+    const sessions: Record<string, [undefined, string]> = {};
+    for (const n of [1, 2, 3, 4, 5]) sessions[`s${n}.jsonl`] = [undefined, "2026-01-01"];
+    const home = store("-w-big", sessions);
+    // Every file pretends to be 50 MB of one long line with no recorded directory.
+    const reads: { file: string; bytes: number }[] = [];
+    const readChunk = (file: string, position: number, length: number) => {
+      const bytes = Math.max(0, Math.min(length, 50 * 1024 * 1024 - position));
+      reads.push({ file: path.basename(file), bytes });
+      return Buffer.alloc(bytes, "x");
+    };
+    const [project] = discoverProjects(home, { countEntries: false, readChunk });
+    expect(project?.shortName).toBe("big");
+    const perFile = new Map<string, number>();
+    for (const r of reads) perFile.set(r.file, (perFile.get(r.file) ?? 0) + r.bytes);
+    expect([...perFile.keys()].sort()).toEqual(["s1.jsonl", "s2.jsonl", "s3.jsonl"]);
+    for (const bytes of perFile.values()) expect(bytes).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it("finds a directory recorded after a long first line inside the cap", () => {
+    const home = store("-w-x", {});
+    const file = path.join(home, "projects", "-w-x", "a.jsonl");
+    const long = JSON.stringify({ type: "summary", text: "y".repeat(40 * 1024) });
+    fs.writeFileSync(file, `${long}\n${JSON.stringify({ type: "user", cwd: "/w/x-y" })}\n`);
+    expect(only(home)?.shortName).toBe("x-y");
   });
 });

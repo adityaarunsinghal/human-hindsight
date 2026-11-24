@@ -1,0 +1,26 @@
+│ Check my setup
+Node <version> on <platform>
+Data home (writable):
+  <HOME>
+
+│ Tool         History on disk    Command         Sign-in
+│ Claude Code  no history yet     ✓ claude 9.9.9  ✓ ready
+│              Claude Code uses a cloud provider here, and
+│              the CLI itself resolves family names such as
+│              sonnet, which may be older than the newest
+│              model there. To choose, pass --model or set
+│              the model in Claude Code's own settings.
+│ Codex        outside selection  ! missing
+│ Kiro CLI     outside selection  ! missing
+│ Kiro Crew    outside selection  uses kiro-cli
+│ OpenCode     outside selection  ! missing
+
+Claude Code has no history in this selection. Run:
+  claude
+For a custom store, use --claude-dir, --codex-dir,
+--kiro-dir, --kirocrew-dir, or --opencode-dir.
+
+Distill would use Claude Code: it is the first ready CLI in
+the default order. The sign-in column is a hint from each
+tool's own status command; distill checks access after you
+approve its plan.

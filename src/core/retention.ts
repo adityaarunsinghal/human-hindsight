@@ -4,9 +4,14 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { parse as parseToml, stringify as stringifyToml, type TomlTable } from "smol-toml";
 import type { ResolvedPaths } from "../commands/_shared.js";
+import {
+  KIROCREW_ARCHIVE_SUBDIR,
+  KIROCREW_SESSIONS_SUBDIR,
+  kirocrewStoreExists,
+} from "../sources/kirocrew/discover.js";
 import type { SourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
-import { DIR_MODE, FILE_MODE } from "./fsutil.js";
+import { atomicWriteFilePrivate } from "./fsutil.js";
 
 /** Claude has no supported "forever" value; 1,000 years avoids date overflow. */
 export const LONG_RETENTION_DAYS = 365_000;
@@ -173,26 +178,53 @@ function codexPlan(file: string): RetentionPlan {
   };
 }
 
+/**
+ * Kiro Crew is advisory, like kiro-cli: closing a chat archives it instead of
+ * deleting it, and the store keeps `archive/` snapshots. No retention switch is
+ * documented, so nothing is written and no key is invented. The entry reports
+ * where the chats live so a person can back them up.
+ */
+function kirocrewPlan(dir: string): RetentionPlan {
+  const sessions = path.join(dir, KIROCREW_SESSIONS_SUBDIR);
+  return {
+    tool: "kirocrew",
+    changes: [],
+    notes: [
+      `Kiro Crew chats: ${sessions} (snapshots in ${path.join(sessions, KIROCREW_ARCHIVE_SUBDIR)}).`,
+      "Closing a Kiro Crew chat archives it rather than deleting it.",
+      "No retention-limit setting is documented for Kiro Crew; nothing is changed and no setting is invented.",
+      "Kiro Crew runs kiro-cli underneath; those kiro-cli copies follow the kiro entry.",
+    ],
+  };
+}
+
 /** Read-only preview. Auto selects existing tool directories, including fresh installs. */
 export function planRetention(mode: SourceMode, dirs: ResolvedPaths): RetentionPlan[] {
   const tools: { name: SourceName; dir: string }[] = [
     { name: "claude", dir: dirs.claudeDir },
     { name: "codex", dir: dirs.codexDir },
     { name: "kiro", dir: dirs.kiroDir },
+    { name: "kirocrew", dir: dirs.kirocrewDir },
     { name: "opencode", dir: dirs.opencodeDir },
   ];
   return tools
     .filter((tool) =>
       mode === "auto"
-        ? fs.existsSync(tool.dir) ||
-          (tool.name === "opencode" &&
-            (fs.existsSync(dirs.opencodeConfigDir) || fs.existsSync(dirs.opencodeDb)))
+        ? tool.name === "kirocrew"
+          ? // The Crew data dir also holds config, memory and skills; only a
+            // chat store makes the entry relevant, the same probe source
+            // discovery uses.
+            kirocrewStoreExists(tool.dir)
+          : fs.existsSync(tool.dir) ||
+            (tool.name === "opencode" &&
+              (fs.existsSync(dirs.opencodeConfigDir) || fs.existsSync(dirs.opencodeDb)))
         : mode === tool.name,
     )
     .map(({ name, dir }) => {
       try {
         if (name === "claude") return claudePlan(path.join(dir, "settings.json"));
         if (name === "codex") return codexPlan(path.join(dir, "config.toml"));
+        if (name === "kirocrew") return kirocrewPlan(dir);
         if (name === "opencode")
           return {
             tool: name,
@@ -238,16 +270,12 @@ export function checkRetentionPlan(plan: RetentionPlan): void {
 export function applyRetentionPlan(plan: RetentionPlan): string | undefined {
   if (!plan.target || plan.after === undefined || plan.changes.length === 0) return;
   checkRetentionPlan(plan);
-  fs.mkdirSync(path.dirname(plan.target), { recursive: true, mode: DIR_MODE });
   const stamp = `${new Date().toISOString().replace(/[:.]/g, "-")}-${randomUUID()}`;
   const backup = plan.before === null ? undefined : `${plan.target}.human-hindsight-${stamp}.bak`;
-  if (backup) fs.writeFileSync(backup, plan.before ?? "", { flag: "wx", mode: FILE_MODE });
-  const temp = `${plan.target}.human-hindsight-${stamp}.tmp`;
-  try {
-    fs.writeFileSync(temp, plan.after, { flag: "wx", mode: FILE_MODE });
-    fs.renameSync(temp, plan.target);
-  } finally {
-    fs.rmSync(temp, { force: true });
-  }
+  // The backup name is unique, so the atomic write cannot replace an earlier
+  // backup. It is flushed before the settings are replaced.
+  // The settings folder belongs to the other tool: its permissions stay as they are.
+  if (backup) atomicWriteFilePrivate(backup, plan.before ?? "", { foreignFolder: true });
+  atomicWriteFilePrivate(plan.target, plan.after, { foreignFolder: true });
   return backup;
 }

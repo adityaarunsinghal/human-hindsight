@@ -1,16 +1,136 @@
 import { domainPath, matchesDomain } from "../core/domains.js";
+import type { Lesson, Role } from "../core/subagents.js";
+import type { SubagentTarget } from "../core/subagents-paths.js";
 import { createDomainPicker, renderDomainContext } from "./domains.js";
-import { icon, setIconButton } from "./icons.js";
+import type { GuiHighlights } from "./highlights.js";
+import { type IconName, icon, setIconButton } from "./icons.js";
+import {
+  landingTab,
+  OVERVIEW_PLACE,
+  placeOnSwitch,
+  selectWidth,
+  TABS,
+  type Tab,
+} from "./landing.js";
 import { renderMarkdown } from "./markdown.js";
-import type { GuiEntry, GuiPreference, GuiSnapshot } from "./server.js";
-import { initTips } from "./tips.js";
+import {
+  type AgreementFacts,
+  agreementDetail,
+  agreementGroups,
+  agreementHighlights,
+  agreementPlace,
+  agreementSummary,
+  agreementsMarkdown,
+  bySupport,
+  GENERAL_GROUPING_NOTE,
+  incompleteNotice,
+  type OrganizedAgreements,
+  OUTCOME_NOT_VERIFIED_LABEL,
+  oneTimeNotes,
+  organizeAgreements,
+  overview,
+  promptsGuideSentence,
+  supportLabel,
+} from "./overview.js";
+import type {
+  GuiAgreements,
+  GuiEntry,
+  GuiPreference,
+  GuiSnapshot,
+  GuiSubagents,
+} from "./server.js";
+import {
+  chooseSessionKey,
+  forgetSessionKey,
+  type KeyStorage,
+  rememberRestartCommand,
+  SessionError,
+  sessionApi,
+  sessionRecovery,
+} from "./session.js";
+import {
+  commandRow,
+  notice,
+  type PanelContext,
+  renderCoverage,
+  renderIntro,
+  renderPlaybooks,
+  renderRole,
+  renderShared,
+} from "./subagents-panel.js";
+import {
+  changedAgreements,
+  countLabel,
+  exportFilename,
+  exportHref,
+  exportLabel,
+  roleKey,
+  roleSearchText,
+  type SourceStatus,
+  type SubagentView,
+  staleSuggestionText,
+  subagentsHash,
+  subagentsKeyFromHash,
+} from "./subagents-view.js";
+import { commandNamed, earlierPromptNotice, guidance, initTips, promptCountLines } from "./tips.js";
 
-type Tab = "prompts" | "preferences";
+// The session key arrives in the address fragment. Take it out of the address
+// bar before anything else runs, so it is not bookmarked, shared, or kept in
+// history, and keep it in this tab's sessionStorage so a reload keeps working.
+// The rules live in session.ts.
+function tabStorage(): KeyStorage | null {
+  try {
+    return window.sessionStorage;
+  } catch {
+    return null;
+  }
+}
+const keyStorage = tabStorage();
+let sessionToken = "";
+/** True once the server refused a key this tab had: it was restarted. */
+let keyRefused = false;
+function keyWasRefused(token: string) {
+  forgetSessionKey(keyStorage, token);
+  if (token !== sessionToken) return;
+  sessionToken = "";
+  keyRefused = true;
+}
+let api = sessionApi(sessionToken, (input, init) => fetch(input, init), keyWasRefused);
+/** Adopt a key from the address or this tab. True when the key changed. */
+function adoptKey(): boolean {
+  const { token, strippedHash } = chooseSessionKey(location.hash, keyStorage);
+  if (strippedHash !== null) {
+    history.replaceState(
+      null,
+      "",
+      strippedHash ? `#${strippedHash}` : `${location.pathname}${location.search}`,
+    );
+  }
+  if (!token || token === sessionToken) return false;
+  sessionToken = token;
+  keyRefused = false;
+  api = sessionApi(token, (input, init) => fetch(input, init), keyWasRefused);
+  return true;
+}
+adoptKey();
+/** The recovery text on one line, for a status line. */
+function refusalText(): string {
+  const { text, command } = sessionRecovery(keyRefused, keyStorage);
+  return `${text} ${command}`;
+}
+/** What to say when the library refuses this tab, with the command to run. */
+function recoveryNotice(): HTMLElement[] {
+  const { text, command } = sessionRecovery(keyRefused, keyStorage);
+  return [textElement("p", text), commandRow(command)];
+}
 interface BrowseState {
   selected: string;
   query: string;
   domain: string;
   sort: string;
+  /** Where the reader and the list were scrolled when the tab was left. */
+  viewerScroll: number;
+  listScroll: number;
 }
 interface BrowseItem {
   id: string;
@@ -22,6 +142,12 @@ interface BrowseItem {
   searchText: string;
   prompt?: GuiEntry;
   preference?: GuiPreference;
+  agreement?: Lesson;
+  facts?: AgreementFacts;
+  role?: Role;
+  view?: SubagentView;
+  label?: string;
+  tail?: string;
 }
 
 const ALL = "all";
@@ -32,6 +158,7 @@ const search = byId<HTMLInputElement>("search");
 const sort = byId<HTMLSelectElement>("sort");
 const list = byId("list");
 const copy = byId<HTMLButtonElement>("copy");
+const overviewButton = byId<HTMLButtonElement>("overview-button");
 const allPreferences = byId<HTMLButtonElement>("all-preferences");
 const acceptedPreferences = byId<HTMLButtonElement>("accepted-preferences");
 const savedPreferences = byId<HTMLButtonElement>("saved-preferences");
@@ -40,23 +167,39 @@ const body = byId("body");
 const source = byId<HTMLTextAreaElement>("source");
 const previewButton = byId<HTMLButtonElement>("preview-mode");
 const sourceButton = byId<HTMLButtonElement>("source-mode");
-const tabs = {
+const exportTarget = byId<HTMLSelectElement>("export-target");
+const exportAll = byId<HTMLButtonElement>("export-all");
+const exportStatus = byId("export-status");
+const exportControls = [byId("export-target-label"), exportTarget, exportAll, exportStatus];
+const tabs: Record<Tab, HTMLButtonElement> = {
   prompts: byId<HTMLButtonElement>("prompts-tab"),
   preferences: byId<HTMLButtonElement>("preferences-tab"),
+  subagents: byId<HTMLButtonElement>("subagents-tab"),
 };
 const states: Record<Tab, BrowseState> = {
-  prompts: { selected: "", query: "", domain: "", sort: "newest" },
-  preferences: { selected: ALL, query: "", domain: "", sort: "frequency" },
+  prompts: { ...OVERVIEW_PLACE, query: "", domain: "", sort: "newest" },
+  preferences: { ...OVERVIEW_PLACE, query: "", domain: "", sort: "frequency" },
+  // Roles keep the order the suggestion gives them; the sort control is hidden.
+  subagents: { ...OVERVIEW_PLACE, query: "", domain: "", sort: "newest" },
 };
 let tab: Tab = "prompts";
 let promptItems: BrowseItem[] = [];
 let preferenceItems: BrowseItem[] = [];
 let preferences: GuiPreference[] = [];
+let agreementItems: BrowseItem[] = [];
+let agreements: GuiAgreements | null = null;
+let organized: OrganizedAgreements = organizeAgreements([]);
+/** Agreement groups the person opened, kept open across re-renders. */
+const openGroups = new Set<string>();
+let oneTimeOpen = false;
+let listOneTimeOpen = false;
+let listEarlierOpen = false;
+let highlights: GuiHighlights | null = null;
+let libraryLoaded = false;
 let preferencesMarkdown = "";
 let acceptedMarkdown = "";
 let projectInstructions: GuiSnapshot["projectInstructions"] = [];
 let acceptedCount = 0;
-let reviewToken = "";
 let reviewsInvalid = false;
 let reviewBusy = false;
 let consolidation: GuiSnapshot["consolidation"] = null;
@@ -66,6 +209,12 @@ let mode: "preview" | "source" = "preview";
 let copyTimer: ReturnType<typeof setTimeout> | undefined;
 let selectionVersion = 0;
 let renderedHash = "";
+// Read for the hashless landing page or the Subagents tab. A saved review invalidates the read.
+let subagents: GuiSubagents | undefined;
+let subagentItems: BrowseItem[] = [];
+let subagentsRequest: Promise<GuiSubagents | undefined> | undefined;
+let subagentsFailed = false;
+let subagentsGeneration = 0;
 const domainPicker = createDomainPicker(byId("domain-picker"), selectDomain);
 const tipsController = initTips(() => commands);
 
@@ -88,11 +237,13 @@ function dateLabel(value: string) {
     ? ""
     : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
 }
-function taskCount(count: number) {
-  return `${count} ${count === 1 ? "task" : "tasks"}`;
+function browsingAgreements() {
+  return !states.preferences.selected || states.preferences.selected.startsWith("agreement/");
 }
 function items() {
-  return tab === "prompts" ? promptItems : preferenceItems;
+  if (tab === "prompts") return promptItems;
+  if (tab === "subagents") return subagentItems;
+  return browsingAgreements() && agreementItems.length ? agreementItems : preferenceItems;
 }
 function currentItem(): BrowseItem | undefined {
   if (tab === "preferences" && states[tab].selected === ACCEPTED) {
@@ -129,7 +280,7 @@ function currentItem(): BrowseItem | undefined {
   if (tab === "preferences" && states[tab].selected === ALL && preferences.length) {
     return {
       id: ALL,
-      title: "Preference candidates",
+      title: "All preferences",
       body: preferencesMarkdown,
       // Generated provenance and frequency comments stay in the copyable source.
       preview: preferences.map((preference) => `- ${preference.text}`).join("\n"),
@@ -141,14 +292,22 @@ function currentItem(): BrowseItem | undefined {
   return items().find((item) => item.id === states[tab].selected);
 }
 function route(nextTab: Tab, id: string) {
-  return `#${nextTab}${id && !(nextTab === "preferences" && id === ALL) ? `/${encodeURIComponent(id)}` : ""}`;
+  if (nextTab === "subagents") return subagentsHash(id);
+  if (nextTab === "preferences" && id.startsWith("agreement/")) {
+    return `#preferences/agreement/${encodeURIComponent(id.slice("agreement/".length))}`;
+  }
+  return `#${nextTab}${id ? `/${encodeURIComponent(id)}` : ""}`;
 }
 function readRoute() {
   try {
     const hash = location.hash.slice(1);
-    if (hash === "preferences" || hash.startsWith("preferences/")) {
+    const subagentKey = subagentsKeyFromHash(hash);
+    if (subagentKey !== null) {
+      tab = "subagents";
+      states.subagents.selected = subagentKey;
+    } else if (hash === "preferences" || hash.startsWith("preferences/")) {
       tab = "preferences";
-      states.preferences.selected = decodeURIComponent(hash.slice("preferences/".length)) || ALL;
+      states.preferences.selected = decodeURIComponent(hash.slice("preferences/".length));
     } else {
       tab = "prompts";
       // Preserve bookmarks from the original prompt-only viewer.
@@ -180,68 +339,88 @@ function selectDomain(path: string) {
   rememberControls();
   states[tab].domain = path;
   syncDomainControls();
-  render();
+  render("replace", true);
   byId("domain").focus({ preventScroll: true });
 }
 function syncControls() {
   const isPreferences = tab === "preferences";
-  const noun = isPreferences ? "preferences" : "prompts";
-  for (const key of ["prompts", "preferences"] as const) {
+  const isSubagents = tab === "subagents";
+  const showingAgreements = browsingAgreements() && agreementItems.length > 0;
+  const preferenceNoun = showingAgreements ? "agreements" : "preferences";
+  const noun = isSubagents ? "roles" : isPreferences ? preferenceNoun : "prompts";
+  for (const key of TABS) {
     tabs[key].setAttribute("aria-selected", String(tab === key));
     tabs[key].tabIndex = tab === key ? 0 : -1;
   }
   byId("browse-panel").setAttribute("aria-labelledby", `${tab}-tab`);
   byId("browser").setAttribute("aria-label", `Browse ${noun}`);
-  byId("list").setAttribute("aria-label", isPreferences ? "Preferences" : "Prompts");
+  byId("list").setAttribute(
+    "aria-label",
+    isSubagents
+      ? "Suggested subagents"
+      : isPreferences
+        ? showingAgreements
+          ? "Working agreements"
+          : "Preferences"
+        : "Prompts",
+  );
   byId("search-label").textContent = `Search ${noun}`;
-  search.placeholder = isPreferences ? "Search preferences…" : "Search prompts…";
+  search.placeholder = `Search ${noun}…`;
+  // Roles have no domains, and keep the order the suggestion gives them.
+  byId("filter-row").hidden = isSubagents;
   search.value = states[tab].query;
   sort.setAttribute("aria-label", `Sort ${noun}`);
-  const sorts = [
-    ...(isPreferences ? [["frequency", "Frequent"]] : []),
-    ["newest", "Newest"],
-    ["title", "A–Z"],
+  // Agreements all share the date they were made, so they have no Newest order.
+  const sorts: [string, string][] = [
+    ...(isPreferences ? [["frequency", "Most sessions"] as [string, string]] : []),
+    ...(showingAgreements ? [] : [["newest", "Newest"] as [string, string]]),
+    ["title", "A to Z"],
   ];
   sort.replaceChildren(
     ...sorts.map(([value, label]) => {
-      const option = textElement("option", label ?? "") as HTMLOptionElement;
-      option.value = value ?? "";
+      const option = textElement("option", label) as HTMLOptionElement;
+      option.value = value;
       return option;
     }),
   );
+  if (!sorts.some(([value]) => value === states[tab].sort)) states[tab].sort = sorts[0]?.[0] ?? "";
   sort.value = states[tab].sort;
+  // Wide enough for the longest label of this list, at every width.
+  sort.style.width = sort.style.flexBasis = selectWidth(sorts.map(([, label]) => label));
   syncDomainControls();
   allPreferences.hidden = !isPreferences;
   allPreferences.disabled = !preferences.length;
-  allPreferences.textContent = "All";
-  allPreferences.title = "View all candidates";
+  allPreferences.textContent = "All preferences";
+  allPreferences.title = "Every preference found in your sessions, to accept or dismiss";
   acceptedPreferences.hidden = !isPreferences;
   acceptedPreferences.textContent = `Accepted · ${acceptedCount}`;
-  acceptedPreferences.title = "Accepted instructions";
+  acceptedPreferences.title =
+    "Accepted instructions: the preferences you accepted, in your wording, ready to paste";
   savedPreferences.hidden = !isPreferences || !consolidation;
-  savedPreferences.textContent = consolidation?.stale ? "Saved · outdated" : "Saved";
-  savedPreferences.title = "Saved consolidation";
+  savedPreferences.textContent = consolidation?.stale
+    ? "Consolidated · out of date"
+    : "Consolidated";
+  savedPreferences.title = "A saved merge of similar preferences into one block";
   byId("list-empty-text").textContent = `No matching ${noun}.`;
-  byId("empty-title").textContent = isPreferences ? "No preferences yet" : "No prompts yet";
-  byId("empty-text").textContent = isPreferences
-    ? "Distill your sessions in the terminal, then reload this page to review preferences."
-    : "Build your library in the terminal, then reload this page.";
-  byId("empty-command").textContent = isPreferences ? "human-hindsight distill" : "human-hindsight";
   byId("viewer").setAttribute(
     "aria-label",
-    isPreferences ? "Selected preference" : "Selected prompt",
+    isSubagents ? "Selected subagent" : isPreferences ? "Selected preference" : "Selected prompt",
   );
   byId("view-mode").setAttribute("aria-label", isPreferences ? "Preference view" : "Prompt view");
   body.setAttribute("aria-label", isPreferences ? "Rendered preference" : "Rendered prompt");
-  document.title = `${isPreferences ? "Preferences" : "Prompts"} · Human Hindsight`;
+  document.title = `${isSubagents ? "Suggested subagents" : isPreferences ? "Preferences" : "Prompts"} · Human Hindsight`;
+  tipsController.refresh(tab);
 }
 function setMode(next: typeof mode) {
   mode = next;
-  body.hidden = mode !== "preview";
-  source.hidden = mode !== "source";
+  const item = currentItem();
+  const hasReader = tab !== "subagents" && item && !item.agreement;
+  // A preference's text is its heading, so only its Markdown source is ever shown.
+  body.hidden = !hasReader || mode !== "preview" || Boolean(item?.preference);
+  source.hidden = !hasReader || mode !== "source";
   previewButton.setAttribute("aria-pressed", String(mode === "preview"));
   sourceButton.setAttribute("aria-pressed", String(mode === "source"));
-  if (mode === "source") {
+  if (!source.hidden) {
     source.style.height = "0px";
     source.style.height = `${Math.max(260, source.scrollHeight + 2)}px`;
   }
@@ -288,7 +467,13 @@ function renderRelated(item: BrowseItem | undefined) {
         row.append(line);
       }
       if (!instruction.sourceIds.length) {
-        row.append(textElement("span", "Legacy result without per-rule source mapping.", "muted"));
+        row.append(
+          textElement(
+            "span",
+            "Saved by an earlier version, without links to its sources.",
+            "muted",
+          ),
+        );
       }
       relatedList.append(row);
     }
@@ -300,7 +485,7 @@ function renderRelated(item: BrowseItem | undefined) {
       const row = document.createElement("li");
       row.append(
         relatedLink("preferences", id, plainText(preference.text)),
-        textElement("span", `Stated in ${taskCount(preference.count)}`, "muted"),
+        textElement("span", supportLabel(preference.count, preference.verified, "long"), "muted"),
       );
       relatedList.append(row);
     }
@@ -348,11 +533,12 @@ function copyLabel() {
       : states.preferences.selected === ACCEPTED
         ? "Copy instructions"
         : states.preferences.selected === ALL
-          ? "Review candidates first"
+          ? "Review preferences first"
           : "Copy preference";
 }
 function canCopy(item = currentItem()) {
   if (!item?.body || reviewBusy) return false;
+  if (item.agreement) return false;
   if (item.preference) return item.preference.review.status === "accepted";
   if (item.id === ALL) return false;
   if (item.id === SAVED) return consolidation?.reviewed === true && !consolidation.stale;
@@ -373,7 +559,7 @@ function renderReview(item: BrowseItem | undefined) {
         ? review.project || "Choose a project"
         : "This task";
   byId("review-summary").textContent = [
-    review.stale ? "Evidence changed" : review.status,
+    reviewStateLabel(review),
     scope,
     reviewsInvalid ? "Reviews unavailable" : "",
   ]
@@ -382,22 +568,29 @@ function renderReview(item: BrowseItem | undefined) {
   byId("review-summary").title = [
     preference.verified
       ? `${preference.basis === "explicit" ? "Explicit instruction" : "Inferred preference"}. Open Source evidence to read the original quotation.`
-      : "Legacy observation. Check its evidence before accepting.",
+      : "Found by an earlier version without a verified quotation. Check its evidence before accepting.",
     reviewsInvalid ? "Saved reviews could not be read." : "",
   ].join(" ");
   const accept = byId<HTMLButtonElement>("accept-preference");
   accept.disabled = reviewBusy || reviewsInvalid || review.status === "accepted";
-  setIconButton(
-    accept,
-    "check",
-    review.status === "accepted" ? "Accepted preference" : "Accept preference",
-  );
+  labeledButton(accept, "check", review.status === "accepted" ? "Accepted" : "Accept");
   byId<HTMLButtonElement>("dismiss-preference").disabled =
     reviewBusy || reviewsInvalid || review.status === "dismissed";
   byId<HTMLButtonElement>("edit-preference").disabled = reviewBusy || reviewsInvalid;
   const reset = byId<HTMLButtonElement>("reset-preference");
   reset.hidden = review.status === "pending" && !review.stale;
   reset.disabled = reviewBusy || reviewsInvalid;
+}
+/** An icon with its words beside it, so the action is never shown by a glyph alone. */
+function labeledButton(button: HTMLButtonElement, name: IconName, label: string) {
+  button.replaceChildren(icon(name), textElement("span", label));
+  button.removeAttribute("aria-label");
+  button.title = label;
+}
+/** What a preference's review state is, in words. */
+function reviewStateLabel(review: GuiPreference["review"]): string {
+  if (review.stale) return "Evidence changed";
+  return { accepted: "Accepted", dismissed: "Dismissed", pending: "To review" }[review.status];
 }
 function metadataDetails(lines: string[]): HTMLDetailsElement {
   const details = document.createElement("details");
@@ -412,9 +605,374 @@ function metadataDetails(lines: string[]): HTMLDetailsElement {
   details.append(summary, panel);
   return details;
 }
+/** Where a saved suggestion's source preference stands in the library now. */
+function sourceStatus(id: string): SourceStatus {
+  const preference = preferences.find((value) => value.id === id);
+  if (!preference) return "missing";
+  return preference.review.status === "dismissed" ? "dismissed" : "current";
+}
+const subagentPanel: PanelContext = {
+  preferenceLink: (id, label) =>
+    preferences.some((preference) => preference.id === id)
+      ? relatedLink("preferences", id, plainText(label))
+      : null,
+  // Only an out-of-date suggestion can hold agreements whose sources changed.
+  get sourceStatus() {
+    return subagents?.stale ? sourceStatus : undefined;
+  },
+};
+function syncExportLink() {
+  const target = (exportTarget.value || "all") as SubagentTarget | "all";
+  const label = exportTarget.selectedOptions[0]?.textContent ?? "All targets";
+  exportTarget.title = label;
+  exportAll.textContent = exportLabel(target);
+  exportAll.title =
+    target === "all"
+      ? "Download every target as one zip"
+      : `Download the ${label} files as one zip, with the shared knowledge`;
+}
+function guideLink(nextTab: Tab, all: BrowseItem[], id: string) {
+  const item = all.find((entry) => entry.id === id);
+  return item ? relatedLink(nextTab, id, item.title) : undefined;
+}
+/** Shown when a tab has nothing yet: the bare command runs the guided first run. */
+function startHere(text: string): HTMLElement | undefined {
+  return commands ? notice(text, commands.start) : undefined;
+}
+function promptsOverview() {
+  const first = highlights?.prompts.find((rank) => promptItems.some((item) => item.id === rank.id));
+  let action: HTMLElement | undefined;
+  if (first) {
+    const button = textElement(
+      "button",
+      "Copy the first prompt",
+      "overview-action",
+    ) as HTMLButtonElement;
+    button.type = "button";
+    button.addEventListener("click", () => {
+      openItem("prompts", first.id, true);
+      copy.click();
+    });
+    action = button;
+  }
+  return overview({
+    label: "Prompts guide",
+    description: promptsGuideSentence(
+      promptItems.length,
+      promptItems.filter((item) => item.prompt && !item.prompt.outcomeVerified).length,
+    ),
+    highlights: highlights?.prompts,
+    highlightsUnavailable: !highlights && promptItems.length > 0,
+    link: (id) => guideLink("prompts", promptItems, id),
+    guidance: promptItems.length ? guidance.prompts : "",
+    message: promptItems.length
+      ? undefined
+      : startHere(
+          "There are no prompts yet. Run this in your terminal to read your sessions and build them, then choose Refresh:",
+        ),
+    action,
+  });
+}
+function agreementsNotice() {
+  if (!agreements) {
+    return notice(
+      "The saved working agreements could not be loaded. Your preferences are still available to review.",
+    );
+  }
+  if (agreements.state === "damaged") {
+    return notice(
+      "The saved working agreements file is damaged, so your preferences are shown instead. Run this to make the agreements again:",
+      commands?.distill,
+    );
+  }
+  if (agreements.stale) {
+    return notice(
+      "Your preferences or reviews changed after these agreements were made, so some may be out of date. Run this to refresh them:",
+      commands?.distill,
+    );
+  }
+  if (!agreementItems.length && preferences.length) {
+    return notice(
+      agreements.state === "ready"
+        ? "The last run found no working agreements. Your preferences are available to review."
+        : "No working agreements have been made yet. Review your preferences now, or run this to make agreements from them:",
+      agreements.state === "ready" ? undefined : commands?.distill,
+    );
+  }
+  return undefined;
+}
+/** The overview's notices: an unfinished set, then out of date or damaged. */
+function agreementsMessages(): HTMLElement[] {
+  const unfinished = incompleteNotice(agreements?.incomplete);
+  const status = agreementsNotice();
+  return [
+    ...(unfinished ? [notice(unfinished, commands?.distill)] : []),
+    ...(status ? [status] : []),
+  ];
+}
+/** The one action of the agreements overview: copy exactly the general agreements it lists. */
+function copyAgreementsAction(): HTMLElement | undefined {
+  const count = organized.counts.general;
+  if (!count) return undefined;
+  const wrap = textElement("div", "", "overview-copy");
+  const label = `Copy the ${countLabel(count, "general agreement")} as Markdown`;
+  const button = textElement("button", label, "overview-action") as HTMLButtonElement;
+  button.type = "button";
+  button.id = "copy-agreements";
+  const status = textElement("p", "", "muted copy-status");
+  status.setAttribute("role", "status");
+  const markdown = agreementsMarkdown(
+    organized,
+    agreementItems.flatMap((item) => item.agreement ?? []),
+  );
+  button.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(markdown);
+      status.textContent = `Copied ${countLabel(count, "general agreement")}. Paste them into AGENTS.md or CLAUDE.md.`;
+    } catch {
+      // No clipboard: show the text selected, ready for the copy shortcut.
+      let area = wrap.querySelector("textarea");
+      if (!area) {
+        area = document.createElement("textarea");
+        area.readOnly = true;
+        area.className = "copy-fallback";
+        area.setAttribute("aria-label", "General agreements as Markdown");
+        area.value = markdown;
+        wrap.append(area);
+      }
+      area.focus({ preventScroll: true });
+      area.select();
+      status.textContent = `Markdown selected. Press ${/Mac/.test(navigator.platform) ? "⌘C" : "Ctrl+C"} to copy.`;
+    }
+  });
+  wrap.append(button, status);
+  return wrap;
+}
+function agreementsOverview() {
+  const link = (id: string) => guideLink("preferences", agreementItems, id);
+  const sections: HTMLElement[] = [];
+  if (organized.general.length) {
+    sections.push(
+      agreementGroups({
+        heading: "General agreements",
+        note: GENERAL_GROUPING_NOTE,
+        key: "general",
+        groups: organized.general,
+        link,
+        open: openGroups,
+      }),
+    );
+  }
+  if (organized.projects.length) {
+    sections.push(
+      agreementGroups({
+        heading: "For specific projects",
+        key: "project",
+        groups: organized.projects,
+        link,
+        open: openGroups,
+      }),
+    );
+  }
+  if (organized.oneTime.length) {
+    sections.push(
+      oneTimeNotes({
+        items: organized.oneTime,
+        link,
+        open: oneTimeOpen,
+        onToggle: (open) => {
+          oneTimeOpen = open;
+        },
+      }),
+    );
+  }
+  const stale = agreements?.stale ? { stale: true as const } : {};
+  return overview({
+    label: "Preferences guide",
+    description: agreementSummary(organized.counts, agreements?.preferenceCount ?? 0),
+    // The same rule as the highlights route, from the same facts the groups use.
+    highlights: agreementHighlights(organized).map((highlight) => ({ ...highlight, ...stale })),
+    link,
+    guidance: organized.counts.general ? guidance.agreements : "",
+    message: agreementsMessages(),
+    action: copyAgreementsAction(),
+    sections,
+  });
+}
+function preferencesOverview() {
+  if (agreementItems.length) return agreementsOverview();
+  const hasInstructions = Boolean(acceptedMarkdown || projectInstructions.length);
+  let action: HTMLElement | undefined;
+  if (preferences.length) {
+    action = relatedLink(
+      "preferences",
+      hasInstructions ? ACCEPTED : ALL,
+      hasInstructions ? "Open your accepted instructions" : "Review your preferences",
+    );
+    action.className = "overview-action";
+  }
+  const count = (status: GuiPreference["review"]["status"]) =>
+    preferences.filter((preference) => preference.review.status === status).length;
+  const parts = [
+    count("accepted") ? `${count("accepted")} accepted` : "",
+    count("pending") ? `${count("pending")} to review` : "",
+    count("dismissed") ? `${count("dismissed")} dismissed` : "",
+  ].filter(Boolean);
+  return overview({
+    label: "Preferences guide",
+    description: `${countLabel(preferences.length, "preference")} found in your sessions, each with the quotation it came from${parts.length ? `: ${parts.join(", ")}` : ""}.`,
+    highlights: highlights?.candidates,
+    highlightsUnavailable: !highlights && preferenceItems.length > 0,
+    link: (id) => guideLink("preferences", preferenceItems, id),
+    guidance: preferences.length ? guidance.preferences : "",
+    message: preferences.length
+      ? agreementsNotice()
+      : startHere(
+          "No preferences have been found yet. Run this in your terminal to read your sessions, then choose Refresh:",
+        ),
+    action,
+  });
+}
+/**
+ * The export controls live in one place at a time: in the overview, where
+ * they are its one action, and in the toolbar above every other view.
+ */
+function placeExportControls(inOverview: HTMLElement | null) {
+  // Held by reference: a control inside a replaced overview is no longer found by its ID.
+  (inOverview ?? byId("subagents-toolbar")).append(...exportControls);
+}
+function renderSubagentsDetail(item: BrowseItem | undefined) {
+  clearTimeout(copyTimer);
+  byId("copy-status").textContent = "";
+  byId("consolidation-notice").hidden = true;
+  byId("word-count").textContent = "";
+  renderReview(undefined);
+  renderRelated(undefined);
+  setMode(mode);
+  byId("viewer").dataset.kind = "subagent";
+  const metadata = byId("metadata");
+  metadata.replaceChildren();
+  const artifact = subagents?.suggestion ?? null;
+  const onOverview = !item?.role && !item?.view;
+  byId("subagents-toolbar").hidden = !artifact || onOverview;
+  if (!onOverview) placeExportControls(null);
+  syncExportLink();
+  const banners: HTMLElement[] = [];
+  if (subagentsFailed) {
+    banners.push(
+      notice(
+        "Couldn't load the suggested subagents. Check that human-hindsight gui is still running in your terminal, then choose Refresh.",
+      ),
+    );
+  } else if (subagents?.error) {
+    banners.push(
+      notice(
+        `The saved suggestion could not be read (${subagents.error}). Create a new one with:`,
+        subagents.command,
+      ),
+    );
+  } else if (subagents?.stale && artifact) {
+    banners.push(
+      notice(
+        staleSuggestionText(changedAgreements(artifact, sourceStatus).size),
+        subagents.command,
+      ),
+    );
+  }
+  const banner = byId("subagents-banner");
+  banner.replaceChildren(...banners);
+  banner.hidden = !banners.length;
+  const view = byId("subagents-view");
+  const title = byId("title");
+  title.textContent = "Suggested subagents";
+  if (!subagents || !artifact) {
+    // A failed or unreadable read already says what to do in its banner.
+    if (!subagents && !subagentsFailed)
+      view.replaceChildren(textElement("p", "Loading suggested subagents…", "muted"));
+    else if (subagents && !subagents.error)
+      view.replaceChildren(
+        renderIntro(subagents.command, preferences.length ? undefined : commands?.start),
+      );
+    else view.replaceChildren();
+    byId("viewer").scrollTop = 0;
+    return;
+  }
+  const files = subagents.files;
+  const summary = (text: string) => metadata.append(textElement("span", text));
+  if (item?.role) {
+    title.textContent = item.role.display_name;
+    summary(`${item.role.name} · ${countLabel(item.role.lesson_ids.length, "working agreement")}`);
+    view.replaceChildren(renderRole(artifact, files, item.role, subagentPanel));
+  } else if (item?.view === "shared") {
+    title.textContent = "Shared agreements";
+    summary(countLabel(artifact.shared.length, "working agreement"));
+    view.replaceChildren(renderShared(artifact, files, subagentPanel));
+  } else if (item?.view === "playbooks") {
+    title.textContent = "Playbooks";
+    summary(countLabel(artifact.playbooks.length, "playbook"));
+    view.replaceChildren(renderPlaybooks(artifact, files, subagentPanel));
+  } else if (item?.view === "coverage") {
+    title.textContent = "Coverage";
+    summary(countLabel(artifact.coverage.source_candidates, "preference"));
+    view.replaceChildren(
+      renderCoverage(artifact, files, subagentPanel, dateLabel(artifact.generated_at)),
+    );
+  } else {
+    // The overview's one action is the export itself: the same select and button.
+    const action = textElement("div", "", "overview-export");
+    view.replaceChildren(
+      overview({
+        label: "Subagents guide",
+        description: `${countLabel(artifact.roles.length, "suggested subagent")}, each a specialist role for one kind of recurring task, carrying the working agreements that fit it.`,
+        highlights: highlights?.subagents,
+        highlightsUnavailable: !highlights,
+        link: (id) => guideLink("subagents", subagentItems, id),
+        guidance: guidance.subagents,
+        action,
+      }),
+    );
+    placeExportControls(action);
+  }
+  byId("viewer").scrollTop = 0;
+}
 function renderDetail() {
-  selectionVersion++;
+  const isSubagents = tab === "subagents";
   const item = currentItem();
+  byId("reader-toolbar").hidden = isSubagents || !item || Boolean(item.agreement);
+  overviewButton.setAttribute("aria-current", String(!states[tab].selected));
+  const guide = byId("guide");
+  guide.hidden = isSubagents || Boolean(item && !item.agreement);
+  if (!guide.hidden) {
+    if (item?.agreement) {
+      const message = agreements?.stale ? agreementsNotice() : undefined;
+      const detail = agreementDetail(
+        item.agreement,
+        new Map(preferences.map((pref) => [pref.id, pref])),
+        (id) => relatedLink("preferences", id, "Review preference"),
+      );
+      guide.replaceChildren(...(message ? [message, detail] : [detail]));
+    } else {
+      guide.replaceChildren(tab === "prompts" ? promptsOverview() : preferencesOverview());
+    }
+  }
+  // An earlier prompt says what it is, with the exact command that removes such prompts.
+  const earlierNotice = byId("earlier-notice");
+  const pruneCommand =
+    !isSubagents && item?.prompt?.earlier && commands ? commandNamed(commands.status, "prune") : "";
+  earlierNotice.replaceChildren(
+    ...(pruneCommand ? [textElement("p", earlierPromptNotice()), commandRow(pruneCommand)] : []),
+  );
+  earlierNotice.hidden = !pruneCommand;
+  byId("subagents-view").hidden = !isSubagents;
+  if (!isSubagents) {
+    byId("subagents-toolbar").hidden = true;
+    byId("subagents-banner").hidden = true;
+  }
+  selectionVersion++;
+  if (isSubagents) {
+    renderSubagentsDetail(item);
+    return;
+  }
   clearTimeout(copyTimer);
   setIconButton(copy, "copy", copyLabel());
   copy.disabled = !canCopy(item);
@@ -422,22 +980,28 @@ function renderDetail() {
   byId("copy-status").textContent = "";
   const metadata = byId("metadata");
   metadata.replaceChildren();
-  byId("viewer").dataset.kind = item?.preference ? "preference" : "prompt";
+  byId("viewer").dataset.kind = item?.preference
+    ? "preference"
+    : item?.agreement
+      ? "agreement"
+      : "prompt";
+  // A preference is its own heading; the reader below would only repeat it.
   byId("title").textContent = item
-    ? item.preference
-      ? "Preference"
-      : item.title
-    : items().length
-      ? `No matching ${tab}`
-      : tab === "prompts"
-        ? "Your prompt library"
-        : "Your working preferences";
+    ? item.title
+    : tab === "prompts"
+      ? "Your prompt library"
+      : agreementItems.length
+        ? "Your working agreements"
+        : "Your preferences";
+  byId("view-mode").hidden = Boolean(item?.preference);
   source.value = item?.body ?? "";
+  if (item?.preference) mode = "preview";
   body.replaceChildren(
-    item ? renderMarkdown(item.preview ?? item.body) : document.createDocumentFragment(),
+    item && !item.agreement
+      ? renderMarkdown(item.preview ?? item.body)
+      : document.createDocumentFragment(),
   );
   setMode(mode);
-  byId("empty").hidden = items().length !== 0 || Boolean(item);
   byId("word-count").textContent = item
     ? `${item.body.split(/\s+/).filter(Boolean).length} words`
     : "";
@@ -461,15 +1025,15 @@ function renderDetail() {
     consolidationNotice.hidden = false;
   } else if (item?.id === SAVED && consolidation?.stale) {
     consolidationNotice.textContent =
-      "The source preferences or their review status have changed. Review the current candidates and run consolidation again before copying this result as instructions.";
+      "The source preferences or their review status have changed. Review the current preferences and run consolidation again before copying this result as instructions.";
     consolidationNotice.hidden = false;
   } else if (item?.id === SAVED && !consolidation?.reviewed) {
     consolidationNotice.textContent =
-      "This saved result has not been traced to accepted preferences. Review the candidates and run consolidation again to create an instruction block.";
+      "This saved result has not been traced to accepted preferences. Review the preferences and run consolidation again to create an instruction block.";
     consolidationNotice.hidden = false;
   } else if (item?.id === ALL) {
     consolidationNotice.textContent =
-      "Open a candidate to review it. Accepted preferences become your reusable instructions.";
+      "Open a preference to review it. Accepted preferences become your accepted instructions, ready to paste.";
     consolidationNotice.hidden = false;
   }
   if (item) {
@@ -484,26 +1048,29 @@ function renderDetail() {
       if (prompt.rating === "down") more.push("Disliked");
       summary.append(
         textElement("span", `${prompt.sessions} ${prompt.sessions === 1 ? "session" : "sessions"}`),
+        // Quiet, but in view: what this prompt was written from matters before it is pasted.
+        ...(prompt.outcomeVerified
+          ? []
+          : [textElement("span", OUTCOME_NOT_VERIFIED_LABEL, "muted outcome-note")]),
         metadataDetails(more),
       );
       metadata.append(summary);
     } else if (item.preference) {
       const summary = textElement("div", "", "metadata-summary");
       summary.append(
-        textElement(
-          "span",
-          `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
-        ),
+        textElement("span", supportLabel(item.preference.count, item.preference.verified, "long")),
         metadataDetails([
           dateLabel(item.authoredAt),
           item.preference.verified
             ? item.preference.basis === "explicit"
               ? "Explicit instruction"
               : "Inferred preference"
-            : "Legacy observation · unverified",
+            : "Earlier version · no verified quotation",
         ]),
       );
       metadata.append(summary);
+    } else if (item.agreement) {
+      if (item.facts) details.push(agreementPlace(item.facts));
     } else if (item.id === ACCEPTED) {
       details.push(instructionProject.value || "All projects");
     } else if (item.id === SAVED && consolidation) {
@@ -514,8 +1081,8 @@ function renderDetail() {
     } else {
       const recurring = preferences.filter((preference) => preference.count > 1).length;
       details.push(
-        `${preferences.length} ${preferences.length === 1 ? "preference" : "preferences"}`,
-        `${recurring} recurring`,
+        countLabel(preferences.length, "preference"),
+        `${recurring} seen in more than one session or task`,
       );
     }
     if (details.length) metadata.append(textElement("span", details.filter(Boolean).join(" · ")));
@@ -524,34 +1091,301 @@ function renderDetail() {
   renderRelated(item);
   byId("viewer").scrollTop = 0;
 }
-function render(historyMode: "push" | "replace" = "replace") {
+function updateHash(historyMode: "push" | "replace") {
+  const hash = route(tab, states[tab].selected);
+  if (location.hash !== hash) {
+    if (historyMode === "push") history.pushState(null, "", hash);
+    else history.replaceState(null, "", hash);
+  }
+  renderedHash = location.hash;
+}
+function subagentItemsFrom(data: GuiSubagents | undefined): BrowseItem[] {
+  const artifact = data?.suggestion;
+  if (!artifact) return [];
+  const item = (fields: Partial<BrowseItem> & Pick<BrowseItem, "id" | "title">): BrowseItem => ({
+    body: "",
+    domains: [],
+    authoredAt: "",
+    searchText: "",
+    ...fields,
+  });
+  return [
+    ...artifact.roles.map((role) =>
+      item({
+        id: roleKey(role.name),
+        title: role.display_name,
+        searchText: roleSearchText(role),
+        role,
+        label: role.name,
+        tail: countLabel(role.lesson_ids.length, "agreement"),
+      }),
+    ),
+    item({
+      id: "shared",
+      title: "Shared",
+      view: "shared",
+      label: "Every role",
+      tail: countLabel(artifact.shared.length, "agreement"),
+    }),
+    item({
+      id: "playbooks",
+      title: "Playbooks",
+      view: "playbooks",
+      tail: countLabel(artifact.playbooks.length, "playbook"),
+    }),
+    item({
+      id: "coverage",
+      title: "Coverage",
+      view: "coverage",
+      tail: countLabel(artifact.coverage.source_candidates, "preference"),
+    }),
+  ];
+}
+const readJson = <T>(path: string): Promise<T> => api.json<T>(path);
+function loadSubagents(): Promise<GuiSubagents | undefined> {
+  if (subagentsRequest) return subagentsRequest;
+  const generation = subagentsGeneration;
+  subagentsRequest = (async () => {
+    let data: GuiSubagents | undefined;
+    try {
+      data = await readJson<GuiSubagents>("/api/subagents");
+      if (typeof data.command !== "string" || !data.files || typeof data.files !== "object")
+        throw new Error("Invalid suggested subagents response");
+    } catch {
+      data = undefined;
+    }
+    if (generation === subagentsGeneration) {
+      subagents = data;
+      subagentsFailed = !data;
+      subagentItems = subagentItemsFrom(data);
+      subagentsRequest = undefined;
+    }
+    return data;
+  })();
+  return subagentsRequest;
+}
+function entryButton(item: BrowseItem, selected: string): HTMLButtonElement {
+  const button = textElement(
+    "button",
+    "",
+    item.preference
+      ? "entry preference-entry"
+      : item.view === "shared"
+        ? "entry entry-divider"
+        : "entry",
+  ) as HTMLButtonElement;
+  button.type = "button";
+  button.dataset.id = item.id;
+  button.setAttribute("aria-current", String(item.id === selected));
+  button.title = item.title;
+  const meta = textElement("span", "", "entry-meta");
+  if (item.preference) {
+    const review = item.preference.review;
+    const words = reviewStateLabel(review);
+    // The dot is decoration beside its word, never the only signal.
+    const dot = textElement("span", "", "entry-state");
+    dot.dataset.state = review.status;
+    dot.setAttribute("aria-hidden", "true");
+    meta.append(
+      dot,
+      textElement("span", words, "entry-state-label"),
+      textElement(
+        "span",
+        review.scope === "global"
+          ? "All projects"
+          : review.scope === "project"
+            ? review.project || "Project"
+            : "This task",
+        "entry-meta-label",
+      ),
+      textElement(
+        "span",
+        supportLabel(item.preference.count, item.preference.verified, "short"),
+        "entry-meta-tail",
+      ),
+    );
+  } else if (item.facts) {
+    const support = item.facts.sessions
+      ? supportLabel(item.facts.sessions, true, "short")
+      : countLabel(item.facts.preferences, "preference");
+    meta.append(textElement("span", support, "entry-meta-tail"));
+  } else if (tab === "subagents") {
+    meta.append(
+      textElement("span", item.label ?? "", "entry-meta-label"),
+      textElement("span", item.tail ?? "", "entry-meta-tail"),
+    );
+  } else {
+    const label = textElement(
+      "span",
+      domainPath(item.domains[0] ?? "").at(-1) ?? "",
+      "entry-meta-label",
+    );
+    label.title = item.domains[0] ?? "";
+    meta.append(label);
+    if (item.prompt)
+      meta.append(
+        textElement(
+          "span",
+          `${item.prompt.earlier ? "Earlier · " : ""}${item.prompt.outcomeVerified ? "" : `${OUTCOME_NOT_VERIFIED_LABEL} · `}${countLabel(item.prompt.sessions, "session")}`,
+          "entry-meta-tail",
+        ),
+      );
+  }
+  button.append(textElement("span", item.title, "entry-title"), meta);
+  button.addEventListener("click", () => openItem(tab, item.id));
+  return button;
+}
+/**
+ * The agreements list in the same shape as the overview: general groups, then
+ * project groups, then the one-time notes behind one disclosure. The order
+ * inside each group follows the sort control.
+ */
+function agreementList(
+  visible: BrowseItem[],
+  entries: HTMLButtonElement[],
+  filtering: boolean,
+): HTMLElement[] {
+  const buttons = new Map(entries.map((entry) => [entry.dataset.id ?? "", entry]));
+  const shown = organizeAgreements(visible.flatMap((item) => item.facts ?? []));
+  const order = (items: AgreementFacts[]) =>
+    states.preferences.sort === "title"
+      ? [...items].sort((a, b) => a.title.localeCompare(b.title) || a.id.localeCompare(b.id))
+      : [...items].sort(bySupport);
+  const button = (facts: AgreementFacts) => buttons.get(`agreement/${facts.id}`) ?? [];
+  const section = (title: string, groups: OrganizedAgreements["general"]) => {
+    if (!groups.length) return [];
+    return [
+      textElement("p", title, "list-section"),
+      ...groups.map((group) => {
+        const wrap = textElement("div", "", "list-group");
+        wrap.setAttribute("role", "group");
+        wrap.setAttribute(
+          "aria-label",
+          `${group.label}, ${countLabel(group.items.length, "agreement")}`,
+        );
+        const heading = textElement("p", group.label, "list-heading");
+        heading.setAttribute("aria-hidden", "true");
+        heading.append(textElement("span", String(group.items.length), "list-heading-count"));
+        wrap.append(heading, ...order(group.items).flatMap(button));
+        return wrap;
+      }),
+    ];
+  };
+  const nodes: HTMLElement[] = [
+    ...section("General", shown.general),
+    ...section("For specific projects", shown.projects),
+  ];
+  if (shown.oneTime.length) {
+    const details = document.createElement("details");
+    details.className = "list-one-time";
+    const selectedHere = shown.oneTime.some(
+      (item) => `agreement/${item.id}` === states.preferences.selected,
+    );
+    details.open = listOneTimeOpen || selectedHere || filtering;
+    const summary = textElement("summary", countLabel(shown.oneTime.length, "one-time note"));
+    details.append(summary, ...order(shown.oneTime).flatMap(button));
+    details.addEventListener("toggle", () => {
+      if (!filtering) listOneTimeOpen = details.open;
+    });
+    nodes.push(details);
+  }
+  return nodes;
+}
+function render(historyMode: "push" | "replace" = "replace", selectMatch = false) {
   const state = states[tab];
+  if (!libraryLoaded) {
+    // An explicit tab click or bookmark during loading takes precedence over the automatic tab.
+    if (historyMode === "push") updateHash(historyMode);
+    return;
+  }
+  if (tab === "subagents" && !subagents) {
+    // Keep the requested selection and its address until the data arrives.
+    if (!subagentsFailed && !subagentsRequest) {
+      const generation = subagentsGeneration;
+      void loadSubagents().then(() => {
+        if (generation === subagentsGeneration && tab === "subagents") {
+          syncControls();
+          render();
+        }
+      });
+    }
+    list.replaceChildren();
+    byId("count").textContent = subagentsFailed
+      ? "Suggested subagents unavailable"
+      : "Loading suggested subagents…";
+    byId("list-empty").hidden = true;
+    renderDetail();
+    updateHash(historyMode);
+    return;
+  }
   sort.title = sort.selectedOptions[0]?.textContent || "";
   const terms = state.query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
   const all = items();
+  // Search narrows the roles; Shared, Playbooks and Coverage stay listed.
   const visible = all.filter(
     (item) =>
-      (!state.domain || item.domains.some((value) => matchesDomain(value, state.domain))) &&
-      terms.every((term) => item.searchText.includes(term)),
+      item.view ||
+      ((!state.domain || item.domains.some((value) => matchesDomain(value, state.domain))) &&
+        terms.every((term) => item.searchText.includes(term))),
   );
   visible.sort((a, b) => {
+    // A stable sort keeps the suggestion's role order.
+    if (tab === "subagents") return 0;
     if (state.sort === "title") return a.title.localeCompare(b.title) || a.id.localeCompare(b.id);
     return (
-      (state.sort === "frequency" ? (b.preference?.count ?? 0) - (a.preference?.count ?? 0) : 0) ||
+      (state.sort === "frequency"
+        ? (b.facts?.sessions ?? b.preference?.count ?? 0) -
+          (a.facts?.sessions ?? a.preference?.count ?? 0)
+        : 0) ||
       b.authoredAt.localeCompare(a.authoredAt) ||
       a.id.localeCompare(b.id)
     );
   });
-  const singular = tab === "prompts" ? "prompt" : "preference";
-  byId("count").textContent =
-    visible.length === all.length
-      ? `${all.length} ${all.length === 1 ? singular : tab}`
-      : `${visible.length} of ${all.length} ${tab}`;
-  byId("list-empty").hidden = visible.length !== 0 || all.length === 0;
-  const overview =
+  if (tab === "subagents") {
+    const roles = all.filter((item) => item.role).length;
+    const shown = visible.filter((item) => item.role).length;
+    byId("count").textContent = subagents?.error
+      ? "Saved suggestion unreadable"
+      : !roles
+        ? "No suggestion yet"
+        : shown === roles
+          ? countLabel(roles, "role")
+          : `${shown} of ${roles} roles`;
+    byId("list-empty").hidden = shown !== 0 || roles === 0;
+  } else {
+    const singular =
+      tab === "prompts"
+        ? "prompt"
+        : browsingAgreements() && agreementItems.length
+          ? "agreement"
+          : "preference";
+    const filtering = visible.length !== all.length;
+    let note = "";
+    if (tab === "prompts") {
+      // Prompts left behind by a regrouping are counted apart from the current ones.
+      const earlier = (items: BrowseItem[]) => items.filter((item) => item.prompt?.earlier).length;
+      const lines = promptCountLines({
+        current: all.length - earlier(all),
+        earlier: earlier(all),
+        shownCurrent: visible.length - earlier(visible),
+        shownEarlier: earlier(visible),
+        filtering,
+      });
+      byId("count").textContent = lines[0];
+      note = lines[1];
+    } else {
+      byId("count").textContent = filtering
+        ? `${visible.length} of ${countLabel(all.length, singular)}`
+        : countLabel(all.length, singular);
+    }
+    byId("count-note").textContent = note;
+    byId("count-note").hidden = !note;
+    byId("list-empty").hidden = visible.length !== 0 || all.length === 0;
+  }
+  const candidatesView =
     tab === "preferences" &&
     preferences.length > 0 &&
-    (!state.selected || state.selected === ALL) &&
+    state.selected === ALL &&
     terms.length === 0 &&
     !state.domain;
   const saved =
@@ -562,90 +1396,60 @@ function render(historyMode: "push" | "replace" = "replace") {
     !state.domain;
   const accepted =
     tab === "preferences" && state.selected === ACCEPTED && terms.length === 0 && !state.domain;
-  state.selected = accepted
-    ? ACCEPTED
-    : saved
-      ? SAVED
-      : overview
-        ? ALL
-        : visible.some((item) => item.id === state.selected)
-          ? state.selected
-          : visible[0]?.id || "";
-  list.replaceChildren(
-    ...visible.map((item) => {
-      const button = textElement(
-        "button",
-        "",
-        item.preference ? "entry preference-entry" : "entry",
-      ) as HTMLButtonElement;
-      button.type = "button";
-      button.dataset.id = item.id;
-      button.setAttribute("aria-current", String(item.id === state.selected));
-      button.title = item.title;
-      const meta = textElement("span", "", "entry-meta");
-      if (item.preference) {
-        const review = item.preference.review;
-        const state = textElement("span", "", "entry-state");
-        state.dataset.state = review.status;
-        state.setAttribute("role", "img");
-        state.setAttribute("aria-label", review.status);
-        state.title = review.stale ? "Evidence changed" : review.status;
-        meta.append(
-          state,
-          textElement(
-            "span",
-            review.scope === "global"
-              ? "All projects"
-              : review.scope === "project"
-                ? review.project || "Project"
-                : "This task",
-            "entry-meta-label",
-          ),
-          textElement(
-            "span",
-            `${item.preference.count} source${item.preference.count === 1 ? "" : "s"}`,
-            "entry-meta-tail",
-          ),
-        );
-      } else {
-        const label = textElement(
-          "span",
-          domainPath(item.domains[0] ?? "").at(-1) ?? "",
-          "entry-meta-label",
-        );
-        label.title = item.domains[0] ?? "";
-        meta.append(label);
-        if (item.prompt)
-          meta.append(
-            textElement(
-              "span",
-              `${item.prompt.sessions} session${item.prompt.sessions === 1 ? "" : "s"}`,
-              "entry-meta-tail",
-            ),
-          );
-      }
-      button.append(textElement("span", item.title, "entry-title"), meta);
-      button.addEventListener("click", () => openItem(tab, item.id));
-      return button;
-    }),
-  );
-  renderDetail();
-  const hash = route(tab, state.selected);
-  if (location.hash !== hash) {
-    if (historyMode === "push") history.pushState(null, "", hash);
-    else history.replaceState(null, "", hash);
+  if (
+    !accepted &&
+    !saved &&
+    !candidatesView &&
+    !visible.some((item) => item.id === state.selected)
+  ) {
+    const emptyView = tab === "preferences" && !browsingAgreements() ? ALL : "";
+    state.selected = selectMatch ? (visible[0]?.id ?? emptyView) : "";
   }
-  renderedHash = location.hash;
+  const entries = visible.map((item) => entryButton(item, state.selected));
+  if (tab === "preferences" && browsingAgreements() && agreementItems.length) {
+    list.replaceChildren(...agreementList(visible, entries, terms.length > 0 || !!state.domain));
+  } else if (tab === "prompts" && entries.some((_, index) => visible[index]?.prompt?.earlier)) {
+    // Current prompts first; the earlier ones wait behind one closed disclosure.
+    const earlier = entries.filter((_, index) => visible[index]?.prompt?.earlier);
+    const details = document.createElement("details");
+    details.className = "list-one-time list-earlier";
+    const filtering = terms.length > 0 || Boolean(state.domain);
+    details.open =
+      listEarlierOpen || filtering || earlier.some((entry) => entry.dataset.id === state.selected);
+    details.append(
+      textElement(
+        "summary",
+        `${earlier.length} earlier ${earlier.length === 1 ? "prompt" : "prompts"}`,
+      ),
+      ...earlier,
+    );
+    details.addEventListener("toggle", () => {
+      if (!filtering) listEarlierOpen = details.open;
+    });
+    list.replaceChildren(...entries.filter((entry) => !earlier.includes(entry)), details);
+  } else {
+    list.replaceChildren(...entries);
+  }
+  renderDetail();
+  updateHash(historyMode);
 }
 async function load(snapshot?: GuiSnapshot): Promise<boolean> {
   byId("notice").hidden = true;
+  // Reviews change the accepted set, so the suggestion's stale flag is re-read.
+  subagentsGeneration++;
+  subagentsRequest = undefined;
+  subagents = undefined;
+  subagentItems = [];
+  subagentsFailed = false;
   try {
-    let data = snapshot;
-    if (!data) {
-      const response = await fetch("/api/library", { cache: "no-store" });
-      if (!response.ok) throw new Error("Library unavailable");
-      data = (await response.json()) as GuiSnapshot;
-    }
+    if (!sessionToken) throw new SessionError(403);
+    const chooseDefault = !libraryLoaded && !location.hash;
+    const [data, ranked, savedAgreements, initialSuggestion] = await Promise.all([
+      snapshot ?? readJson<GuiSnapshot>("/api/library"),
+      readJson<GuiHighlights>("/api/highlights").catch(() => null),
+      readJson<GuiAgreements>("/api/preferences/generalized").catch(() => null),
+      chooseDefault || tab === "subagents" ? loadSubagents() : undefined,
+    ]);
     if (!Array.isArray(data.entries) || !Array.isArray(data.preferences))
       throw new Error("Invalid library response");
     promptItems = data.entries.map((entry) => ({
@@ -666,11 +1470,48 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
       prompt: entry,
     }));
     preferences = data.preferences;
+    const candidates = new Map(preferences.map((pref) => [pref.id, pref]));
+    highlights = ranked;
+    agreements = savedAgreements;
+    // `facts` lines up with `lessons`; an older answer without it gets plain facts.
+    const factsById = new Map((agreements?.facts ?? []).map((facts) => [facts.id, facts]));
+    agreementItems = (agreements?.lessons ?? []).map((lesson) => {
+      const facts: AgreementFacts = factsById.get(lesson.id) ?? {
+        id: lesson.id,
+        title: lesson.title,
+        kind: "general",
+        group: "Other",
+        sessions: 0,
+        preferences: new Set(lesson.source_ids).size,
+      };
+      const domains = [
+        ...new Set(lesson.source_ids.flatMap((id) => candidates.get(id)?.domains ?? [])),
+      ];
+      return {
+        id: `agreement/${lesson.id}`,
+        title: lesson.title,
+        body: lesson.instruction,
+        domains,
+        authoredAt: savedAgreements?.generatedAt ?? "",
+        searchText: [
+          lesson.title,
+          lesson.instruction,
+          lesson.applies_when,
+          lesson.exceptions,
+          facts.group,
+          ...domains,
+        ]
+          .join(" ")
+          .toLocaleLowerCase(),
+        agreement: lesson,
+        facts,
+      };
+    });
+    organized = organizeAgreements(agreementItems.flatMap((item) => item.facts ?? []));
     preferencesMarkdown = data.preferencesMarkdown;
     acceptedMarkdown = data.acceptedMarkdown;
     projectInstructions = data.projectInstructions;
     acceptedCount = data.acceptedCount;
-    reviewToken = data.reviewToken;
     reviewsInvalid = data.reviewsInvalid;
     const selectedProject = instructionProject.value;
     instructionProject.replaceChildren(
@@ -710,22 +1551,37 @@ async function load(snapshot?: GuiSnapshot): Promise<boolean> {
           occurrence.title,
           occurrence.slug,
           occurrence.evidence,
+          occurrence.quote ?? "",
         ]),
       ]
         .join(" ")
         .toLocaleLowerCase(),
       preference,
     }));
+    // A stale suggestion still counts; its overview says it is out of date.
+    if (chooseDefault && !location.hash) {
+      tab = landingTab("", { saved: Boolean(initialSuggestion?.suggestion) }) ?? tab;
+    }
+    libraryLoaded = true;
+    if (typeof data.commands?.gui === "string")
+      rememberRestartCommand(keyStorage, data.commands.gui);
     syncControls();
-    tipsController.refresh();
     byId("skipped").hidden = !data.skipped;
     byId("skipped").textContent =
-      `${data.skipped} prompt file(s) could not be read. Run human-hindsight status for details.`;
+      `${countLabel(data.skipped, "prompt file")} could not be read. Run this for details: ${data.commands.status}`;
     render();
     return true;
-  } catch {
-    byId("notice").textContent =
-      "Couldn't load the library. Check that the server is still running, then refresh.";
+  } catch (error) {
+    byId("notice").replaceChildren(
+      ...(error instanceof SessionError && error.refused
+        ? recoveryNotice()
+        : [
+            textElement(
+              "p",
+              "Couldn't load the library. Check that human-hindsight gui is still running in your terminal, then choose Refresh.",
+            ),
+          ]),
+    );
     byId("notice").hidden = false;
     if (!items().length) byId("count").textContent = "Library unavailable";
     return false;
@@ -755,38 +1611,130 @@ copy.addEventListener("click", async () => {
     if (version === selectionVersion) copy.disabled = !canCopy();
   }
 });
+/** How far the reader is scrolled: the panel on wide screens, the page on narrow ones. */
+function readerScroll(): number {
+  return matchMedia("(max-width: 760px)").matches ? window.scrollY : byId("viewer").scrollTop;
+}
+function restoreReaderScroll(top: number) {
+  if (matchMedia("(max-width: 760px)").matches) window.scrollTo(0, top);
+  else byId("viewer").scrollTop = top;
+}
+/**
+ * Another tab opens where you left it: the same item, scrolled to the same
+ * place. Choosing the tab you are on goes back to its overview.
+ */
 function switchTab(next: Tab) {
-  if (next === tab) return;
+  if (next === tab && libraryLoaded && !states[next].selected && !subagentsFailed) return;
   rememberControls();
+  Object.assign(states[tab], { viewerScroll: readerScroll(), listScroll: list.scrollTop });
+  const place = placeOnSwitch(tab, next, states[next]);
   tab = next;
+  Object.assign(states[tab], place);
+  // Opening the tab again retries a failed read.
+  if (next === "subagents" && subagentsFailed) subagentsFailed = false;
   syncControls();
   render("push");
+  list.scrollTop = place.listScroll;
+  restoreReaderScroll(place.viewerScroll);
 }
-for (const key of ["prompts", "preferences"] as const) {
-  tabs[key].addEventListener("click", () => switchTab(key));
+for (const [index, key] of TABS.entries()) {
+  // Activating a tab moves focus to its panel heading; arrow keys keep focus on the tabs.
+  tabs[key].addEventListener("click", () => {
+    switchTab(key);
+    byId("title").focus({ preventScroll: true });
+  });
   tabs[key].addEventListener("keydown", (event) => {
     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
     event.preventDefault();
+    const step = event.key === "ArrowRight" ? 1 : TABS.length - 1;
     const next =
-      event.key === "Home"
-        ? "prompts"
+      (event.key === "Home"
+        ? TABS[0]
         : event.key === "End"
-          ? "preferences"
-          : key === "prompts"
-            ? "preferences"
-            : "prompts";
+          ? TABS.at(-1)
+          : TABS[(index + step) % TABS.length]) ?? key;
     switchTab(next);
     tabs[next].focus();
   });
 }
+/**
+ * The zip comes through the session API like every other request, so the key
+ * stays in a header. The browser then saves it from a short-lived local URL.
+ */
+async function downloadExport() {
+  const target = (exportTarget.value || "all") as SubagentTarget | "all";
+  const generatedAt = subagents?.suggestion?.generated_at;
+  if (!generatedAt) return;
+  const status = exportStatus;
+  exportAll.disabled = true;
+  status.textContent = "Preparing the zip…";
+  try {
+    const response = await api.send(exportHref(target));
+    if (!response.ok) throw new SessionError(response.status);
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = exportFilename(generatedAt, target);
+    document.body.append(link);
+    link.click();
+    link.remove();
+    // Give the browser time to start the download before the local URL goes away.
+    setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    status.textContent = `Downloaded ${link.download}.`;
+  } catch (error) {
+    status.textContent =
+      error instanceof SessionError && error.refused
+        ? refusalText()
+        : "The zip could not be created. Check that the library is still running in your terminal.";
+  } finally {
+    exportAll.disabled = false;
+  }
+}
+exportTarget.addEventListener("change", syncExportLink);
+exportAll.addEventListener("click", () => void downloadExport());
+syncExportLink();
 function filterChanged() {
   rememberControls();
-  render();
+  if (!libraryLoaded) updateHash("replace");
+  render("replace", true);
 }
+// Reads the library again in place, for example after a new run in the terminal.
+byId("refresh").addEventListener("click", async () => {
+  rememberControls();
+  const status = byId("refresh-status");
+  status.replaceChildren("Reading…");
+  const read = await load();
+  // On a narrow screen only the time shows; the words stay for screen readers.
+  status.replaceChildren(
+    textElement(
+      "span",
+      read ? "Library read again at " : "Could not read the library ",
+      "refresh-words",
+    ),
+    read
+      ? new Date().toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+          second: "2-digit",
+        })
+      : "(see below)",
+  );
+});
+// The skip link moves focus to the open item's heading without touching the address.
+byId("skip-link").addEventListener("click", (event) => {
+  event.preventDefault();
+  const title = byId("title");
+  title.scrollIntoView({ block: "start" });
+  title.focus({ preventScroll: true });
+});
 previewButton.addEventListener("click", () => setMode("preview"));
 sourceButton.addEventListener("click", () => setMode("source"));
 search.addEventListener("input", filterChanged);
-sort.addEventListener("change", filterChanged);
+sort.addEventListener("change", () => {
+  rememberControls();
+  render();
+});
+overviewButton.addEventListener("click", () => openItem(tab, "", true));
 allPreferences.addEventListener("click", () => openItem("preferences", ALL, true));
 acceptedPreferences.addEventListener("click", () => openItem("preferences", ACCEPTED, true));
 savedPreferences.addEventListener("click", () => openItem("preferences", SAVED, true));
@@ -835,12 +1783,9 @@ async function reviewPreference(status: GuiPreference["review"]["status"], edite
   byId("review-status").textContent = "Saving review…";
   let failure = "";
   try {
-    const response = await fetch("/api/preferences/review", {
+    const response = await api.send("/api/preferences/review", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Hindsight-Token": reviewToken,
-      },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         id: preference.id,
         revision: preference.review.revision,
@@ -850,11 +1795,13 @@ async function reviewPreference(status: GuiPreference["review"]["status"], edite
         ...(project ? { project } : {}),
       }),
     });
-    if (!response.ok) throw new Error(await response.text());
+    if (!response.ok) {
+      throw new Error(response.status === 403 ? refusalText() : await response.text());
+    }
     const snapshot = (await response.json()) as GuiSnapshot;
     reviewBusy = false;
     if (!(await load(snapshot))) {
-      throw new Error("The review was saved. Refresh the library to display its current state.");
+      throw new Error("The review was saved. Choose Refresh to show its current state.");
     }
     if (currentItem()?.id === preference.id) {
       byId("review-status").textContent =
@@ -906,6 +1853,13 @@ window.addEventListener("resize", () => {
   if (mode === "source") setMode(mode);
 });
 function followLocation() {
+  // Pasting the printed address into this tab changes only the fragment, so
+  // the page stays loaded: take the key, and load the library if it had none.
+  if (adoptKey()) {
+    readRoute();
+    void load();
+    return;
+  }
   if (location.hash === renderedHash) return;
   rememberControls();
   readRoute();

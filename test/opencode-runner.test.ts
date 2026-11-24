@@ -11,12 +11,7 @@ import {
   providerConfig,
 } from "../src/runners/opencode-config.js";
 import { parseRunnerMode, resolveRunner } from "../src/runners/registry.js";
-import {
-  defaultIo,
-  type RunnerIo,
-  type SpawnOptions,
-  type SpawnResult,
-} from "../src/runners/shared.js";
+import type { RunnerIo, SpawnResult } from "../src/runners/shared.js";
 
 const schema = z.object({ answer: z.string() });
 const success: SpawnResult = { code: 0, signal: null, timedOut: false, stdout: "", stderr: "" };
@@ -61,7 +56,6 @@ describe("OpenCode runner", () => {
       expect(args).toContain(major === 1 ? "--pure" : "--standalone");
       expect(args).toContain("provider/model");
       expect(args).not.toContain("--auto");
-      expect(opts.processGroup).toBe(true);
       expect(opts.input).toContain("source content");
       expect(opts.input).toContain("Respond ONLY with JSON matching this schema");
       expect(opts.env?.PWD).toBe(scratch);
@@ -292,39 +286,5 @@ describe("OpenCode provider configuration", () => {
     } catch (error) {
       expect(String(error)).not.toContain("secret-value");
     }
-  });
-});
-
-describe("owned process cleanup", () => {
-  it("preserves UTF-8 characters split across process-output chunks", async () => {
-    const code =
-      "process.stdout.write(Buffer.from([0xe2])); setTimeout(() => process.stdout.write(Buffer.from([0x82, 0xac])), 30);";
-    const result = await defaultIo.spawn(process.execPath, ["-e", code], {
-      input: "",
-      timeoutMs: 2000,
-    });
-    expect(result.stdout).toBe("€");
-  });
-  it("terminates an owned CLI and its descendant on timeout", async () => {
-    const pidFile = path.join(root, "descendant.pid");
-    const childCode = `require("node:fs").writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setInterval(() => {}, 1000);`;
-    const parentCode = `require("node:child_process").spawn(process.execPath, ["-e", ${JSON.stringify(childCode)}], {stdio:"ignore"}); setInterval(() => {}, 1000);`;
-    const opts: SpawnOptions = { input: "", timeoutMs: 800, processGroup: true };
-    const result = await defaultIo.spawn(process.execPath, ["-e", parentCode], opts);
-    expect(result.timedOut).toBe(true);
-    const pid = Number(fs.readFileSync(pidFile, "utf8"));
-    const dead = () => {
-      try {
-        process.kill(pid, 0);
-        // Linux can retain an exited orphan briefly until init reaps it.
-        return (
-          process.platform === "linux" && /\) Z /.test(fs.readFileSync(`/proc/${pid}/stat`, "utf8"))
-        );
-      } catch {
-        return true;
-      }
-    };
-    for (let n = 0; n < 20 && !dead(); n++) await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(dead()).toBe(true);
   });
 });

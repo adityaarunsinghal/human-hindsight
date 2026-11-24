@@ -1,0 +1,6 @@
+{"role":"user","content":"flag true","ts":"2026-02-01T10:00:00.000000+00:00","meta":{"human":true}}
+{"role":"user","content":"flag absent","ts":"2026-02-01T10:00:01.000000+00:00","meta":{}}
+{"role":"user","content":"no meta at all","ts":"2026-02-01T10:00:02.000000+00:00"}
+{"role":"user","content":"relayed by the harness","ts":"2026-02-01T10:00:03.000000+00:00","meta":{"human":false}}
+{"role":"user","content":"relayed with string meta","ts":"2026-02-01T10:00:04.000000+00:00","meta":"{\"human\":false}"}
+{"role":"user","content":"unparseable string meta","ts":"2026-02-01T10:00:05.000000+00:00","meta":"not-json"}

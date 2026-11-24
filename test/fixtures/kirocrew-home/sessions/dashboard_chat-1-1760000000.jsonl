@@ -1,0 +1,22 @@
+{"_type":"metadata","title":"Refactor the widget parser","agent":"kirocrew","model":"test-model","project":"/proj/widgets","created_at":"2026-01-01T10:00:00.000000+00:00","session_key":"synthetic","pinned":false}
+{"role":"user","content":"please refactor the widget parser","ts":"2026-01-01T10:00:01.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{"human":true}}
+{"role":"assistant","content":"Here is a plan with two options.","ts":"2026-01-01T10:00:05.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"tool","content":"{\"name\":\"read_file\",\"result\":\"synthetic tool output\"}","ts":"2026-01-01T10:00:06.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"user","content":"go with option two","ts":"2026-01-01T10:01:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"inject","content":"[SESSION CONTEXT -- background reference only] synthetic memory block","ts":"2026-01-01T10:01:01.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"nudge","content":"[auto-nudge cycle 1] keep going","ts":"2026-01-01T10:01:30.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"user","content":"actually skip the tests for now","ts":"2026-01-01T10:02:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{"human":true,"steer":true}}
+{"role":"error","content":"Throttled by the model provider, retrying in 5s","ts":"2026-01-01T10:02:10.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"system","content":"synthetic system notice","ts":"2026-01-01T10:02:20.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"subagent","content":"synthetic subagent brief","ts":"2026-01-01T10:02:30.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"notice","content":"synthetic host notice","ts":"2026-01-01T10:02:40.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"file","content":"synthetic-attachment.txt","ts":"2026-01-01T10:02:50.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"card","content":"synthetic card payload","ts":"2026-01-01T10:02:55.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"user","content":"   ","ts":"2026-01-01T10:03:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{"human":true}}
+{"role":"user","content":"[Subagent completion event] synthetic worker finished","ts":"2026-01-01T10:03:30.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}
+{"role":"user","content":"synthetic relayed machine text","ts":"2026-01-01T10:04:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{"human":false}}
+{not json
+{"role":"user","content":"meta arrived as a string","ts":"2026-01-01T10:05:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":"{\"human\":true}"}
+{"_type":"archive","archived_at":"2026-01-01T10:05:30.000000+00:00"}
+{"role":"user","content":"thanks, ship it","ts":"2026-01-01T10:06:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":"not-json"}
+{"role":"assistant","content":"Done.","ts":"2026-01-01T10:06:10.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}

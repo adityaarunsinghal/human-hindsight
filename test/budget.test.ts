@@ -9,34 +9,51 @@ import {
 } from "../src/core/budget.js";
 
 describe("resolveInputBudget", () => {
-  it("defaults when absent, invalid, or below the floor", () => {
+  it("defaults when absent", () => {
     expect(resolveInputBudget(undefined)).toBe(DEFAULT_INPUT_BUDGET);
-    expect(resolveInputBudget("abc")).toBe(DEFAULT_INPUT_BUDGET);
-    expect(resolveInputBudget(String(MIN_INPUT_BUDGET - 1))).toBe(DEFAULT_INPUT_BUDGET);
-    expect(resolveInputBudget("-5")).toBe(DEFAULT_INPUT_BUDGET);
   });
 
-  it("accepts a valid override", () => {
+  it("accepts a valid override, the floor included", () => {
     expect(resolveInputBudget("250000")).toBe(250_000);
+    expect(resolveInputBudget(String(MIN_INPUT_BUDGET))).toBe(MIN_INPUT_BUDGET);
+  });
+
+  it.each([
+    "abc",
+    String(MIN_INPUT_BUDGET - 1),
+    "-5",
+    "2.5e5",
+  ])("%j is an error naming the value, never the default", (raw) => {
+    expect(() => resolveInputBudget(raw)).toThrow(
+      `--input-budget takes a whole number of characters, ${MIN_INPUT_BUDGET} or more, not ${JSON.stringify(raw)}.`,
+    );
   });
 });
 
 describe("resolveTruncatePolicy", () => {
-  it("is 'never' unless explicitly 'extreme'", () => {
+  it("is 'never' when absent, and what was asked for otherwise", () => {
     expect(resolveTruncatePolicy(undefined)).toBe("never");
     expect(resolveTruncatePolicy("never")).toBe("never");
-    expect(resolveTruncatePolicy("nonsense")).toBe("never");
     expect(resolveTruncatePolicy("extreme")).toBe("extreme");
+  });
+
+  it("a misspelling is an error, not a quiet 'never'", () => {
+    expect(() => resolveTruncatePolicy("nonsense")).toThrow(
+      '--truncate takes never or extreme, not "nonsense".',
+    );
   });
 });
 
 describe("resolveTimeoutMs", () => {
-  it("converts seconds to ms, rejecting invalid/absent", () => {
+  it("converts seconds to ms; absent is the runner default", () => {
     expect(resolveTimeoutMs(undefined)).toBeUndefined();
-    expect(resolveTimeoutMs("0")).toBeUndefined();
-    expect(resolveTimeoutMs("-3")).toBeUndefined();
-    expect(resolveTimeoutMs("abc")).toBeUndefined();
     expect(resolveTimeoutMs("120")).toBe(120_000);
+  });
+
+  it.each(["0", "-3", "abc", "90s"])("%j is an error naming the value", (raw) => {
+    expect(() => resolveTimeoutMs(raw)).toThrow(
+      `--timeout takes a whole number of seconds, 1 or more, not ${JSON.stringify(raw)}.`,
+    );
   });
 });
 

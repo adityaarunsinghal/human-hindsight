@@ -20,7 +20,7 @@ const parses = (s: string) => {
   }
 };
 
-describe("stripFence — shapes already handled (must not regress)", () => {
+describe("stripFence: shapes already handled (must not regress)", () => {
   it("passes bare JSON through untouched", () => {
     expect(stripFence(BODY)).toBe(BODY);
   });
@@ -38,7 +38,7 @@ describe("stripFence — shapes already handled (must not regress)", () => {
   });
 });
 
-describe("stripFence — shapes that used to survive as unparseable text", () => {
+describe("stripFence: shapes that used to survive as unparseable text", () => {
   it("strips a fence followed by a sign-off", () => {
     const out = stripFence(`\`\`\`json\n${BODY}\n\`\`\`\n\nHope that helps!`);
     expect(parses(out)).toBe(true);
@@ -70,7 +70,7 @@ describe("stripFence — shapes that used to survive as unparseable text", () =>
   });
 });
 
-describe("stripFence — must not corrupt non-fenced input", () => {
+describe("stripFence: must not corrupt non-fenced input", () => {
   it("leaves prose with backticks alone rather than inventing a body", () => {
     const prose = "I cannot do that because `foo` is undefined.";
     expect(stripFence(prose)).toBe(prose);

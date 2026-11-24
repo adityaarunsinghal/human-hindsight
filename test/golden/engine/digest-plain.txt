@@ -1,0 +1,4 @@
+Reading sessions  0/4
+failed: b.md: synthetic failure for one unit
+blocked: big.md: 2,008 characters, over the size limit per call of 1,000. Run again with --truncate=extreme or a larger --input-budget.
+Reading sessions  4/4 · 1 failed · 1 blocked · 1s

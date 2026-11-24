@@ -37,7 +37,12 @@ describe("Codex discovery and command integration", () => {
     expect(parseSourceMode("CODEX")).toBe("codex");
     const missing = path.join(fixtures, "no-store");
     expect(discoverCodexProjects(missing)).toEqual([]);
-    const sources = resolveSources("auto", { claudeDir: missing, codexDir, kiroDir: missing });
+    const sources = resolveSources("auto", {
+      claudeDir: missing,
+      codexDir,
+      kiroDir: missing,
+      kirocrewDir: missing,
+    });
     expect(sources.map((s) => s.name)).toEqual(["codex"]);
   });
 

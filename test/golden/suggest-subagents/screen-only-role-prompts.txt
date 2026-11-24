@@ -1,0 +1,15 @@
+  Subagent plan
+
+  Reads    Your saved roles: 1 of 2 needs a written prompt (test-runner).
+  Runs on  Claude Code (claude 9.9.9)
+           Also ready if needed: Codex. If Claude Code stops working during the
+           run, the work moves on and the screen says so.
+  Calls    1 call to write a role prompt.
+           An answer that fails its checks gets one more try. Up to 10 at a
+           time.
+  Models   1 Balanced (selected): strong-model for writing roles
+           2 Best: top-model for writing roles
+  Sending  The saved roles and their working agreements go to your provider
+           through Claude Code (or the CLI the run moves to), the same way your
+           normal sessions do, and the calls use your tokens there. Before the
+           first model call, one tiny request checks that Claude Code is ready.

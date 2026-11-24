@@ -1,0 +1,23 @@
+{
+  "source_candidates": 14,
+  "mapped": 12,
+  "set_aside": 2,
+  "disposition_counts": {
+    "generalized": 7,
+    "contextual": 1,
+    "historical": 1
+  },
+  "roles": {
+    "evidence-analyst": {
+      "lesson_count": 2
+    },
+    "release-engineer": {
+      "lesson_count": 2
+    },
+    "docs-editor": {
+      "lesson_count": 2
+    }
+  },
+  "shared_count": 2,
+  "playbook_count": 1
+}

@@ -1,0 +1,18 @@
+human-hindsight help
+Read examples or look up every command and option.
+
+Examples
+  human-hindsight help distill
+    See examples and common options for building your library.
+
+  human-hindsight help --all
+    Read the complete command reference.
+
+Common options
+  --all  Show the full reference when requesting help
+
+More help
+  human-hindsight help --help --all  Every option for this command
+  human-hindsight doctor             Check your setup
+  human-hindsight help --all         All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

@@ -1,0 +1,20 @@
+│ Claude Code
+│   4 projects · 128 sessions
+│   ✓ claude 9.9.9
+│   ✓ ready
+│ Codex
+│   1 project · 3 sessions
+│   ✓ codex 0.0.1
+│   checking
+│ Kiro
+│   2 projects · 40 sessions (checking
+│   Crew)
+│   ✓ kiro-cli (checking)
+│   ! run kiro-cli login
+│   --use-device-flow
+│ Kiro Crew
+│   counting
+│   uses kiro-cli
+│ OpenCode
+│   no history yet
+│   ! missing

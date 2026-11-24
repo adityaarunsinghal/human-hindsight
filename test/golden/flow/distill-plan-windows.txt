@@ -1,0 +1,27 @@
+  Distill plan
+
+  Reads    5 sessions, about 2 prompts, plus your working
+           preferences.
+  Runs on  Claude Code (claude 9.9.9)
+           Also ready if needed: Codex. If Claude Code stops
+           working during the run, the work moves on and the
+           screen says so.
+  Calls    5 session reads, about 4 grouping calls
+           (estimated 3 batches and 1 merge), and about 2
+           writing calls.
+           Then the working preference summaries. Their
+           count is known after reading sessions.
+           Up to 10 at a time. Grouping runs one call at a
+           time.
+  Models   1 Balanced (selected): fast-model for session
+           reads, strong-model for grouping and writing
+           2 Best: strong-model for session reads, top-model
+           for grouping and writing
+  Sending  The selected session text and your working
+           preferences go to your provider through Claude
+           Code (or the CLI the run moves to), the same way
+           your normal sessions do, and the calls use your
+           tokens there. Before the first model call, two
+           tiny requests, one for each model, check that
+           Claude Code is ready; when everything is reused,
+           nothing is sent.

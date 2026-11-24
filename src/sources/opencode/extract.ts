@@ -1,3 +1,4 @@
+import { renderDecisionLine, renderQuestionLine } from "../questions.js";
 import type { Drop, ExtractResult, TimelineEvent } from "../types.js";
 
 type ObjectValue = Record<string, unknown>;
@@ -67,20 +68,16 @@ function parse(lines: string[]): { result: ExtractResult; timeline: TimelineEven
     event(
       "question",
       questions
-        .map((q) => {
-          const choices = objects(q.options).map((option) => text(option.label));
-          return `${text(q.question)}${choices.length ? ` (${choices.join(" | ")})` : ""}`;
-        })
+        .map((q) => renderQuestionLine(text(q.question), q.options, q.multiple === true))
+        .filter(Boolean)
         .join("\n"),
       time,
     );
     const answers = object(state?.metadata)?.answers;
     if (state?.status !== "completed" || !Array.isArray(answers)) return;
-    const decisions = questions.flatMap((q, i) => {
-      const answer = answers[i];
-      const values = Array.isArray(answer) ? answer.filter((v) => typeof v === "string") : [];
-      return values.length ? [`[decision] ${text(q.question)} → ${values.join(", ")}`] : [];
-    });
+    const decisions = questions
+      .map((q, i) => renderDecisionLine(text(q.question), answers[i]))
+      .filter(Boolean);
     const answeredAt =
       timestamp(object(tool.time)?.completed) || timestamp(object(state.time)?.end) || time;
     event("human", decisions.join("\n"), answeredAt);

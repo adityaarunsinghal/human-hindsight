@@ -69,6 +69,8 @@ function readV3Meta(sessionDir: string, hasHistory: boolean): KiroSessionMeta {
         typeof parsed.parentSessionId === "string" ? parsed.parentSessionId : undefined,
       sessionCreatedReason:
         typeof parsed.createdReason === "string" ? parsed.createdReason : undefined,
+      // Read for K15 (Kiro Crew runs); see isKirocrewDrivenV3 in extract-v3.ts.
+      agentMode: typeof parsed.agentMode === "string" ? parsed.agentMode : undefined,
       hasHistory,
     };
   } catch {

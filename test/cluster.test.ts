@@ -3,10 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../src/claude/prompts/cluster.js";
-import type { RunClaudeOptions } from "../src/claude/runner.js";
-import { DEFAULT_TIMEOUT_MS } from "../src/claude/runner.js";
-import type { Cluster, ClusterTask, Digest } from "../src/claude/schemas.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
 import {
   applyClusterMerges,
   CLUSTER_TIMEOUT_PER_DIGEST_MS,
@@ -19,6 +16,15 @@ import {
   synthesizeNoGroupTasks,
   validateCluster,
 } from "../src/distill/pipeline.js";
+import { buildClusterPrompt, CLUSTER_PROMPT_VERSION } from "../src/distill/prompts/cluster.js";
+import type { Cluster, ClusterTask, Digest } from "../src/distill/schemas.js";
+import { startStageProgress } from "../src/distill/stage-events.js";
+import type { RunClaudeOptions } from "../src/runners/claude.js";
+import { DEFAULT_TIMEOUT_MS } from "../src/runners/shared.js";
+import { fakeOutput } from "./support/tty.js";
+
+// Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
+setFileWriter(unflushedWriter);
 
 // --- helpers ---------------------------------------------------------------
 
@@ -210,6 +216,32 @@ describe("runClusterStage", () => {
     expect(cp?.tasks[0]?.slug).toBe("auth-feature-work");
   });
 
+  it.each([
+    [false, ""],
+    [true, "grouping"],
+  ])("prints its per-call detail only under --verbose (verbose %s), in plain words", async (verbose) => {
+    const home = tmpHome();
+    const output = fakeOutput({ isTTY: false });
+    const progress = startStageProgress(output, "Grouping sessions", { verbose });
+    await runClusterStage({
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      runner: (async () => VALID) as RunnerFn,
+      output,
+      progress,
+    });
+    progress.end();
+    const text = output.text();
+    expect(text).toContain("Grouping sessions  1/1");
+    if (verbose) {
+      expect(text).toContain(`grouping ${IDS.length} session summaries`);
+      // VALID has one task and one session left out of every group.
+      expect(text).toContain("→ 1 group; 1 session did not fit a group");
+    } else expect(text).not.toMatch(/grouping \d|→/);
+    expect(text).not.toMatch(/\(s\)|digest|misc|window/);
+  });
+
   it("retries once with the problems spelled out, then succeeds", async () => {
     const home = tmpHome();
     const bad: Cluster = { tasks: VALID.tasks, misc: [] }; // drops cli-c3.md
@@ -239,7 +271,7 @@ describe("runClusterStage", () => {
     const runner: RunnerFn = (async () => bad) as RunnerFn;
     await expect(
       runClusterStage({ home, digests: DIGESTS, generation: "g1", runner, output: sink() }),
-    ).rejects.toThrow("failed validation after one retry");
+    ).rejects.toThrow("failed its checks after one more try");
     expect(loadTasks(home)).toBeNull();
   });
 
@@ -339,6 +371,33 @@ describe("runClusterStage", () => {
     });
     expect(result.resumed).toBe(false);
     expect(calls).toBe(2);
+  });
+
+  it("says in plain words why the sessions are grouped again", async () => {
+    const home = tmpHome();
+    let text = "";
+    const output = new Writable({
+      write(chunk, _e, cb) {
+        text += chunk.toString();
+        cb();
+      },
+    });
+    const opts = {
+      home,
+      digests: DIGESTS,
+      generation: "g1",
+      runner: (async () => VALID) as RunnerFn,
+      output,
+    };
+    await runClusterStage(opts);
+    text = "";
+    const changed = DIGESTS["webapp-a1.md"] as Digest;
+    await runClusterStage({
+      ...opts,
+      digests: { ...DIGESTS, "webapp-a1.md": { ...changed, goal: "The task has changed." } },
+    });
+    expect(text).toContain("Grouping the sessions again because they or the settings changed.");
+    expect(text).not.toMatch(/stale|regenerat|clustering/);
   });
 
   it("does not regenerate when only digest object key ordering changes", async () => {
@@ -617,7 +676,7 @@ describe("applyClusterMerges", () => {
   });
 });
 
-describe("runClusterStage — windowed", () => {
+describe("runClusterStage: windowed", () => {
   it("clusters 300 digests in three batches, merges with the selected model, and resumes", async () => {
     const home = tmpHome();
     const digests = Object.fromEntries(
@@ -847,7 +906,7 @@ describe("canonicalizeClusterIds", () => {
     expect(validateCluster(fixed, IDS2).join(";")).toContain("invented-id.md");
   });
 
-  it("repairs by re-appending .md only — no recursive stripping", () => {
+  it("repairs by re-appending .md only, no recursive stripping", () => {
     // stem map is built by stripping exactly one .md from known ids, so a
     // member like "x.md.md" (stem "x.md") matches nothing and passes through.
     const raw: Cluster = {

@@ -3,8 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
-import { type ExportArgs, type ManifestEntry, runExport } from "../src/commands/export.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  type ExportArgs,
+  type ExportStats,
+  exportClosingLines,
+  type ManifestEntry,
+  runExport,
+} from "../src/commands/export.js";
+import type { ProjectInfo, SessionSource, SourceName } from "../src/sources/types.js";
+
+const realRename = fs.renameSync;
 
 // Drive export with the synthetic fixture claude dir, never the real one;
 // every home directory is a fresh mkdtemp, never a real ~/.human-hindsight.
@@ -66,7 +75,7 @@ function readManifest(home: string): ManifestEntry[] {
   return JSON.parse(raw) as ManifestEntry[];
 }
 
-describe("export — default run", () => {
+describe("export: default run", () => {
   it("writes one markdown per exported session plus a manifest", () => {
     const { home, stats } = run();
     const files = fs.readdirSync(path.join(home, "exports")).sort();
@@ -75,8 +84,10 @@ describe("export — default run", () => {
       "alpha-b2222222.md",
       "alpha-c3333333.md",
       "anaphora.json",
+      "export-stats.json",
       "manifest.json",
       "outcomes.json",
+      "project-names.json",
     ]);
     expect(stats.files).toEqual(["alpha-a1111111.md", "alpha-b2222222.md", "alpha-c3333333.md"]);
     expect(stats.exportedSessions).toBe(3);
@@ -132,16 +143,19 @@ describe("export — default run", () => {
 
   it("prints the summary line and the distill funnel hint", () => {
     const { out } = run();
-    expect(out).toContain("exported 3 sessions (7 messages, 3 duplicates dropped)");
+    expect(out).toContain("Exported 3 sessions with 7 of your messages.");
     expect(out).toContain("→ next: human-hindsight distill");
-    expect(out).toContain("1 session(s) had no human messages");
-    // Anaphora/outcome summary line (export-home has no plans/questions).
-    expect(out).toContain("short turns attached (0 had a pending plan/question)");
-    expect(out).toContain("outcome evidence captured for 3 sessions");
+    expect(out).toContain("1 session was left out: none of its messages were yours.");
+    // How the evidence was gathered is internal: only --verbose shows it.
+    expect(out).not.toMatch(/short turns|outcome evidence|duplicate|\(s\)/);
+    const verbose = run({ verbose: true }).out;
+    expect(verbose).toContain("3 duplicate messages dropped");
+    expect(verbose).toContain("short turns attached (0 had a pending plan/question)");
+    expect(verbose).toContain("outcome evidence captured for 3 sessions");
   });
 });
 
-describe("export — idempotency", () => {
+describe("export: idempotency", () => {
   it("re-running against the same input produces byte-identical files", () => {
     const home = freshHome();
     const { sink } = makeSink();
@@ -177,7 +191,7 @@ describe("export — idempotency", () => {
   });
 });
 
-describe("export — hygiene & permissions", () => {
+describe("export: hygiene & permissions", () => {
   it("prunes a stale export whose session vanished, on an unfiltered run", () => {
     const home = freshHome();
     const { sink } = makeSink();
@@ -234,10 +248,37 @@ describe("export — hygiene & permissions", () => {
     expect(fs.statSync(path.join(home, "exports")).mode & 0o777).toBe(0o700);
     expect(fs.statSync(path.join(home, "exports", "alpha-a1111111.md")).mode & 0o777).toBe(0o600);
     expect(fs.statSync(path.join(home, "exports", "manifest.json")).mode & 0o777).toBe(0o600);
+    expect(fs.statSync(path.join(home, "exports", "project-names.json")).mode & 0o777).toBe(0o600);
   });
 });
 
-describe("export — filters", () => {
+describe("export: filters", () => {
+  it.each([
+    "-1",
+    "two",
+    "2.5",
+    "",
+  ])("--min-messages %j is an error before anything is read or written", (value) => {
+    const home = freshHome();
+    const { sink, text } = makeSink();
+    expect(() =>
+      runExport({ home, "claude-dir": CLAUDE_HOME, output: sink, "min-messages": value }),
+    ).toThrow(
+      `--min-messages takes a whole number of messages, 0 or more, not ${JSON.stringify(value)}.`,
+    );
+    expect(text()).toBe("");
+    expect(fs.readdirSync(home)).toEqual([]);
+  });
+
+  it("the guided export says it is scanning your history, not reading sessions as distill does", () => {
+    const { out, stats } = run({ guided: true });
+    expect(stats.exportedSessions).toBeGreaterThan(0);
+    expect(out).toMatch(/^Scanning your history {2}0\/\d+$/m);
+    expect(out).not.toContain("Reading sessions");
+    // The closing lines are unchanged.
+    expect(out).toContain(`Exported ${stats.exportedSessions}`);
+  });
+
   it("--min-messages 2 excludes the single-message session", () => {
     const { home, stats } = run({ "min-messages": "2" });
     const files = fs.readdirSync(path.join(home, "exports")).sort();
@@ -245,8 +286,10 @@ describe("export — filters", () => {
       "alpha-a1111111.md",
       "alpha-b2222222.md",
       "anaphora.json",
+      "export-stats.json",
       "manifest.json",
       "outcomes.json",
+      "project-names.json",
     ]);
     expect(stats.exportedSessions).toBe(2);
     expect(stats.belowMinMessages).toBe(1);
@@ -269,13 +312,15 @@ describe("export — filters", () => {
     expect(readManifest(home)).toEqual([]);
     expect(fs.readdirSync(path.join(home, "exports")).sort()).toEqual([
       "anaphora.json",
+      "export-stats.json",
       "manifest.json",
       "outcomes.json",
+      "project-names.json",
     ]);
   });
 });
 
-describe("export — verbose observability", () => {
+describe("export: verbose observability", () => {
   it("reports dedupe drops and every extractor drop under --verbose", () => {
     const { out } = run({ verbose: true });
     // Fork copies dropped for the forked session (s2 copied s1's 3 messages).
@@ -297,6 +342,8 @@ describe("export — verbose observability", () => {
         "exportedSessions",
         "exportsDir",
         "files",
+        "keptAfterReadError",
+        "kirocrewHandedOff",
         "outcomeSessions",
         "prunedExports",
         "readErrors",
@@ -356,7 +403,7 @@ function parseBlocks(markdown: string): { timestamp: string; text: string }[] {
     });
 }
 
-describe("export — anaphora + outcome artifacts", () => {
+describe("export: anaphora + outcome artifacts", () => {
   it("writes anaphora.json and outcomes.json with the expected counts", () => {
     const { home, stats } = runAnaphora();
     expect(stats.exportedSessions).toBe(2);
@@ -475,7 +522,7 @@ describe("export — anaphora + outcome artifacts", () => {
     expect(out).toContain(
       "8 short turns attached (2 had a pending plan/question); outcome evidence captured for 2 sessions",
     );
-    expect(out).toContain("short turn(s) attached");
+    expect(out).toMatch(/\d+ short turns? attached/);
     expect(out).toContain("+plan");
     expect(out).toContain("+question");
   });
@@ -485,13 +532,13 @@ describe("export — anaphora + outcome artifacts", () => {
 
 const KIRO_HOME = path.join(import.meta.dirname, "fixtures", "kiro-home");
 
-describe("export — kiro source", () => {
+describe("export: kiro source", () => {
   it("exports interactive kiro sessions, tagging manifest origin=kiro", () => {
     const home = freshHome();
     const { sink, text } = makeSink();
     const stats = runExport({ home, "kiro-dir": KIRO_HOME, source: "kiro", output: sink });
 
-    // The three .history (interactive) sessions export — including the HYBRID
+    // The three .history (interactive) sessions export, including the HYBRID
     // parent-linked one a human steered (K2 step-1 precedence); the [AGENT
     // SYSTEM PROMPT] automation session and the parent-linked child without
     // history are classified out.
@@ -522,16 +569,18 @@ describe("export — kiro source", () => {
     });
     // 3 claude (export-home alpha) + 3 interactive kiro.
     expect(stats.sessionsByOrigin).toEqual({ claude: 3, kiro: 3 });
-    expect(text()).toContain("3 claude + 3 kiro;");
+    expect(text()).toContain("Exported 6 sessions with ");
+    // The breakdown by tool is a line of its own.
+    expect(text()).toMatch(/\nBy tool: 3 Claude Code, 3 Kiro CLI\.\n/);
     // The merged-corpus notice names the kiro count and the escape hatch.
-    expect(text()).toContain("including 3 kiro session(s)");
+    expect(text()).toContain("Including 3 Kiro CLI sessions");
     expect(text()).toContain("--source claude");
     const origins = new Set(readManifest(home).map((e) => e.origin));
     expect([...origins].sort()).toEqual(["claude", "kiro"]);
   });
 
   it("dedupes a /chat load-imported copy: the original owns the shared keys", () => {
-    // kiro-home-dedupe: s-restored was created by `/chat load` from s-original —
+    // kiro-home-dedupe: s-restored was created by `/chat load` from s-original:
     // a NEW uuid with the log entries copied verbatim (imported_from set) plus
     // one new human prompt. The copied (timestamp, text) pairs must be dropped
     // as fork copies; the new prompt survives in the restored session.
@@ -547,5 +596,134 @@ describe("export — kiro source", () => {
     const restored = manifest.find((e) => e.sessionId === "s-restored");
     expect(original?.messages).toBe(2); // owns both shared keys
     expect(restored?.messages).toBe(1); // keeps only its genuinely new prompt
+  });
+});
+
+describe("export: upgrades and cleanup", () => {
+  it("re-export over a 1.8.5-shaped manifest keeps export and project for every source", () => {
+    const home = freshHome();
+    const args = {
+      home,
+      "claude-dir": CLAUDE_HOME,
+      "kiro-dir": KIRO_HOME,
+      "codex-dir": NO_CODEX,
+      output: makeSink().sink,
+    };
+    runExport(args);
+    const dir = path.join(home, "exports");
+    // Rewrite it as an earlier release would have left it: other project names
+    // (one per project folder) and other file names (the 1.8.5 rows carry the
+    // same fields).
+    const earlier = readManifest(home).map((entry, i) => {
+      const renamed = `old${i}-${entry.export}`;
+      fs.renameSync(path.join(dir, entry.export), path.join(dir, renamed));
+      return { ...entry, export: renamed, project: `old-${entry.origin}-${entry.project}` };
+    });
+    fs.writeFileSync(path.join(dir, "manifest.json"), JSON.stringify(earlier, null, 2));
+    expect(new Set(earlier.map((e) => e.origin))).toEqual(new Set(["claude", "kiro"]));
+
+    runExport({ ...args, output: makeSink().sink });
+    const after = new Map(readManifest(home).map((e) => [e.source, e]));
+    for (const entry of earlier) {
+      expect(after.get(entry.source)).toMatchObject({
+        export: entry.export,
+        project: entry.project,
+      });
+      expect(fs.existsSync(path.join(dir, entry.export))).toBe(true);
+    }
+  });
+
+  it("disposes every source when a later source's discovery throws", () => {
+    const disposed: string[] = [];
+    const source = (name: SourceName, discover: () => ProjectInfo[]): SessionSource => ({
+      name,
+      discover,
+      dispose: () => disposed.push(name),
+      extract: () => ({ messages: [], drops: [], badLines: 0 }),
+      timeline: () => [],
+    });
+    const sources = [
+      source("opencode", () => []),
+      source("kiro", () => {
+        throw new Error("store unreadable");
+      }),
+    ];
+    expect(() => run({ sources })).toThrow("store unreadable");
+    expect(disposed.sort()).toEqual(["kiro", "opencode"]);
+  });
+
+  it("disposes each source once on a normal run", () => {
+    const disposed: string[] = [];
+    const sources: SessionSource[] = [
+      {
+        name: "opencode",
+        discover: () => [],
+        dispose: () => disposed.push("opencode"),
+        extract: () => ({ messages: [], drops: [], badLines: 0 }),
+        timeline: () => [],
+      },
+    ];
+    run({ sources });
+    expect(disposed).toEqual(["opencode"]);
+  });
+
+  it("writes session markdown plainly and the JSON indexes atomically, manifest last", () => {
+    const renamed: string[] = [];
+    const spy = vi.spyOn(fs, "renameSync").mockImplementation(function (this: unknown, ...a) {
+      renamed.push(path.basename(String(a[1])));
+      return Reflect.apply(realRename, fs, a);
+    });
+    try {
+      const { stats } = run();
+      expect(stats.exportedSessions).toBe(3);
+    } finally {
+      spy.mockRestore();
+    }
+    expect(renamed.filter((f) => f.endsWith(".md"))).toEqual([]);
+    const indexes = renamed.filter((f) =>
+      ["anaphora.json", "outcomes.json", "manifest.json"].includes(f),
+    );
+    expect(indexes).toEqual(["anaphora.json", "outcomes.json", "manifest.json"]);
+  });
+});
+
+describe("export: closing lines", () => {
+  const stats = (o: Partial<ExportStats>): ExportStats =>
+    ({
+      exportedSessions: 128,
+      totalMessages: 832,
+      sessionsByOrigin: { claude: 128 },
+      skippedByFilter: 0,
+      zeroMessageSessions: 0,
+      automationSkipped: 0,
+      belowMinMessages: 0,
+      readErrors: 0,
+      ...o,
+    }) as ExportStats;
+
+  it.each([
+    ["one tool, nothing left out", {}, ["Exported 128 sessions with 832 of your messages."]],
+    [
+      "several tools and one reason",
+      {
+        sessionsByOrigin: { claude: 4, codex: 76, kiro: 33, opencode: 15 },
+        automationSkipped: 158,
+      },
+      [
+        "Exported 128 sessions with 832 of your messages.",
+        "By tool: 4 Claude Code, 76 Codex, 33 Kiro CLI, 15 OpenCode.",
+        "158 sessions were left out: runs started by a tool, not typed by you.",
+      ],
+    ],
+    [
+      "several reasons",
+      { automationSkipped: 151, zeroMessageSessions: 6, readErrors: 1 },
+      [
+        "Exported 128 sessions with 832 of your messages.",
+        "158 sessions were left out: 151 started by a tool, not typed by you; 6 with none of your messages; 1 that could not be read.",
+      ],
+    ],
+  ] as const)("%s", (_name, o, lines) => {
+    expect(exportClosingLines(stats(o as Partial<ExportStats>), { minMessages: 1 })).toEqual(lines);
   });
 });

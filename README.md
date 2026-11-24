@@ -1,10 +1,18 @@
 # Human Hindsight
 
 <p align="center">
-  <img src=".github/assets/human-hindsight-banner.jpg" alt="Human Hindsight — Turn past sessions into better first prompts" width="1280">
+  <img src=".github/assets/human-hindsight-banner.jpg" alt="Human Hindsight: Turn past sessions into better first prompts" width="1280">
 </p>
 
-> **The prompt you'd write if you knew then what you know now.**
+> We have used a lot of different technologies; over months and over years. Claude Code, Codex, Kiro CLI/Kiro Crew, OpenCode, Pi... the list goes on.
+>
+> You are the one piece of the puzzle that unites them all.
+>
+> This tool helps you to understand yourself better, and then to 'codify' your taste. Your taste, your nudges, and your corrections are what makes you and your AI's work different from them and their AI's work. Run `npx human-hindsight` from your machine to get the full overview.
+>
+> This tool is private and local except that it uses your own coding-agents to reflect, so your normal inference provider will receive messages, and will cost you tokens.
+>
+> If you spot problems then please [leave an issue](https://github.com/adityaarunsinghal/human-hindsight/issues) and PRs are welcome!
 
 [![npm](https://img.shields.io/npm/v/human-hindsight?color=cb3837&logo=npm)](https://www.npmjs.com/package/human-hindsight)
 [![CI](https://github.com/adityaarunsinghal/human-hindsight/actions/workflows/ci.yml/badge.svg)](https://github.com/adityaarunsinghal/human-hindsight/actions/workflows/ci.yml)
@@ -17,636 +25,301 @@
   <br><sub>CLI walkthrough recorded before the rename to Human Hindsight.</sub>
 </p>
 
-```bash
-npx human-hindsight@latest
+Human Hindsight is a command-line tool. It reads the session history that Claude Code, Codex, Kiro CLI, Kiro Crew, and OpenCode keep on your machine and picks out the messages you typed. From those it builds a library of first prompts you can reuse, working agreements quoted from your own instructions and corrections, and optional suggested subagents. You browse all of it in a local web page.
+
+```sh
+npx human-hindsight
 ```
 
-Human Hindsight mines your coding-agent session history (Claude Code, Codex, Kiro, OpenCode)
-into two things you can use tomorrow morning:
+## What you see
 
-1. **A oneshot prompt library.** For each real task you've done, the realistic
-   ideal *first* prompt: everything you knew and wanted at t=0 but didn't say,
-   written in your own voice.
-2. **A distilled preference set.** The things you keep re-telling your agent
-   ("diagnose before acting", "pin the versions", "be terse"), surfaced as a
-   paste-ready `CLAUDE.md` or `AGENTS.md` block so every future session starts aligned.
+**1. Your tools and your history.** The first screen lists the coding tools it found: the history on disk, whether the command is installed, and a sign-in hint. It appears at once and fills in as slower checks finish, without changing height: a version still being checked shows as the command name with an ellipsis (`✓ claude…`).
 
-Previously published as **cc-hindsight**. The `cc-hindsight` npm package is now a
-deprecated compatibility command that forwards to the matching Human Hindsight
-release. Existing libraries, edits, ratings, and checkpoints remain usable.
+```text
+│ Human Hindsight 2.0.0
+│ The prompt you'd write if you knew then what you know now.
+│
+│ Your coding tools on this machine
+│ Tool         History on disk          Command         Sign-in
+│ Claude Code  2 projects · 4 sessions  ✓ claude 9.9.9  ✓ ready
+│ Codex        1 project · 1 session    ! missing
+│ No history or command found for Kiro CLI or OpenCode.
+│ 5 sessions across 3 projects. Newest activity: today.
+│
+│ Private by default
+│ No session text leaves this machine until you approve a plan.
+│ This screen only asks your coding tools for their version and sign-in status.
 
-### Upgrading from cc-hindsight
-
-```bash
-npx human-hindsight@latest gui
-# Or install the new command globally:
-npm install -g human-hindsight
+What would you like to do?
+› 1  Build my prompt library (recommended)  export, then a plan you approve
+  2  Export my prompts only  Markdown, no model calls
+  3  Show every project  the full inventory
+  4  Check my setup  versions, sign-in, fixes
+  q  Quit
+  Use arrow keys and Enter, or press a number.
 ```
 
-No data move or re-distillation is required. Data-directory precedence is:
-`--home` → `HUMAN_HINDSIGHT_HOME` → legacy `CC_HINDSIGHT_HOME` → an existing
-`~/.human-hindsight` → an existing `~/.cc-hindsight` → `~/.human-hindsight` for
-a fresh installation. If both directories exist, the new one wins; use
-`--home` to choose explicitly. Directories are never merged automatically.
+**2. The plan, before anything is sent.** Building the library first saves your messages as Markdown, locally, and says what it saved:
 
-In 1.8.2, existing preferences remain visible as **candidates**. Open the
-Preferences tab, check the evidence and scope, then **Accept**, **Edit**, or
-**Dismiss** each candidate. **Accepted instructions** builds a block from
-accepted global rules, with an optional project selection. Task-only choices
-stay out of standing instruction files. Reviews are saved in your library and
-survive browser restarts.
-
-Re-running `distill` refreshes results whose source content, prompt version,
-runner/model selection, grouping mode, or clustering batch size changed. Older checkpoints are refreshed
-once because they have no input fingerprints. Hand-edited prompts are preserved;
-`--force` explicitly allows replacing them. Changing only `--cluster-model` or
-`--cluster-batch-size` reuses unchanged session digests.
-
-Updating the old npm package installs the small compatibility wrapper, so
-`npx cc-hindsight@latest gui` also works. Both global commands can coexist:
-the main package owns `human-hindsight`, and the wrapper owns `cc-hindsight`.
-The GitHub repository was renamed in place; old repository links redirect.
-
-### Retrying unfinished distillation
-
-Choose the mode that matches the work you want to do:
-
-| Command | Work selected | Existing grouping and successful prompts |
-|---|---|---|
-| `distill` | Normal refresh using current inputs and settings | May refresh affected results and grouping |
-| `distill --retry-failed` | Recorded failed or interrupted operations, and recorded blockers that are now resolved | Preserved |
-| `distill --recover-tasks=slug-a,slug-b` | Explicitly named saved tasks from an older run without failure history | Preserved; authoring only |
-
-Preview strict retry before spending:
-
-```bash
-npx human-hindsight@latest distill --retry-failed --dry-run
-npx human-hindsight@latest distill --retry-failed
-
-# Narrow the retry to recorded authoring failures:
-npx human-hindsight@latest distill --retry-failed --retry-stage=author
-
-# Retry recorded clustering failures with a different model:
-npx human-hindsight@latest distill --retry-failed --retry-stage=cluster \
-  --cluster-model=opus --dry-run
+```text
+Exported 5 sessions with 19 of your messages.
+By tool: 4 Claude Code, 1 Codex.
 ```
 
-`--retry-stage` accepts `all` (the default), `digest`, `cluster`, or `author`.
-A recovered digest does not trigger clustering or authoring. A recovered cluster
-result is saved for adoption by a later normal `distill`; retry never replaces
-the saved task grouping. Successful operations and work never attempted are
-excluded, even when you override the model or input budget.
+When sessions are left out, one more line says how many and why, for example "3 sessions were left out: outside --project site." Then it shows a plan: the CLI that will run (and any other ready CLI that can take over if it stops working), how many calls, the models for each quality choice, and what is sent.
 
-`--model` overrides the model for every selected retry operation.
-`--cluster-model` overrides only clustering windows and their merge, taking
-precedence over `--model` for those operations. With no explicit override, retry
-keeps each operation's saved model and ignores normal workflow environment
-defaults, including `HUMAN_HINDSIGHT_CLUSTER_MODEL`.
+```text
+  Distill plan
 
-A clustering retry saves its result without changing grouping. Repeat the
-preview command without `--dry-run` to retry, then run normal distillation with
-the same clustering settings to adopt the result and continue:
+  Reads    5 sessions, about 2 prompts, plus your working preferences.
+  Runs on  Claude Code (claude 9.9.9)
+  Calls    5 session reads, about 1 grouping call, and about 2 writing calls.
+           Then the working preference summaries. Their count is known after
+           reading sessions.
+           Up to 10 at a time. Grouping runs one call at a time.
+  Models   1 Balanced (selected): sonnet for session reads, opus for grouping
+           and writing
+           2 Best: opus for session reads, fable for grouping and writing
+  Sending  The selected session text and your working preferences go to your
+           provider through Claude Code, the same way your normal sessions do,
+           and the calls use your tokens there. Before the first model call, two
+           tiny requests, one for each model, check that Claude Code is ready;
+           when everything is reused, nothing is sent.
 
-```bash
-npx human-hindsight@latest distill --retry-failed --retry-stage=cluster \
-  --cluster-model=opus
-npx human-hindsight@latest distill --cluster-model=opus
+Start?
+  1  Balanced (selected)
+  2  Best
+  s  Start with Balanced
+  q  Not now
 ```
 
-If the failed run used `--cluster-batch-size`, pass that same size to the normal
-adoption command. Keep the original `--model` (when one was selected), runner,
-input budget, and source filters as well so the normal run can reuse its
-digests and grouping inputs. Strict retry uses the recorded windows and rejects
-`--cluster-batch-size`; use normal `distill` to choose a different partition.
+Press `s` to start, or `q` to decline; nothing is sent until you start. `1` and `2` only choose between Balanced and Best. This is the one question Enter does not answer: Enter, a number, pasted text, and a key held down from an earlier menu never start a run, and the question answers "Press s to start, or q to leave." Keys typed before any question appears never answer it either: the question says "Ignored keys typed ahead. Choose when you are ready." and waits. With more than 25 eligible sessions it first asks whether to begin with your 25 most recent sessions or with everything. Work from a shorter first run is reused when you do the rest.
 
-Older runs have no recorded failure history. Select their saved task slugs
-explicitly instead of inferring failures from missing files:
+**3. The run.** Just before the first model call, it sends one tiny request for each model the plan will call, and names the models that answered. Each stage then shows a progress line with items done, failures, elapsed time, and an estimate, and ends with one summary line.
 
-```bash
-npx human-hindsight@latest distill \
-  --recover-tasks=slug-a,slug-b --runner=claude \
-  --input-budget=600000 --dry-run
+```text
+Checking that Claude Code is ready.
+Claude Code is ready: sonnet reads sessions, opus groups and writes.
+
+Read 5 of 5 sessions.
+Grouped 5 sessions into 3 prompts.
+Library: 2 prompts written, 1 group skipped because every session in it was abandoned.
+A prompt is not written for work that was abandoned. Preferences from those
+sessions are still kept.
+1 prompt is marked outcome not verified: none of its sessions was seen to reach
+a result.
+Working preferences: 1 preference summarized into 1 working agreement.
 ```
 
-Use real slugs from your saved grouping, then repeat without `--dry-run` to
-reach consent. Existing successful or manually edited prompts are protected.
-Both recovery modes show selected work, local repairs, exclusions, and blockers.
-Strict retry requires unchanged recorded inputs and compatible operation
-records; legacy recovery requires the saved task and its source evidence.
-A changed or missing input can require a normal refresh. Neither mode combines with
-`--fresh`, `--force`, `--cluster-batch-size`, or explicit grouping, project, source,
-or substance filters.
+The session reads also judge how each session ended. A closing report of finished work that you did not dispute counts as completed. Open items, a pause, or a correction that went unanswered count as partial. Giving up, or an ending that says the work could not be done, counts as abandoned. Unclear is kept for sessions with no ending to judge. A group with at least one completed or partial session gets a prompt. A group whose every session was abandoned gets none, and its preferences are still kept. Any other group gets a prompt marked "outcome not verified": in the prompt file's header, in `list`, `show`, and `status`, and in the browser view, which never suggests such a prompt first while a verified one is available. `--verbose` names each skipped group and why.
 
-The default input budget remains **400,000 content characters**; `600000` is an
-explicit override, not a guarantee that a provider accepts the request. Digest
-and author calls default to **900 seconds**. Clustering and preference
-consolidation add five seconds per input item to that base. An explicit
-`--timeout=N` uses exactly N seconds. Strict retry inherits recorded attempt settings
-unless explicitly overridden; a previously default timeout follows the current
-default. Review the effective settings in the preview.
+The closing summary lists the calls each CLI made, then offers what to do next:
 
-## The t=0 problem
-
-You get better results the more context you front-load into your first prompt,
-yet we underspecify at t=0 and spend the session steering: correcting course,
-restating preferences, answering questions the agent shouldn't have had to ask.
-
-And the cost repeats every session. Your working preferences are stable facts
-about how you like to work, yet you re-derive and re-type them project after
-project instead of stating them once, upfront, where every future session reads
-them from the first message.
-
-All the evidence of what you *should* have said is already on disk. Claude Code
-saves session JSONL under `~/.claude/projects/`; Codex keeps rollouts under
-`~/.codex/sessions/` and `~/.codex/archived_sessions/`; kiro-cli keeps its
-own store under `~/.kiro/sessions` (both the flat `cli/<uuid>.jsonl` layout and
-the newer per-session `<hash>/sess_<uuid>/messages.jsonl` layout). OpenCode keeps
-its SQLite history under `~/.local/share/opencode/`. Plenty of
-tools read that data for
-dashboards and transcripts. **Nobody closes the loop from history back to
-better prompting.**
-
-**Before** (what you actually typed at t=0):
-
-> help me script blocking a device on my home router
-
-**After** (what human-hindsight distilled from how that session actually went):
-
-> I want to automate my home router, starting with blocking a device. Get API
-> access working first, and store any credentials securely instead of asking me
-> to paste them in the clear. Anything that changes the network should be safe
-> by default: show me what it'll do and let me confirm before it runs. Then
-> prove it end-to-end on a real device. Research how others have done this
-> first, and keep the setup written down so I can reproduce it.
-
-The second prompt was knowable at t=0. You just hadn't written it yet.
-
-## Quickstart
-
-Start the guided terminal workflow:
-
-```bash
-npx human-hindsight@latest
+```text
+What next?
+› 1  Open my library (recommended)
+  2  Generate my subagents  specialist roles built from your working agreements
+  3  Done for now
+  q  Quit
 ```
 
-After scanning, the CLI suggests **export** and asks whether to run it.
-Type `y` to continue. Export offers **distill**, and a successful distillation
-offers the browser library. Your library directory, source, project filter,
-runner, and model stay selected through the handoffs.
+Ctrl-C stops the calls in flight and ends their processes, keeps what finished, and prints the command that continues. An answer that arrives after Ctrl-C is discarded, and nothing is printed, written, or copied after this line:
 
-Distillation still shows its model-call plan and asks for spending consent.
-Follow-up offers default to No and appear only in an interactive terminal.
-Use `--no-follow-up` for one command at a time; pipes, dry runs, and scripted
-`--yes` invocations never start these follow-up commands automatically.
-
-You can also start directly with distillation:
-
-```bash
-npx human-hindsight@latest distill    # offers to export first, then digest → cluster →
-                            # author (asks before any runner call), then shows
-                            # offers the finished library in your browser
+```text
+Interrupted. Sessions read so far are saved; the rest are read next time. To
+continue, run:
+  human-hindsight distill --quality=balanced
 ```
 
-Prefer to drive each stage yourself? The pipeline is just three verbs:
+A command printed for you to run next keeps the choices of the run, and names a folder only when it is not the one you use by default.
 
-```bash
-npx human-hindsight@latest            # 1. scan: inventory your projects (read-only)
-npx human-hindsight@latest export     # 2. export: human-only markdown per session
-npx human-hindsight@latest distill    # 3. distill: digest → cluster → author (asks first)
-```
-
-Then browse and curate the results:
-
-```bash
-npx human-hindsight@latest list                # your library (✎ edited / ▲▼ rating badges)
-npx human-hindsight@latest gui                 # browse, search, and copy in your browser
-npx human-hindsight@latest show <slug>         # read a oneshot
-npx human-hindsight@latest copy <slug>         # → clipboard, paste into a fresh session
-npx human-hindsight@latest edit <slug>         # open in $EDITOR; your edits are protected
-npx human-hindsight@latest rate <slug> up      # record a verdict (up|down)
-npx human-hindsight@latest prune               # remove orphaned entries (asks first)
-npx human-hindsight@latest preferences         # accepted global rules → CLAUDE.md
-npx human-hindsight@latest preferences --project my-app # include this project's accepted rules
-npx human-hindsight@latest status              # pipeline funnel + orphan/skip flags
-npx human-hindsight@latest retention           # optional: preview longer local retention
-```
-
-Requires Node 22.13+ on Node 22, or Node 23.4+ on newer releases, on macOS or Linux (Windows is untested and currently
-unsupported). `scan` and `export` are fully deterministic: no LLM, no
-network. `distill` uses your installed `claude`, `codex`, `kiro-cli`, or `opencode`,
-with a consent prompt (or your explicit `--yes`).
-
-### A small local library viewer
-
-```bash
-npx human-hindsight@latest gui                    # start locally and open your browser
-npx human-hindsight@latest gui --no-open          # print the address without opening it
-npx human-hindsight@latest gui --port 3210        # choose a port (default: any available port)
-npx human-hindsight@latest gui --home /path/to/library-home
-```
-
-Switch between **Prompts** and **Preferences** to search, filter by domain,
-sort, and copy items with one click. Preferences are deduplicated across tasks
-and can be sorted by frequency, recency, or text. Search also matches their
-evidence and source prompt titles.
-One expandable domain tree lets you browse from broad categories down to
-five levels. Select a parent to include its descendants, or expand its arrow
-to choose a child. Prompt details show shared ancestry once; open **+N** to
-see the full grouped hierarchy. Domain labels from the same evidence are
-deduplicated regardless of casing.
-Existing flat labels are grouped locally without changing the library or
-making a model call; newly distilled sessions use hierarchical domain paths.
-**Preview** renders Markdown headings, lists, tables, links, blockquotes, task
-lists, and code blocks. **Markdown** shows the original source. Copy always
-uses that original Markdown, including when the preview is selected.
-
-Each prompt links to its preference candidates. Newly distilled candidates
-show exact human quotations, message references, and global/project/task scope;
-older observations are labeled for review. Open the collapsed **Source evidence**
-section to see quotations. Use the check, pencil, and dismiss icons to review
-a candidate; each control has an accessible label and hover description.
-Candidates can come from failed or unfinished sessions too. You can bookmark
-either view and use your browser's Back and Forward buttons. **All** shows
-observations; **Accepted** provides the reviewed instruction block for `CLAUDE.md`
-or `AGENTS.md`. Changed source evidence returns a candidate to review.
-
-The terminal `preferences` command also exports accepted rules by default.
-Use `--include-unreviewed` explicitly to inspect draft observations in scripts.
-This flag does not accept them or change their review status.
-
-A compact tip card sits in the header and flips through quick suggestions.
-Open it to read the explanation, copy a `npx human-hindsight@latest` command,
-or pause or hide tips. The lightbulb restores hidden tips. Rotation pauses
-while you interact, and reduced-motion settings disable the flip animation.
-Hidden tips stay hidden when you reload the same local address.
-
-Export and distill show an open-source/privacy reminder near the start.
-Interactive terminals get a colorful elapsed-time progress indicator during
-scanning, export, and model work; redirected output stays free of animation.
-
-Consolidation is optional: `npx human-hindsight@latest preferences --consolidate`
-uses your accepted rules in a call through your own coding harness and its configured provider,
-with consent and the subscription/credit cost explained first. Successful
-results are saved, with their Markdown and input metadata, in
-`<home>/library/preferences.consolidated.json`. Reload the browser and select
-**Saved** to open the consolidation. Every output rule links to its input preferences.
-Coverage, scope, explicit conditions, and direct contradictions are checked;
-invalid output gets one semantic correction attempt. Failed, empty, incomplete,
-or declined results leave the last saved result intact. Saved results are
-flagged when the selected inputs or their review status change. Legacy saved
-results remain readable and need regeneration before copying as reviewed
-instructions.
-
-The viewer uses a minimal black-and-white palette and system monospace fonts.
-Light and dark appearance follow your system setting. Rows emphasize titles;
-session counts remain visible, and the information icon reveals dates,
-confidence, local edits, and ratings. Reload the browser after changing files
-and press `/` to focus search.
-
-The GUI uses Node's built-in HTTP server and bundled HTML/CSS/JavaScript:
-no frontend framework, database, font download, or external assets.
-Markdown parsing and sanitization ship inside the bundle. Raw HTML stays
-inert and remote images are represented by their alt text, without fetching them.
-It listens only on `127.0.0.1` and stops with Ctrl+C. Browsing stays read-only.
-The single write action saves an explicit preference review to
-`library/preferences.review.json`; it requires the current browser session's
-token, matching origin, and a current candidate revision. The GUI never invokes
-an agent, edits source history, or writes an instruction file for you.
-
-### Multiple backends (Claude Code + Codex + Kiro + OpenCode)
-
-Every command takes `--source claude|codex|kiro|opencode|auto` (default `auto`: read
-whichever stores exist). Select the source after the subcommand. Directory
-flags work before or after it:
-
-| Source | Directory flag | Environment variable | Default |
-|---|---|---|---|
-| Claude Code | `--claude-dir` | `CLAUDE_CONFIG_DIR` | `~/.claude` |
-| Codex | `--codex-dir` | `CODEX_HOME` | `~/.codex` |
-| kiro-cli | `--kiro-dir` | `KIRO_CONFIG_DIR` | `~/.kiro` |
-| OpenCode | `--opencode-dir` | `HUMAN_HINDSIGHT_OPENCODE_DIR`, then `XDG_DATA_HOME` | `~/.local/share/opencode` |
-
-For OpenCode, `--opencode-db` selects a database explicitly; relative names
-resolve under the data directory. It overrides `HUMAN_HINDSIGHT_OPENCODE_DB`
-and OpenCode's `OPENCODE_DB`, with `opencode.db` as the default. An in-memory
-database has no persisted history to read. Configuration is separate:
-`OPENCODE_CONFIG_DIR` or the XDG config directory, normally `~/.config/opencode`.
-Human Hindsight's directory/database flags select source history; the OpenCode
-runner uses the CLI's normal data location and authentication.
-
-Multiple stores merge into one library; the manifest tags each session's
-`origin` and the export summary breaks the count down. Codex discovery includes
-active and archived rollouts from the CLI, IDE extension, and app, grouped by
-their working directory. Mirrored user/assistant events are paired, injected
-context and subagent sessions are excluded, and human decisions and images
-survive extraction. The kiro backend
-reads both on-disk store layouts (the flat v2 store and the newer v3 per-session
-store), preferring the v3 copy when a session was migrated into both.
-
-`distill --runner claude|codex|kiro|opencode|auto` chooses which CLI does the distilling,
-independently of `--source`. `auto` prefers the CLI matching an explicit source,
-then falls back in the order Claude → Codex → Kiro → OpenCode. Models are passed through
-with `--model`; without it, the chosen CLI uses its configured default.
-
-Use `--cluster-model` to choose a different model just for grouping sessions and
-merging groups across windows. Digesting sessions and writing prompts still use
-`--model` or the runner's default. For example, with the Claude runner:
-
-```bash
-npx human-hindsight@latest distill --runner=claude --model=sonnet --cluster-model=opus
-```
-
-`HUMAN_HINDSIGHT_CLUSTER_MODEL` supplies the normal workflow default, and an
-explicit `--cluster-model` takes precedence. The selection stays with optional
-handoffs into `distill`. `--no-group` skips clustering and ignores its model and
-batch options.
-
-By default, clustering uses one call when all digests fit the input budget,
-splitting into windows only when needed. For a large library, limit the digests
-per window explicitly:
-
-```bash
-npx human-hindsight@latest distill --cluster-model=opus --cluster-batch-size=50 --dry-run
-```
-
-For 300 eligible sessions, that previews about six clustering windows plus one
-merge. The input budget may require smaller windows; failed digests or groups
-with nothing to merge may reduce the work. The plan is an estimate until
-digestion finishes. Smaller batches make more calls, and merge failures retain
-the usable window groups. Changing the batch size refreshes
-grouping while keeping reusable digest checkpoints.
-
-```bash
-npx human-hindsight@latest export --source codex
-npx human-hindsight@latest distill --source codex --runner codex
-npx human-hindsight@latest distill --source claude --runner codex
-npx human-hindsight@latest preferences --target codex  # AGENTS.md; alias of --target agents
-npx human-hindsight@latest export --source opencode
-npx human-hindsight@latest distill --source opencode --runner opencode
-npx human-hindsight@latest distill --source claude --runner opencode --model provider/model
-npx human-hindsight@latest preferences --target opencode  # AGENTS.md
-```
-
-`preferences --target claude|codex|kiro|opencode|agents` emits a `CLAUDE.md` block,
-an `AGENTS.md` section, or a block for `~/.kiro/steering/`. An explicit Codex
-source defaults to `AGENTS.md`. The Codex runner uses `codex exec` with a JSON
-schema, a read-only sandbox, and ephemeral sessions; generated distill sessions
-do not become new source history. Claude supports current `structured_output`
-results as well as legacy `result` objects/strings and verbose event arrays.
-The Claude runner requires current isolation controls, including `--safe-mode`.
-It runs from a private directory, disables tools, hooks, skills, and ambient
-MCP configuration, supplies a dedicated system instruction, and disables session
-persistence. Unsupported CLIs fail before any model call with an upgrade hint
-or the option to choose another runner. Updating Human Hindsight does not update
-Claude Code. Organization-managed policy remains authoritative; these controls
-do not override administrator policy or constitute an operating-system sandbox.
-
-### OpenCode 1 and 2
-
-OpenCode support covers both current release families: `opencode-ai` 1.19
-(verified with 1.19.4) and `@opencode/cli` 2.1 (verified with 2.1.3).
-Both install an `opencode` command. Source discovery does not need the CLI.
-
-The reader handles OpenCode 1's session/message/part SQLite tables, OpenCode 2's
-ordered message records, and recognized older `storage/session`, `storage/message`,
-and `storage/part` JSON directories. It includes archived sessions, preserves
-question answers and attachment markers, and excludes generated subagent and
-distillation sessions. Completed compaction resets short-reply context;
-explicit execution failures are included in the outcome evidence.
-
-Read-only SQLite connections include committed WAL data. Human Hindsight never
-migrates the source database. An unreadable, busy, unsupported, or incompletely
-migrated OpenCode database stops export before replacing the manifest or pruning
-existing exports. If migrated copies coexist, matching human turns are deduplicated;
-divergent older copies keep distinct export names. Reverted tails are excluded.
-Only committed conversation messages are read, not pending inbox items.
-
-The OpenCode runner uses JSON events, validates the final answer, and permits one
-corrective retry. It copies provider/model settings from JSON or JSONC into an
-owner-only temporary configuration, while OpenCode continues to handle credentials.
-Project instructions, external agent plugins, and MCP configuration are not copied.
-A dedicated agent denies tools; OpenCode 2 uses an owned private server.
-Providers that require external agent plugins may need a built-in or compatible
-provider configuration for this runner.
-
-Generated sessions are marked and excluded from future exports. After the run,
-cleanup deletes only captured IDs whose title and working directory prove they
-belong to that run. Interrupted runs or cleanup failures can leave marked sessions
-behind. User settings and unrelated sessions are preserved.
-
-OpenCode preferences can go into the project's `AGENTS.md`, or the global
-`AGENTS.md` under your OpenCode config directory.
-
-### Optional: keep more local history
-
-```bash
-npx human-hindsight@latest retention                    # read-only preview
-npx human-hindsight@latest retention --apply            # preview, then confirm
-npx human-hindsight@latest retention --apply --yes      # explicit opt-in for scripting
-npx human-hindsight@latest retention --source codex --apply
-```
-
-The default reviews existing tool directories. An explicit `--source` can
-create that tool's settings file. `--yes` alone never applies changes, and
-`--dry-run` always keeps the command read-only.
-
-- **Claude Code:** raises `cleanupPeriodDays` to 365,000 days (about 1,000
-  years), preserving an already longer value. Claude requires a positive whole
-  number; `0` is invalid. If desktop cleanup is capped, sets
-  `desktopSessionCleanupPeriodDays` to `0`, its supported no-age-limit value.
-  An absent desktop setting already has no age limit.
-- **Codex:** sets `[history] persistence = "save-all"` and removes
-  `history.max_bytes`, leaving prompt history uncapped. This controls
-  `history.jsonl`; full session rollouts are stored separately. Avoid
-  `--ephemeral` for your own sessions you want to retain.
-- **kiro-cli:** explains automatic persistence and `/chat save <path>` for
-  additional copies. Its public settings reference does not document a
-  retention-limit switch, so no configuration key is invented.
-- **OpenCode:** reports the local data/config locations and archival guidance.
-  No supported full-session age/size retention setting is documented. OpenCode 2
-  keeps earlier messages after compaction and ignores the older `compaction.prune`
-  setting. Temporary overflow tool-output files have separate cleanup (seven days
-  in 2.1); output-size limits do not change that lifetime. This integration is
-  advisory and leaves compaction settings untouched. For an extra copy, use
-  `opencode session export <id>` on OpenCode 2 or `opencode export <id>` on OpenCode 1.
-
-Applying creates owner-only backups next to existing configuration files, then
-replaces each file atomically. Other settings are preserved; common Codex TOML
-layouts retain comments, while unusual layouts may be reformatted after a
-preview notice. Malformed configurations are left untouched.
-
-Longer retention keeps prompt contents on disk longer and can use more space.
-Restart running tools after applying settings. Project settings, profiles,
-managed policy, and startup flags can override user defaults; this command
-does not change those controls, remote retention, or telemetry. It cannot
-recover already deleted history.
-
-Setting references: [Claude retention](https://code.claude.com/docs/en/settings-reference#cleanupperioddays),
-[Codex configuration](https://developers.openai.com/codex/config-reference),
-and [Kiro conversation persistence](https://kiro.dev/docs/cli/chat/).
-OpenCode references, pinned to the supported v2 release:
-[compaction](https://github.com/anomalyco/opencode/blob/v2.1.3/services/www/src/docs/content/compaction.mdx),
-[migration](https://github.com/anomalyco/opencode/blob/v2.1.3/services/www/src/docs/content/migrate-v1.mdx), and
-[session commands](https://github.com/anomalyco/opencode/blob/v2.1.3/services/www/src/docs/content/cli/commands.mdx).
+**4. Your library in the browser.** `gui` opens a local page with three tabs: Prompts, Preferences, and Subagents. Each opens on an overview that suggests what to open first and why. Copy a prompt into a new session, or open a working agreement to see the quotations behind it.
 
 ## Privacy & trust
 
-For a tool that reads your entire conversation history, auditability is the
-product:
+- **Stays on this machine:** scanning, exporting, the browser view, and every file Human Hindsight writes. Exports and results live in the data home (`~/.human-hindsight` by default), in folders and files only your user account can read.
+- **Is sent, and when:** session text is sent only after you press `s` at the plan's Start question, or pass `--yes`. The approved CLI receives the selected session text, or for subagents your working preferences and their quotations, and passes it to the model provider that CLI already uses, with its own sign-in. The calls use your tokens with that provider. The plan names every CLI that may receive text.
+- **Before approval:** Human Hindsight sends nothing and opens no network connection of its own. The first screen and `doctor` only run your coding tools' own version and sign-in status commands; what those commands do is up to each tool (Kiro CLI's sign-in status, for one, can contact its service). Building a plan may ask a CLI which models it offers, which can contact that CLI's service, and the screen says so before it happens. No session text is sent then.
+- **Never:** Human Hindsight has no account, hosted service, or telemetry.
 
-- **Local-only.** Everything is read from your disk and written to your disk
-  (`~/.human-hindsight`). No hosted service, accounts, or telemetry. The only network
-  traffic is through your chosen agent CLI during consented distillation or
-  preference consolidation.
-- **One self-contained npm package.** JavaScript libraries are bundled into
-  the CLI; the published package has no npm dependencies or installation
-  scripts. SQLite comes from Node. Starting the app does not install compilers,
-  platform bindings, or build tools. The development dependency tree is pinned
-  in the repository's `package-lock.json`, which is not published. Bundled
-  libraries include citty, Zod, Clack, smol-toml, jsonc-parser, Marked, and
-  DOMPurify; their license texts ship in `dist/THIRD_PARTY_NOTICES.txt`.
-- **Consent-gated LLM use.** `distill` states its estimated invocation count and
-  waits for `[y/N]` before anything runs on your subscription/credits.
-  `--dry-run` shows the full plan for free. If you decline, it exits without
-  invoking anything (exit code 2).
-- **Plain statement:** exports contain your raw prompts, including anything
-  sensitive you ever pasted into a session (keys, internal names, that one
-  angry message). They live in your home directory with your permissions, and
-  nothing ships them anywhere. A `--redact` option is on the roadmap.
+Your history can contain anything you once pasted into a session. Read exports before you share them. Details: [Security and privacy](SECURITY.md).
 
-## How it works
+## Supported tools
 
-```mermaid
-flowchart TD
-    A["~/.claude/projects/**/*.jsonl"] -->|"scan (read-only)"| B["inventory"]
-    X["~/.codex/{sessions,archived_sessions}/**/rollout-*.jsonl"] --> B
-    K["~/.kiro/sessions/"] --> B
-    O["~/.local/share/opencode/opencode.db"] --> B
-    A -->|"export (deterministic)"| C["exports/*.md + manifest.json"]
-    X --> C
-    K --> C
-    O --> C
-    A -->|"anaphora + outcome evidence"| D["anaphora.json + outcomes.json"]
-    X --> D
-    K --> D
-    O --> D
-    C --> E
-    D --> E
-    subgraph distill ["distill: opt-in, consent-gated, resumable"]
-        E["digest: 1 runner call / session"] --> F["cluster: 1 call"]
-        F --> G["author: 1 call / task"]
-    end
-    G --> H["library/&lt;slug&gt;/ oneshot + provenance"]
-    H --> I["list / show / copy / status"]
-    H --> J["preferences → CLAUDE.md / AGENTS.md / Kiro steering"]
+| Tool | Read as history | Runs model steps | History location | Point elsewhere with |
+| --- | --- | --- | --- | --- |
+| Claude Code | yes | yes (`claude`) | `~/.claude` | `--claude-dir` or `CLAUDE_CONFIG_DIR` |
+| Codex | yes | yes (`codex`) | `~/.codex` | `--codex-dir` or `CODEX_HOME` |
+| Kiro CLI | yes | yes (`kiro-cli`) | `~/.kiro` | `--kiro-dir` or `KIRO_CONFIG_DIR` |
+| Kiro Crew | yes | through `kiro-cli` | `~/.kiro/crew` | `--kirocrew-dir` or `HUMAN_HINDSIGHT_KIROCREW_DIR` |
+| OpenCode | yes | yes (`opencode`) | `~/.local/share/opencode`, or under `XDG_DATA_HOME` | `--opencode-dir` or `HUMAN_HINDSIGHT_OPENCODE_DIR` |
+
+By default every store that holds history is read. `--source claude`, `codex`, `kiro`, `kirocrew`, or `opencode` reads just one. The CLI that runs the model steps does not have to be the tool that wrote the sessions: Claude Code history can be distilled through Codex, and the other way around.
+
+`doctor` covers tools that are only partly set up. History from a desktop app or editor extension can be exported even when its command is not installed, and `doctor` gives the command to install it. A command that looks signed out gets the sign-in command. Sign-in status is only a hint: the readiness check after you approve the plan is what confirms access.
+
+```text
+│ Tool         History on disk          Command         Sign-in
+│ Claude Code  2 projects · 4 sessions  ✓ claude 9.9.9  ! run claude auth login
+│ Codex        1 project · 1 session    ! missing
+
+Claude Code suggests signing in. Run:
+  claude auth login
+Codex has a local history store. To distill through codex, run:
+  npm install -g @openai/codex && codex login
 ```
 
-The extraction layer is a fidelity contract: eleven audited rules decide what
-counts as human input (attachments typed while the agent was busy, recovered
-slash commands, `[decision]` lines from option picks, `[image pasted]`
-markers), with a regression fixture per rule. Fork/resume duplicates are
-deduped globally. Short replies like "yes" and "option 2" get their antecedent
-attached so the author stage knows what you approved. Sessions carry an
-outcome classification, so a task where nothing ever succeeded gets skipped
-instead of becoming a confident prompt that reproduces a failure path.
+## Quality: Balanced or Best
 
-Authored oneshots pass a **"knowable at t=0" test**: they front-load intent,
-constraints, preferences, and quality bars, while leaving out facts you only
-discovered mid-session (paths, root causes, error messages). And they respect
-an **effort budget**, staying around the length a motivated human would
-actually type rather than ballooning into a 700-word spec.
+One choice works on every supported CLI.
 
-Distillation records operation progress and saves validated results before
-publishing outputs. Strict retry can recover saved results locally and retry
-recorded failures without rerunning successes. A provider response lost before
-it is saved may still need another call. Normal `distill` refreshes changed work,
-`--fresh` resets deliberately, and `status` flags library entries orphaned by
-re-clustering.
+- **Balanced** (the default): a Sonnet or Terra model reads sessions; an Opus or Sol model groups them and writes the prompts.
+- **Best**: an Opus or Sol model reads sessions; a Fable or Astra model groups and writes.
 
-## How it compares
+Choose with `1` or `2` at the Start question, or with `--quality best`. `HUMAN_HINDSIGHT_QUALITY` sets the default.
 
-| Tool | Reads `~/.claude` | Output | Direction |
-|---|---|---|---|
-| ccusage | ✓ | usage/cost tables | backward (metrics) |
-| sniffly | ✓ | analytics dashboard | backward (behavior) |
-| claude-code-transcripts | ✓ | shareable HTML transcripts | backward (record) |
-| cctrace / exporters | ✓ | markdown/XML exports | backward (archive) |
-| **human-hindsight** | ✓ | **oneshot prompt library + CLAUDE.md preferences** | **forward (better next session)** |
+Models come from each CLI's own model list: the newest version in each family, from the same vendor and prefix as the CLI's default model. Claude Code has no list to read, so it receives family names such as `sonnet` and `opus`, and the CLI and its provider decide which model that means. That can be older than the newest model your provider offers. To choose exactly, pass `--model`, or set the model in Claude Code's own settings. `doctor` says so when Claude Code uses a cloud provider.
 
-Closest kin is Simon Willison's `claude-code-transcripts`: same local-first
-values, same belief that transcripts are undervalued artifacts. The difference
-is the direction of gaze: it renders your sessions (backward, for others);
-human-hindsight distills them (forward, for you).
+If the provider refuses a model, the run steps down and says so in one line:
 
-## FAQ
-
-**Does my data leave my machine?**
-The deterministic commands (`scan`, `export`, and `retention`) never touch the
-network. `distill` and `preferences --consolidate` send content through your
-chosen local agent CLI to its configured provider, using its authentication.
-
-**What does distill cost?**
-Whatever your chosen agent CLI costs you: it runs on your existing subscription or
-API credits. Normal distillation estimates the invocation count up front;
-strict retry lists the selected operations and local repairs. `--dry-run`
-prints the plan without model calls or writes. Checkpoints let an interrupted
-run reuse completed work. Bounded validation retries and windowed grouping may
-add calls, so an operation count is not an exact provider-request count.
-Sessions too large for the input budget
-(default 400k chars, `--input-budget`) are **refused before anything is
-spent**. Re-run with `--truncate=extreme` to cut them (recorded in
-provenance) or narrow the scope. Digest and author calls run 3 at a time by
-default (`--concurrency`; `1` = sequential).
-
-**Subscription or API?**
-human-hindsight shells out to `claude -p`, `codex exec`, `kiro-cli chat`, or `opencode run`;
-however your chosen CLI is authenticated is how calls are billed. `--model`
-passes through without pinning a model version.
-
-**Why is a session missing from my exports?**
-Sessions with zero human messages are skipped naturally, `--min-messages`
-filters thin ones, and fork/resume copies are deduped into their original
-session. Note that dedupe is global across all projects: with `--project`, a
-message duplicated by fork/resume is attributed to its earliest session even
-when that session is outside the filter. Run `export --verbose` to see every
-dropped piece with a reason. If genuine human input was dropped, that's a
-bug: file an extraction-fidelity report.
-
-**Can I regenerate everything from scratch?**
-`human-hindsight distill --fresh` clears the checkpoints (after confirming) and
-re-runs. Old library entries from previous generations are flagged as orphans
-in `status`.
-
-## Roadmap
-
-- Claude Code **plugin packaging** for existing marketplaces (for
-  distribution, without standing up a separate marketplace)
-- An in-session **skill variant** ("distill this session as we go")
-- **Agent SDK** orchestration exploration
-- **parentUuid-aware anaphora** (branch-correct antecedents on forked
-  conversations)
-- **`--redact` patterns** for exports
-- An opt-in **community oneshot showcase**
-
-## Development
-
-```bash
-npm install
-npm test            # vitest: fixtures only, never reads your agent stores
-npm run lint        # biome
-npm run typecheck   # tsc --noEmit
-npm run build       # tsdown → dist/
+```text
+Claude Code cannot use opus here (your provider refused it). Using sonnet for grouping and writing.
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md), especially the guide to adding a
-fixture when you hit an unhandled transcript shape.
+If the CLI itself stops working (signed out, missing, out of quota, or failing repeatedly), the remaining work moves to a CLI the plan listed as ready, also in one line. The run summary repeats each step-down and switch.
 
-## License
+```text
+Claude Code failed twice in a row. Continuing with Codex.
+```
 
-[MIT](LICENSE)
+To keep the whole run on one CLI, pin it with `--runner codex`, or name a model with `--model`, `--cluster-model`, or `--author-model`. The plan then says "This run stays on this CLI." `--model` takes a model name your CLI accepts.
 
-## Author
+Some CLIs take fewer calls at once, and the plan's pace line says so, for example "Up to 2 at a time (OpenCode's limit)."
 
-Built by [Aditya Singhal](https://adityasinghal.com). If human-hindsight surfaces
-a pattern you didn't know you had, [I'd love to hear about
-it](https://github.com/adityaarunsinghal/human-hindsight/issues).
+## Working preferences and suggested subagents
+
+**Working preferences** are the instructions you keep giving your agents, such as "keep changes small", each with the quotation it came from. Every `distill` run ends by summarizing them, 20 at a time, into working agreements. If some batches fail, the summarized part is saved and shown, and the next run finishes the rest.
+
+In the Preferences tab, general working agreements come first, grouped by the kind of work where each was seen; project-specific agreements sit under their project, and one-time notes are folded away. One button copies the general agreements as Markdown. Accept, edit, or dismiss each preference there. Then print the accepted ones as a block for your instruction file:
+
+```sh
+npx human-hindsight preferences --target claude   # CLAUDE.md
+npx human-hindsight preferences --target agents   # AGENTS.md (Codex, OpenCode)
+npx human-hindsight preferences --target kiro     # Kiro steering, also read by Kiro Crew
+```
+
+Without `--target`, the format follows `--source`, and is CLAUDE.md when every source is read. The block goes to standard output and the notes to standard error, so `preferences > file.md` writes only the block. `status` and `preferences` give the same counts of preferences observed, waiting for review, and accepted.
+
+**Suggested subagents** are specialist roles, each with its own instructions, built from your preferences: the accepted ones when you have any, otherwise every one you have not dismissed. Generating them has the same kind of plan and Start question, and ends with its own menu to open or export the roles; it never opens the browser by itself.
+
+```sh
+npx human-hindsight suggest-subagents --dry-run
+npx human-hindsight suggest-subagents
+npx human-hindsight suggest-subagents --export ./my-subagents --target codex
+```
+
+`--export` writes the saved roles as files, locally and with no model call, for `claude`, `codex`, `kiro`, `kirocrew`, `knowledge`, or `all` (the default). Read `HANDOFF.md` in the export folder before copying roles into a folder your tool loads automatically.
+
+## Requirements
+
+- Node.js 22.13 or newer in the 22 line, or 23.4 or newer.
+- macOS, Linux, or Windows through WSL.
+- To build a library: at least one of `claude`, `codex`, `kiro-cli`, or `opencode`, signed in. Exporting needs none of them.
+
+On an older Node, the command stops before doing anything and says how to run it:
+
+```text
+Human Hindsight needs Node.js 22.13 or newer in the 22 line, or 23.4 or newer; you have 18.20.2.
+Run it with Node.js 24 without changing your default Node:
+  npx -y -p node@24 -p human-hindsight@latest human-hindsight
+Or install Node.js 24 from https://nodejs.org/en/download, then run your command again.
+```
+
+When it finds a Node version manager such as mise or Homebrew, it also suggests a one-off command for it.
+
+## Remote and headless machines
+
+Over SSH, `gui` uses port 4317 and prints what to run on your laptop:
+
+```text
+This is an SSH session, so open the library on your laptop.
+1. In a second terminal on your laptop, forward the port:
+   ssh -N -L 127.0.0.1:4317:127.0.0.1:4317 -- you@devbox
+   (Use your usual SSH destination instead if you connect through an alias or a jump host.)
+2. Open this address on your laptop:
+   http://127.0.0.1:4317/#token=...
+Press Ctrl+C to stop.
+```
+
+Over SSH, `copy` asks your own terminal to set the clipboard and always prints the prompt as well, so you can select it by hand.
+
+## Everyday commands
+
+| Command | What it does |
+| --- | --- |
+| `npx human-hindsight` | Guided start: setup table, then build or open your library |
+| `npx human-hindsight --dry-run` | Show your setup and the next step, and stop |
+| `npx human-hindsight doctor` | Check history, installed commands, and sign-in, with one fix per problem |
+| `npx human-hindsight scan` | List every project and session found |
+| `npx human-hindsight export` | Save your messages as Markdown; no model |
+| `npx human-hindsight distill --dry-run` | Show the plan and send nothing |
+| `npx human-hindsight distill --recent 25` | Start with your 25 most recent sessions |
+| `npx human-hindsight gui` | Open the library in your browser |
+| `npx human-hindsight status` | See what has finished and what to run next |
+| `npx human-hindsight list` / `show NAME` / `copy NAME` | Browse and copy prompts in the terminal |
+
+`list` fits your terminal, keeps names whole, and notes prompts you edited or rated and those whose outcome was not verified (80 columns shown):
+
+```text
+Name              Title               Sessions  Written     Notes
+----------------  ------------------  --------  ----------  --------------------
+docs-cleanup      Tidy the project …  1         2026-11-24  outcome not verified
+release-workflow  Improve the relea…  3         2026-11-24  ✎ edited, ▲ rated up
+
+2 prompts
+```
+
+`help <command>` shows examples for one command, and `help --all` lists every command and option. A mistyped command or option is refused with the closest match. `--verbose` on `distill` and `suggest-subagents` shows detail per session, group, or role, and `status --verbose` shows internal bookkeeping.
+
+Commands that change the library (`distill`, `export`, `prune`, `rate`, `edit`, `preferences --consolidate`, `suggest-subagents`, and a review in the browser) take turns. While one runs, another stops without changing anything, names the command that holds the library, and says what to remove if nothing is running:
+
+```text
+human-hindsight distill is changing this library (process 99618, started 2026-11-24T00:28:38.394Z). Nothing was changed. Run this again when it finishes. If no human-hindsight command is running, remove /Users/you/.human-hindsight/distill/writer.lock and run this again.
+```
+
+A run stopped with Ctrl-C keeps its turn until it has finished writing. A turn left behind by a command that is no longer running is taken back at once, or after a short wait when it was left under another machine name, as on a shared or synced data home.
+
+Exit codes are the same everywhere: 0 done, 1 failed, 2 declined, 130 interrupted.
+
+To keep the command installed: `npm install --global human-hindsight`.
+
+## Upgrading from 1.x
+
+Your existing data home keeps working, including a `~/.cc-hindsight` folder from before the rename. Results now record the model plan that produced them, so the first 2.0 `distill` regenerates earlier results once. The plan's Library row says how many, and what is kept:
+
+```text
+  Library  1 saved prompt. 4 earlier results will be regenerated. Hand-edited
+           prompts, ratings, and reviews are kept.
+```
+
+If the new grouping no longer includes an earlier prompt, the run keeps it and says how to remove it:
+
+```text
+1 earlier prompt is no longer part of the grouping. It is kept; remove it with:
+  human-hindsight prune
+```
+
+The browser view lists such prompts apart from current ones. A prompt you edited by hand is kept as you wrote it; `distill --force` replaces it from the saved result, with no new model call. Groups that 1.x skipped because no session showed a result now get a prompt marked "outcome not verified". Results written by 2.0 cannot be read by 1.x, so keep a copy of the data home if you might go back.
+
+## Troubleshooting
+
+- **Something is not detected, or a run cannot start:** run `npx human-hindsight doctor`. It prints the data home, each tool's status, and one command per problem.
+- **The screen redraws badly, or you are recording:** add `--plain`, or set `HUMAN_HINDSIGHT_PLAIN=1`, for numbered prompts and static progress lines. With input or output redirected, the bare command prints the setup summary and a suggested next command instead of a menu.
+- **No color:** set `NO_COLOR=1`. Terminals whose locale is not UTF-8 get plain ASCII symbols.
+- **A different data home:** `--home DIR` or `HUMAN_HINDSIGHT_HOME`.
+- **An option is refused:** nothing runs on a guess. A switch such as `--dry-run` takes no value other than `=true` or `=false`, and a stray word after it is an error, so `--yes no` never runs as yes. A wrong value for `--source`, `--runner`, or `--quality` (or their environment variables) is refused in one line that lists the accepted values; a wrong number or an empty folder is refused in one line that names the option and the value given, for example `--concurrency takes a whole number of calls at a time, 1 or more, not "0".` The command goes first: a leading `--` is an error.
+- **A command fails unexpectedly:** it prints one line and exits with 1. Run it again with `HUMAN_HINDSIGHT_DEBUG=1` for the details.
+
+`cc-hindsight` remains as a compatibility command for the matching version. For development, see [Contributing](CONTRIBUTING.md). Release history: [Changelog](CHANGELOG.md). License: [MIT](LICENSE).
+
+Created by [Aditya Singhal](https://adityasinghal.com).

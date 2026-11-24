@@ -1,0 +1,24 @@
+human-hindsight scan
+Find projects and sessions on this machine.
+
+Examples
+  human-hindsight scan
+    List projects across the tools you use.
+
+  human-hindsight scan --source codex
+    Read only Codex history.
+
+Common options
+  --source <tool>  History to read: claude, codex, kiro,
+                   kirocrew, opencode, or auto (default)
+  --follow-up      Offer next steps in a terminal (disable
+                   with --no-follow-up)
+
+More help
+  human-hindsight scan --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

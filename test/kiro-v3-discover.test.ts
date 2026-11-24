@@ -150,6 +150,7 @@ describe("registry: kiro store detected when only the v3 store exists", () => {
       claudeDir: path.join(tmp, "no-claude"),
       codexDir: path.join(tmp, "no-codex"),
       kiroDir: tmp,
+      kirocrewDir: path.join(tmp, "no-kirocrew"),
     });
     expect(sources.map((s) => s.name)).toContain("kiro");
   });

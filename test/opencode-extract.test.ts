@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { buildDigestPrompt } from "../src/claude/prompts/digest.js";
 import { buildCorpus } from "../src/core/dedupe.js";
 import { buildOutcome } from "../src/core/outcome.js";
+import { buildDigestPrompt } from "../src/distill/prompts/digest.js";
 import {
   extractOpenCodeMessages,
   extractOpenCodeTimeline,
@@ -36,7 +36,7 @@ describe("OpenCode human-input fidelity", () => {
     const result = extractOpenCodeMessages(lines);
     expect(result.messages.map((m) => m.text)).toEqual([
       "Build the settings page\n\n[image pasted]",
-      "[decision] Which theme? → Dark, Follow system",
+      '[decision] "Which theme?" → Dark, Follow system',
     ]);
     expect(result.drops).toHaveLength(2);
     expect(JSON.stringify(result)).not.toContain("base64");
@@ -88,7 +88,7 @@ describe("OpenCode human-input fidelity", () => {
     const timeline = extractOpenCodeTimeline(lines);
     expect(extracted.messages.map((m) => m.text)).toEqual([
       "Ship it\n\n[image pasted]",
-      "[decision] Ship where? → Staging",
+      '[decision] "Ship where?" → Staging',
       "Retry deployment",
     ]);
     expect(timeline.some((e) => e.kind === "boundary")).toBe(true);

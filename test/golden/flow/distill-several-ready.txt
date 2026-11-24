@@ -1,0 +1,31 @@
+Human Hindsight is fully open source (https://github.com/adityaarunsinghal/human-hindsight). Export stays local; model steps use your own coding tool and its configured provider. Human Hindsight has no session-upload service.
+
+Checking which coding CLIs are ready.
+
+  Distill plan
+
+  Reads    4 sessions, about 1 prompt, plus your working preferences.
+  Runs on  Claude Code (claude 9.9.9)
+           Also ready if needed: Codex, OpenCode. If Claude Code stops working
+           during the run, the work moves on and the screen says so.
+  Calls    4 session reads, about 1 grouping call, and about 1 writing call.
+           Then the working preference summaries. Their count is known after
+           reading sessions.
+           Up to 10 at a time. Grouping runs one call at a time.
+  Models   1 Balanced (selected): sonnet for session reads, opus for grouping
+           and writing
+           2 Best: opus for session reads, fable for grouping and writing
+  Sending  The selected session text and your working preferences go to your
+           provider through Claude Code (or the CLI the run moves to), the same
+           way your normal sessions do, and the calls use your tokens there.
+           Before the first model call, two tiny requests, one for each model,
+           check that Claude Code is ready; when everything is reused, nothing
+           is sent.
+
+Sessions that would be read:
+  • s00 (3 messages)
+  • s01 (3 messages)
+  • s02 (3 messages)
+  • s03 (3 messages)
+
+Nothing was sent. Run the same command without --dry-run to start.

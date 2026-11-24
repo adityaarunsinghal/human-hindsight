@@ -1,0 +1,24 @@
+human-hindsight preferences
+Print accepted working preferences for your instruction file.
+
+Examples
+  human-hindsight preferences --target codex
+    Format your accepted instructions for AGENTS.md.
+
+  human-hindsight preferences --project my-app
+    Include accepted rules for this project.
+
+Common options
+  --target <tool>       Output target: claude (CLAUDE.md), codex/opencode/agents
+                        (AGENTS.md), or kiro/kirocrew (steering file, also
+                        loaded by Kiro Crew). Default: inferred from --source
+  --project <name>      Include accepted instructions for this exact project,
+                        alongside global instructions
+  --include-unreviewed  Explicitly include unreviewed suggestions instead of
+                        only accepted instructions
+
+More help
+  human-hindsight preferences --help --all  Every option for this command
+  human-hindsight doctor                    Check your setup
+  human-hindsight help --all                All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

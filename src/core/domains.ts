@@ -1,6 +1,6 @@
 /** Existing labels are grouped locally; explicit paths use " > " and at most five levels. */
 export const MAX_DOMAIN_DEPTH = 5;
-export const DOMAIN_ROOTS = [
+const DOMAIN_ROOTS = [
   "Software engineering",
   "Data & AI",
   "Design",

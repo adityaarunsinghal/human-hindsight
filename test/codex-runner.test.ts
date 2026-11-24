@@ -28,7 +28,11 @@ describe("Codex runner", () => {
       expect(args).toContain('approval_policy="never"');
       expect(args).toContain("features.shell_tool=false");
       expect(args).toContain("requested-model");
-      expect(opts.input).toContain("source content");
+      // The same model input as earlier releases, so cached results stay valid.
+      expect(opts.input).toBe(
+        "source content\n\nDo not use any tools. Answer directly from the supplied content with JSON matching the output schema.",
+      );
+      expect(args.some((arg) => arg.startsWith("developer_instructions="))).toBe(true);
       const file = argsFile(args, "--output-schema");
       expect(JSON.parse(fs.readFileSync(file, "utf8")).properties.answer.type).toBe("string");
       expect(fs.statSync(file).mode & 0o777).toBe(0o600);

@@ -1,26 +1,23 @@
 /**
- * sources/types.ts — the source-agnostic currency of the pipeline.
+ * sources/types.ts: the source-agnostic currency of the pipeline.
  *
  * A human-hindsight backend (Claude Code, kiro-cli, …) is a {@link SessionSource}:
  * it discovers sessions in its own on-disk store and turns each session's raw
- * lines into the SAME three artifacts every downstream stage consumes —
+ * lines into the SAME three artifacts every downstream stage consumes:
  * {@link ExtractedMessage}s (with observable {@link Drop}s), and a
  * {@link TimelineEvent} stream. Once a source has produced these, NOTHING
  * downstream (dedupe, anaphora, outcome, render, distill) parses raw lines
- * again; the seam lives entirely here.
- *
- * These types were previously defined in `src/core/extract.ts` and
- * `src/core/discover.ts`; they moved here so both the Claude and kiro adapters
- * can depend on one shared vocabulary without importing each other.
+ * again; the seam lives entirely here. Every adapter depends on this one
+ * vocabulary without importing another.
  */
 
 /** Which backend a session came from. */
-export type SourceName = "claude" | "codex" | "kiro" | "opencode";
+export type SourceName = "claude" | "codex" | "kiro" | "kirocrew" | "opencode";
 
 /**
  * A recovered human message. `text` may join multiple surviving pieces with a
  * blank line and may include rendered `[decision]` / `[command]` /
- * `[image pasted]` lines (Claude Code) — kiro sources omit surfaces they cannot
+ * `[image pasted]` lines (Claude Code); kiro sources omit surfaces they cannot
  * produce.
  */
 export interface ExtractedMessage {
@@ -53,9 +50,9 @@ export interface ExtractResult {
  * resolve what short human turns like "yes" or "option 2" referred to:
  *   - `human`:     a human turn (text identical to the extracted message);
  *   - `assistant`: an assistant *text* turn (the antecedent candidate);
- *   - `plan`:      an `ExitPlanMode`-style tool surface — what a bare "yes" approved;
+ *   - `plan`:      an `ExitPlanMode`-style tool surface, what a bare "yes" approved;
  *   - `question`:  an `AskUserQuestion`-style surface, rendered compactly;
- *   - `boundary`:  a hard context reset (`/clear`, `/compact`) — an antecedent
+ *   - `boundary`:  a hard context reset (`/clear`, `/compact`): an antecedent
  *                  must never be resolved across it, because the model never
  *                  saw the pre-boundary text either. Claude Code emits none
  *                  today; kiro emits it for `Clear`/`Compaction` entries.
@@ -82,12 +79,25 @@ export interface SessionInfo {
   /** Unique provenance locator when several sessions share one physical file. */
   key?: string;
   /**
+   * The id an earlier export recorded for this conversation when the backend
+   * has since moved it to another file (kiro-cli copies a flat-store session
+   * into its v3 store). Export matches an earlier manifest row of the same
+   * origin by it, so the export name and session id survive the move.
+   */
+  stableId?: string;
+  /**
+   * Discovery found this session but could not read even its metadata (a
+   * permission change), so its project is unknown. Reading it fails the same
+   * way; export then counts a read error and keeps its earlier export.
+   */
+  unreadable?: boolean;
+  /**
    * Cheap entry count: number of non-empty newline-delimited lines. Each JSONL
    * line is one transcript entry; we deliberately do NOT `JSON.parse` per line
    * (that would be O(entries) parses just to inventory the machine).
    */
   entryCount: number;
-  /** File modification time — a proxy for "last touched". */
+  /** File modification time, a proxy for "last touched". */
   mtime: Date;
 }
 
@@ -125,7 +135,7 @@ export interface ProjectInfo {
 export interface SessionSource {
   readonly name: SourceName;
   /** Enumerate projects+sessions in this backend's store; missing store → []. */
-  discover(opts?: { countEntries?: boolean }): ProjectInfo[];
+  discover(opts?: { countEntries?: boolean; readProjectPaths?: boolean }): ProjectInfo[];
   /** Load a database/structured session; absent means read the JSONL at session.path. */
   read?(session: SessionInfo): string[];
   /** Close owned read handles after export, including when a read fails. */
@@ -137,8 +147,12 @@ export interface SessionSource {
   /**
    * Optional session-level classification from store metadata: `"automation"`
    * excludes the whole session (kiro subagent/naming/consolidation sessions),
-   * `"interactive"`/undefined keeps it. Claude Code classifies per-entry inside
-   * `extract` and needs no session-level pass.
+   * `"kirocrew"` excludes it too and means its human side lives in the Kiro
+   * Crew store (kiro rule K15; reported separately so the person knows where it
+   * went), `"interactive"`/undefined keeps it. Claude Code classifies per-entry
+   * inside `extract` and needs no session-level pass.
    */
-  classify?(session: SessionInfo & { project: string }): "interactive" | "automation" | undefined;
+  classify?(
+    session: SessionInfo & { project: string },
+  ): "interactive" | "automation" | "kirocrew" | undefined;
 }

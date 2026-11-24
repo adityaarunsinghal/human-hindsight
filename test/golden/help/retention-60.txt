@@ -1,0 +1,27 @@
+human-hindsight retention
+Preview or apply settings that keep local session history
+longer.
+
+Examples
+  human-hindsight retention
+    See the settings available for your installed tools.
+
+  human-hindsight retention --source claude --apply
+    Review and confirm changes for Claude Code.
+
+Common options
+  --source <tool>  History to read: claude, codex, kiro,
+                   kirocrew, opencode, or auto (default)
+  --apply          Apply the previewed settings after
+                   confirmation
+  --dry-run        Preview only, even when --apply is
+                   present
+
+More help
+  human-hindsight retention --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

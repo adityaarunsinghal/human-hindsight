@@ -18,6 +18,10 @@ function output(tty = false, columns = 80) {
   return { stream, text: () => text };
 }
 
+// The last frame erases the row, returns to column one, and shows the cursor
+// again, inside synchronized-output markers so the terminal paints it at once.
+const CLEARED = "\r\u001b[2K\u001b[?25h\u001b[?2026l";
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllEnvs();
@@ -39,7 +43,7 @@ describe("terminal progress", () => {
     await vi.advanceTimersByTimeAsync(250);
     await expect(work).resolves.toBe("ready");
     expect(cap.text()).toContain("0.2s");
-    expect(cap.text().endsWith("\r\u001b[2K")).toBe(true);
+    expect(cap.text().endsWith(CLEARED)).toBe(true);
   });
 
   it("appears immediately, animates, updates its stage, and cleans up once", () => {
@@ -57,7 +61,7 @@ describe("terminal progress", () => {
     expect(cap.text()).toContain("0.3s");
     progress.clear();
     const cleared = cap.text();
-    expect(cleared.endsWith("\r\u001b[2K")).toBe(true);
+    expect(cleared.endsWith(CLEARED)).toBe(true);
     progress.clear();
     vi.advanceTimersByTime(1000);
     expect(cap.text()).toBe(cleared);
@@ -81,7 +85,8 @@ describe("terminal progress", () => {
     const cap = output(true, columns);
     const progress = startProgress(cap.stream, "Reading a very long session label ".repeat(10));
     try {
-      const line = stripVTControlCharacters(cap.text()).replace("\r", "");
+      // Carriage returns move the cursor; they take no column.
+      const line = stripVTControlCharacters(cap.text()).replaceAll("\r", "");
       expect(line.length).toBeLessThanOrEqual(Math.max(1, columns - 1));
       expect(line).not.toContain("\n");
     } finally {
@@ -119,7 +124,7 @@ describe("terminal progress", () => {
     }
   });
 
-  it("clears progress on failure and keeps an open-source link in the privacy reminder", async () => {
+  it("clears progress when the work fails", async () => {
     vi.stubEnv("TERM", "xterm-256color");
     const cap = output(true);
     await expect(
@@ -127,21 +132,37 @@ describe("terminal progress", () => {
         throw new Error("Failed");
       }),
     ).rejects.toThrow("Failed");
-    expect(cap.text().endsWith("\r\u001b[2K")).toBe(true);
-    const reminder = terminalPrivacyReminder(cap.stream);
+    expect(cap.text().endsWith(CLEARED)).toBe(true);
+  });
+
+  it("links the privacy reminder on a drawing terminal and spells the URL out elsewhere", () => {
+    vi.stubEnv("TERM", "xterm-256color");
+    const reminder = terminalPrivacyReminder(output(true).stream);
     expect(reminder).toContain("\u001b]8;;https://github.com/");
     expect(stripVTControlCharacters(reminder)).toContain("fully open source");
     expect(reminder).toContain("configured provider");
-    expect(terminalPrivacyReminder(output().stream)).toContain(
-      "https://github.com/adityaarunsinghal/human-hindsight",
-    );
-  });
-
-  it("keeps the repository URL readable without terminal escape sequences in plain output", () => {
     const plain = terminalPrivacyReminder(output().stream);
-    expect(plain).toContain("fully open source (https://github.com/");
+    expect(plain).toContain(
+      "fully open source (https://github.com/adityaarunsinghal/human-hindsight",
+    );
     expect(plain).not.toContain("\u001b");
+    // A terminal that cannot draw gets no link escapes, only words wrapped to its width.
     vi.stubEnv("TERM", "dumb");
-    expect(terminalPrivacyReminder(output(true).stream)).toBe(plain);
+    const dumb = terminalPrivacyReminder(output(true).stream);
+    expect(dumb).not.toContain("\u001b");
+    expect(dumb.replace(/\n/g, " ")).toBe(plain);
+  });
+});
+
+describe("plain mode progress", () => {
+  it("prints one static line per stage in plain mode and animates nothing", () => {
+    vi.useFakeTimers();
+    vi.stubEnv("TERM", "xterm-256color");
+    vi.stubEnv("HUMAN_HINDSIGHT_PLAIN", "1");
+    const cap = output(true);
+    const progress = startProgress(cap.stream, "Reading session history");
+    vi.advanceTimersByTime(500);
+    progress.clear();
+    expect(cap.text()).toBe("Reading session history\n");
   });
 });

@@ -1,7 +1,7 @@
 {
   "name": "human-hindsight",
-  "version": "1.8.5",
-  "description": "Mine coding-agent history (Claude Code, Codex, Kiro, OpenCode) into a oneshot prompt library and CLAUDE.md/AGENTS.md preferences. The prompt you'd write if you knew then what you know now.",
+  "version": "2.0.0",
+  "description": "Build a reusable prompt library, working agreements, and personalized subagents from your Claude Code, Codex, Kiro CLI, Kiro Crew, and OpenCode history.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",
   "license": "MIT",
@@ -30,10 +30,11 @@
     "url": "https://github.com/adityaarunsinghal/human-hindsight/issues"
   },
   "bin": {
-    "human-hindsight": "./dist/cli.js"
+    "human-hindsight": "launcher/cli.cjs"
   },
   "files": [
-    "dist"
+    "dist",
+    "launcher/cli.cjs"
   ],
   "engines": {
     "node": "^22.13.0 || >=23.4.0"
@@ -41,7 +42,9 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "prepare": "npm run build --silent 1>&2",
-    "test": "vitest run",
+    "test": "vitest run --project unit",
+    "test:smoke": "vitest run --project smoke",
+    "test:budget": "node scripts/check-test-budget.mjs",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "tsc --noEmit",
@@ -65,6 +68,7 @@
   },
   "exports": {
     "./cli": "./dist/cli.js",
+    "./launcher/cli.cjs": "./launcher/cli.cjs",
     "./package.json": "./package.json"
   }
 }

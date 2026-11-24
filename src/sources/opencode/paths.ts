@@ -13,12 +13,15 @@ export function resolveOpenCodePaths(
   env: NodeJS.ProcessEnv = process.env,
   userHome: string = os.homedir(),
 ): OpenCodePaths {
+  // An empty value counts as unset: it would otherwise be the current folder.
+  const set = (value: string | undefined) => (value?.trim() ? value : undefined);
   const opencodeDir = path.resolve(
-    opts.dir ??
-      env.HUMAN_HINDSIGHT_OPENCODE_DIR ??
+    set(opts.dir) ??
+      set(env.HUMAN_HINDSIGHT_OPENCODE_DIR) ??
       path.join(env.XDG_DATA_HOME || path.join(userHome, ".local", "share"), "opencode"),
   );
-  const file = opts.db ?? (env.HUMAN_HINDSIGHT_OPENCODE_DB || env.OPENCODE_DB || "opencode.db");
+  const file =
+    set(opts.db) ?? set(env.HUMAN_HINDSIGHT_OPENCODE_DB) ?? set(env.OPENCODE_DB) ?? "opencode.db";
   return {
     opencodeDir,
     opencodeDb: file === ":memory:" ? file : path.resolve(opencodeDir, file),

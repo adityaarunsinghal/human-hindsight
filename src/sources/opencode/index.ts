@@ -22,18 +22,23 @@ function assertSession(session: SessionInfo): asserts session is OpenCodeSession
   }
 }
 
-export function opencodeSource(dir: string, file: string): SessionSource {
+/** `busyTimeoutMs` bounds the wait for OpenCode's write lock (tests use 0). */
+export function opencodeSource(
+  dir: string,
+  file: string,
+  opts: { busyTimeoutMs?: number } = {},
+): SessionSource {
   const handles = new Map<string, DatabaseSync>();
   return {
     name: "opencode",
-    discover: (opts) => discoverOpenCode(dir, file, opts?.countEntries ?? true),
+    discover: (o) => discoverOpenCode(dir, file, o?.countEntries ?? true, opts.busyTimeoutMs),
     read(info) {
       assertSession(info);
       const session = info;
       if (session.format === "json") return readLegacyOpenCode(dir, session);
       let db = handles.get(session.path);
       if (!db) {
-        db = openOpenCodeDatabase(session.path);
+        db = openOpenCodeDatabase(session.path, opts.busyTimeoutMs);
         handles.set(session.path, db);
       }
       return readOpenCodeSession(db, session);

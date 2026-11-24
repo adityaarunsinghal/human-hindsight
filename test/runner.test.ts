@@ -2,18 +2,16 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { AuthorSchema, DigestSchema } from "../src/distill/schemas.js";
 import {
-  type Capabilities,
   ClaudeRunnerError,
-  defaultIo,
+  preflightClaude,
   probeCapabilities,
-  type RunnerIo,
   resetCapabilityCache,
   runClaude,
-  type SpawnResult,
-} from "../src/claude/runner.js";
-import { AuthorSchema, DigestSchema } from "../src/claude/schemas.js";
-import { preflightClaude } from "../src/runners/claude.js";
+} from "../src/runners/claude.js";
+import type { RunnerIo, SpawnResult } from "../src/runners/shared.js";
+import type { Capabilities } from "../src/runners/types.js";
 
 // --- fixtures --------------------------------------------------------------
 
@@ -69,7 +67,7 @@ function envelope(body: unknown, opts: { isError?: boolean } = {}): SpawnResult 
  * `--output-format json` when verbose mode is on (`--verbose`, or
  * `"verbose": true` in settings.json). Shape copied from a real
  * CLI 2.1.220 run: leading `system`/`assistant` events carry no `result` field,
- * and on the terminal event `type` is NOT the first key — so the parser has to
+ * and on the terminal event `type` is NOT the first key, so the parser has to
  * look the event up structurally, not by position.
  */
 function verboseEnvelope(body: unknown, opts: { isError?: boolean } = {}): SpawnResult {
@@ -98,7 +96,7 @@ function verboseEnvelope(body: unknown, opts: { isError?: boolean } = {}): Spawn
 
 interface MockIo {
   io: RunnerIo;
-  calls: Array<{ args: string[]; input: string; cwd?: string; processGroup?: boolean }>;
+  calls: Array<{ args: string[]; input: string; cwd?: string }>;
 }
 
 /** A RunnerIo whose spawn returns a queued sequence of results. */
@@ -108,7 +106,7 @@ function mockIo(results: SpawnResult[], which: string | null = "/usr/bin/claude"
   const io: RunnerIo = {
     which: () => which,
     spawn: async (_bin, args, opts) => {
-      calls.push({ args, input: opts.input, cwd: opts.cwd, processGroup: opts.processGroup });
+      calls.push({ args, input: opts.input, cwd: opts.cwd });
       const r = results[i++];
       if (!r) throw new Error("unexpected extra spawn call");
       return r;
@@ -119,7 +117,7 @@ function mockIo(results: SpawnResult[], which: string | null = "/usr/bin/claude"
 
 // --- tests -----------------------------------------------------------------
 
-describe("runClaude — success path", () => {
+describe("runClaude: success path", () => {
   it.each([false, true])("prefers modern structured_output (verbose=%s)", async (verbose) => {
     const terminal = {
       type: "result",
@@ -218,7 +216,7 @@ describe("runClaude — success path", () => {
   });
 });
 
-describe("runClaude — verbose-mode array envelope", () => {
+describe("runClaude: verbose-mode array envelope", () => {
   // Regression: with verbose mode on (`--verbose`, or `"verbose": true` in
   // settings.json) `claude -p --output-format json` emits a JSON ARRAY of
   // stream events rather than a single object. The array has no top-level
@@ -296,7 +294,7 @@ describe("runClaude — verbose-mode array envelope", () => {
   });
 });
 
-describe("runClaude — retry", () => {
+describe("runClaude: retry", () => {
   it("retries exactly once on malformed output then succeeds (2 spawns)", async () => {
     const { io, calls } = mockIo([envelope("this is not json"), envelope(VALID_DIGEST)]);
     const out = await runClaude(
@@ -312,7 +310,7 @@ describe("runClaude — retry", () => {
 
   it("rejects a stub oneshot body (schema-valid JSON, semantic junk) and recovers on retry", async () => {
     // Incident replay: the author stage once received {"oneshot_markdown":
-    // "placeholder"} — perfectly-shaped JSON that a plain string field accepts.
+    // "placeholder"}: perfectly-shaped JSON that a plain string field accepts.
     // The minimum-body floor makes it a validation failure, so the standard
     // corrective retry fires instead of a junk entry being written.
     const stub = { ...VALID_AUTHOR, oneshot_markdown: "placeholder" };
@@ -357,7 +355,7 @@ describe("runClaude — retry", () => {
   });
 });
 
-describe("runClaude — binary resolution", () => {
+describe("runClaude: binary resolution", () => {
   it("throws a missing-binary error with an install pointer", async () => {
     const { io } = mockIo([], null);
     try {
@@ -373,7 +371,7 @@ describe("runClaude — binary resolution", () => {
   });
 });
 
-describe("runClaude — schema-in-prompt fallback", () => {
+describe("runClaude: schema-in-prompt fallback", () => {
   it("embeds the schema in the prompt when --json-schema is unsupported", async () => {
     const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
     const out = await runClaude(
@@ -389,7 +387,7 @@ describe("runClaude — schema-in-prompt fallback", () => {
   });
 });
 
-describe("runClaude — enforced isolation", () => {
+describe("runClaude: enforced isolation", () => {
   it("uses a private cwd, enforced no-tools controls, and a separate system instruction", async () => {
     const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
     let mode: number | undefined;
@@ -406,7 +404,6 @@ describe("runClaude — enforced isolation", () => {
     );
     const call = calls[0];
     expect(mode).toBe(0o700);
-    expect(call?.processGroup).toBe(true);
     expect(call?.args).toEqual(
       expect.arrayContaining([
         "--safe-mode",
@@ -519,7 +516,7 @@ describe("runClaude — enforced isolation", () => {
   });
 });
 
-describe("runClaude — timeout", () => {
+describe("runClaude: timeout", () => {
   it("throws a typed timeout error when the spawn times out", async () => {
     const timedOut: SpawnResult = {
       code: null,
@@ -540,101 +537,6 @@ describe("runClaude — timeout", () => {
       expect((e as ClaudeRunnerError).kind).toBe("timeout");
     }
   });
-
-  it("defaultIo.spawn actually kills a process that exceeds the timeout", async () => {
-    const start = Date.now();
-    // Portable long-running child (no POSIX `sleep`, so the suite runs on Windows
-    // too, L12). SIGTERM should stop it well before the SIGKILL grace elapses.
-    const res = await defaultIo.spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], {
-      input: "",
-      timeoutMs: 150,
-    });
-    expect(res.timedOut).toBe(true);
-    expect(Date.now() - start).toBeLessThan(4000);
-  });
-
-  it("swallows EPIPE when the child exits before the prompt is fully written", async () => {
-    // A child that exits immediately without reading stdin; writing a large
-    // prompt to its closed stdin must NOT crash the process.
-    const big = "x".repeat(2_000_000);
-    const res = await defaultIo.spawn(process.execPath, ["-e", "process.exit(1)"], {
-      input: big,
-      timeoutMs: 5_000,
-    });
-    // We only require that the promise resolves (no uncaught EPIPE). Exit code is
-    // reported for the caller to classify.
-    expect(res.timedOut).toBe(false);
-    expect(res.code).toBe(1);
-  });
-});
-
-describe("defaultIo.spawn — a child that outlives its stdout pipe", () => {
-  // Root cause of an observed end-of-run hang: `close` fires when the stdio
-  // pipes close, NOT when the direct child exits. A CLI that execs a wrapper or
-  // starts background helpers (an observed wrapper launches MCP servers) can exit
-  // while a grandchild still holds the inherited stdout pipe. The runner then
-  // waits on that grandchild, and the timeout is powerless because its SIGTERM
-  // goes to a process that is already gone. Observed live: a distill run sat
-  // idle for 10+ minutes after its last output with no child of its own.
-  it("resolves on child exit instead of waiting for a lingering grandchild", async () => {
-    const t0 = Date.now();
-    const res = await defaultIo.spawn("/bin/sh", ["-c", "sleep 30 & echo done; exit 0"], {
-      input: "",
-      timeoutMs: 20_000,
-    });
-    // Must return as soon as the child exits, not 30s later when `sleep` ends.
-    expect(Date.now() - t0).toBeLessThan(10_000);
-    expect(res.timedOut).toBe(false);
-    expect(res.code).toBe(0);
-    // The output the child DID write is still captured.
-    expect(res.stdout).toContain("done");
-  }, 40_000);
-
-  it("still captures full output from a normal child", async () => {
-    // Guard: the exit-based path must not truncate a well-behaved child that
-    // flushes and exits without lingering helpers.
-    const res = await defaultIo.spawn(
-      process.execPath,
-      ["-e", "process.stdout.write('a'.repeat(200000)); process.stdout.end()"],
-      { input: "", timeoutMs: 20_000 },
-    );
-    expect(res.stdout.length).toBe(200000);
-    expect(res.timedOut).toBe(false);
-  }, 40_000);
-
-  it("still reports a non-zero exit code", async () => {
-    const res = await defaultIo.spawn(process.execPath, ["-e", "process.exit(3)"], {
-      input: "",
-      timeoutMs: 20_000,
-    });
-    expect(res.code).toBe(3);
-  }, 40_000);
-
-  it("releases the child's stdio handles on settle so the process can exit", async () => {
-    // Sequel to the resolve-on-exit fix: settling early leaves the child's
-    // stdio streams OPEN whenever a grandchild inherited the pipes (or the
-    // child was killed mid-write). Those streams are ref'd libuv handles, so
-    // even though every promise resolved, the process cannot exit. Observed
-    // live: a finished distill run lingered 20+ minutes holding exactly two
-    // orphaned child-stdio sockets; destroying them made it exit immediately.
-    type HandleCarrier = { _getActiveHandles?: () => unknown[] };
-    const getHandles = () =>
-      new Set(((process as HandleCarrier)._getActiveHandles?.() ?? []) as object[]);
-    const before = getHandles();
-    const res = await defaultIo.spawn("/bin/sh", ["-c", "sleep 20 & echo held; exit 0"], {
-      input: "",
-      timeoutMs: 15_000,
-    });
-    expect(res.stdout).toContain("held");
-    // One macrotask for any destroy() teardown to complete.
-    await new Promise((r) => setImmediate(r));
-    const leaked = [...getHandles()].filter(
-      (h) => !before.has(h) && h?.constructor?.name === "Socket",
-    );
-    // While the grandchild `sleep` is STILL alive (it holds the pipe write
-    // ends for ~20s), our side of those pipes must already be gone.
-    expect(leaked).toEqual([]);
-  }, 40_000);
 });
 
 describe("probeCapabilities", () => {

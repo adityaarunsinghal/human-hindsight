@@ -3,9 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildClusterPrompt } from "../src/claude/prompts/cluster.js";
-import type { Digest } from "../src/claude/schemas.js";
 import type { ManifestEntry } from "../src/commands/distill.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
 import { OperationStore } from "../src/distill/operations.js";
 import {
   createRetryHandlers,
@@ -20,7 +19,13 @@ import {
   saveDigests,
   saveTasks,
 } from "../src/distill/pipeline.js";
+import { buildClusterPrompt } from "../src/distill/prompts/cluster.js";
 import { executeRetry, prepareRetry } from "../src/distill/retry.js";
+import type { Digest } from "../src/distill/schemas.js";
+import { homeBuilder } from "./support/home.js";
+
+// Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
+setFileWriter(unflushedWriter);
 
 const homes: string[] = [];
 const output = new Writable({
@@ -193,7 +198,9 @@ describe("durable pipeline operations", () => {
     const plan = prepareRetry({ home: dir, stage: "author", handlers: createRetryHandlers(dir) });
     expect(plan.modelOperations).toEqual([]);
     expect(plan.blocked).toHaveLength(1);
-    expect(plan.blocked[0]?.reason).toContain("Saved task definition changed");
+    expect(plan.blocked[0]?.reason).toContain(
+      "Its group changed since it failed; run distill without --retry-failed",
+    );
   });
 
   it("records actual failure and strict digest repair never touches the grouping", async () => {
@@ -377,11 +384,73 @@ describe("durable pipeline operations", () => {
       }) as RunnerFn,
       output,
     });
-    expect(first.failed[0]?.error).toMatch(/human edit kept/);
+    expect(first.kept[0]?.reason).toMatch(/edited by hand while it was being written/);
     expect(fs.readFileSync(path.join(library, `${task.slug}.oneshot.md`), "utf8")).toBe(
       "human edit during inference",
     );
     expect(new OperationStore(dir).list()[0]?.state).toBe("result-saved");
+  });
+
+  describe("named recovery writes with the model normal authoring used", () => {
+    /** Two tasks of one grouping; the first was authored, the second needs recovery. */
+    function recoveryHome(groupingModel: string | null, writtenWith?: string) {
+      const built = homeBuilder()
+        .session({ project: "alpha", sessionId: "r-0001", messages: ["Build the first thing."] })
+        .session({ project: "alpha", sessionId: "r-0002", messages: ["Build the second thing."] })
+        .digestAll()
+        .task({ slug: "first-thing-work", members: [0] })
+        .task({ slug: "second-thing-work", members: [1] })
+        .library("first-thing-work")
+        .build();
+      homes.push(built.dir);
+      const tasks = built.json<Record<string, unknown>>("distill/tasks.json");
+      fs.writeFileSync(
+        built.path("distill/tasks.json"),
+        JSON.stringify({
+          ...tasks,
+          ledger_runner: "claude",
+          lineage: {
+            version: 1,
+            fingerprint: "f",
+            prompt_version: 1,
+            schema_hash: "s",
+            model: groupingModel,
+            runner: "claude",
+          },
+        }),
+      );
+      const sourcesPath = built.path("library/first-thing-work/sources.json");
+      const sources = built.json<Record<string, unknown>>("library/first-thing-work/sources.json");
+      if (writtenWith !== undefined)
+        fs.writeFileSync(
+          sourcesPath,
+          JSON.stringify({
+            ...sources,
+            lineage: { version: 1, model: writtenWith, runner: "claude" },
+          }),
+        );
+      return built.dir;
+    }
+    const modelOf = (dir: string) =>
+      prepareTaskRecoveryInputs(dir, ["second-thing-work"])[0]?.settings.model;
+
+    it("takes the writing model from the generation's authored prompts, not the grouping's", () => {
+      expect(modelOf(recoveryHome("grouping-only-model", "writing-model"))).toBe("writing-model");
+    });
+
+    it("keeps a plan label or the CLI default from the grouping, which writing shares", () => {
+      expect(modelOf(recoveryHome("balanced/major"))).toBe("balanced/major");
+      expect(modelOf(recoveryHome(null))).toBeNull();
+    });
+
+    it("asks for a model when only a concrete grouping model is known", () => {
+      const dir = recoveryHome("grouping-only-model");
+      expect(() => modelOf(dir)).toThrow(/--author-model, --model, or --quality/);
+      expect(
+        prepareTaskRecoveryInputs(dir, ["second-thing-work"], { model: "chosen-model" })[0]
+          ?.settings.model,
+      ).toBe("chosen-model");
+    });
   });
 
   it("protects provenance-only legacy successes after a prompt was deleted", () => {

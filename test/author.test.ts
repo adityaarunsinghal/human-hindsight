@@ -3,17 +3,26 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it } from "vitest";
-import { AUTHOR_PROMPT_VERSION, buildAuthorPrompt } from "../src/claude/prompts/author.js";
-import type { RunClaudeOptions } from "../src/claude/runner.js";
-import type { Author, ClusterTask, Digest } from "../src/claude/schemas.js";
-import type { ManifestEntry } from "../src/commands/distill.js";
+import { librarySentence, type ManifestEntry } from "../src/commands/distill.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
 import { oneshotHash } from "../src/core/library.js";
 import {
+  createRetryHandlers,
+  prepareTaskRecoveryInputs,
   type RunnerFn,
   runAuthorStage,
   type SourcesJson,
+  saveDigests,
+  saveTasks,
   summarizeOutcomes,
 } from "../src/distill/pipeline.js";
+import { AUTHOR_PROMPT_VERSION, buildAuthorPrompt } from "../src/distill/prompts/author.js";
+import { executeRetry, prepareRetry } from "../src/distill/retry.js";
+import type { Author, ClusterTask, Digest } from "../src/distill/schemas.js";
+import type { RunClaudeOptions } from "../src/runners/claude.js";
+
+// Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
+setFileWriter(unflushedWriter);
 
 // --- helpers ---------------------------------------------------------------
 
@@ -89,7 +98,7 @@ const PROMPT = buildAuthorPrompt({
   ],
 });
 
-// --- prompt-contract tests — pin the realism instructions -----------
+// --- prompt-contract tests: pin the realism instructions -----------
 
 describe("author prompt contract", () => {
   it("pins the knowable-at-t=0 test", () => {
@@ -189,10 +198,19 @@ describe("author prompt contract", () => {
     expect(PROMPT).not.toContain("human already\ncompleted");
   });
 
+  it("tells the writer not to present an approach as proven when no member reached a result", () => {
+    // One instruction, beside the outcomes it depends on; the rest of the prompt is unchanged.
+    const lines = PROMPT.split("\n");
+    const at = lines.findIndex((line) => line.startsWith("Member session outcomes:"));
+    expect(lines.slice(at + 1, at + 3).join(" ")).toBe(
+      "If no member is completed or partial, write the prompt from what the human asked for and decided, and do not present any approach from those sessions as proven.",
+    );
+  });
+
   it("has a version constant and inlines member content verbatim (budget is the pipeline's job)", () => {
     expect(AUTHOR_PROMPT_VERSION).toBeGreaterThanOrEqual(1);
     // The pipeline's budget system blocks or cuts oversized tasks BEFORE they
-    // reach the builder, so the builder itself must inline content whole —
+    // reach the builder, so the builder itself must inline content whole:
     // nothing is ever lost here without disclosure upstream.
     const content = "z".repeat(40_000);
     const big = buildAuthorPrompt({
@@ -335,9 +353,9 @@ describe("runAuthorStage", () => {
       digests: { "a.md": digest("completed"), "b.md": digest("completed") },
       runner,
     });
-    expect(calls).toBe(1); // no new claude call — protected pre-spend
-    expect(r2.skipped).toHaveLength(1);
-    expect(r2.skipped[0]?.reason).toContain("--force");
+    expect(calls).toBe(1); // no new claude call: protected pre-spend
+    expect(r2.kept).toHaveLength(1);
+    expect(r2.kept[0]?.reason).toContain("--force");
     expect(fs.readFileSync(oneshotPath, "utf8")).toBe(editedContent); // untouched
 
     // --force re-authors and overwrites.
@@ -353,28 +371,258 @@ describe("runAuthorStage", () => {
     expect(fs.readFileSync(oneshotPath, "utf8")).not.toBe(editedContent);
   });
 
-  it("skips tasks with no completed/partial member and never calls the runner", async () => {
+  it("says once, in plain words, why prompts are written again", async () => {
     const home = tmpHome();
     writeExport(home, "a.md");
-    let called = false;
-    const runner: RunnerFn = (async () => {
-      called = true;
-      return AUTHORED;
-    }) as RunnerFn;
+    writeExport(home, "b.md");
+    const runner: RunnerFn = (async () => AUTHORED) as RunnerFn;
+    const tasks = [task("auth-feature-work", ["a.md"]), task("billing-fix-work", ["b.md"])];
+    const digests = { "a.md": digest("completed"), "b.md": digest("completed") };
+    await runAuthorStage({ ...baseOpts(home), tasks, digests, runner });
+    const chunks: string[] = [];
+    const output = new Writable({
+      write(c, _e, cb) {
+        chunks.push(c.toString());
+        cb();
+      },
+    });
+    // A different model makes both prompts out of date.
+    await runAuthorStage({
+      ...baseOpts(home),
+      tasks,
+      digests,
+      runner,
+      model: "another-model",
+      output,
+    });
+    const lines = chunks.join("").split("\n");
+    expect(lines.filter((line) => line.includes("again"))).toEqual([
+      "  Writing prompts again for groups whose sessions or settings changed since they were written.",
+    ]);
+    expect(lines.join("\n")).not.toMatch(/regenerating/);
+  });
 
+  type Label = Digest["outcome"] | "no digest";
+  it.each<[string, Label[], "verified" | "unverified" | "none"]>([
+    ["one completed session: a prompt", ["completed"], "verified"],
+    ["one partial session: a prompt", ["partial"], "verified"],
+    ["one unclear session: a prompt marked not verified", ["unclear"], "unverified"],
+    ["one abandoned session: no prompt", ["abandoned"], "none"],
+    ["one session with no digest: a prompt marked not verified", ["no digest"], "unverified"],
+    [
+      "completed beside abandoned and unclear: a prompt",
+      ["abandoned", "unclear", "completed"],
+      "verified",
+    ],
+    ["partial beside abandoned: a prompt", ["abandoned", "partial"], "verified"],
+    ["all unclear: a prompt marked not verified", ["unclear", "unclear"], "unverified"],
+    [
+      "unclear beside abandoned: a prompt marked not verified",
+      ["abandoned", "unclear"],
+      "unverified",
+    ],
+    [
+      "no digest beside abandoned: a prompt marked not verified",
+      ["abandoned", "no digest"],
+      "unverified",
+    ],
+    ["all abandoned: no prompt", ["abandoned", "abandoned", "abandoned"], "none"],
+  ])("a group with %s", async (_name, labels, expected) => {
+    const home = tmpHome();
+    const members = labels.map((_, index) => `m${index}.md`);
+    for (const member of members) writeExport(home, member);
+    let calls = 0;
+    const output: string[] = [];
     const result = await runAuthorStage({
       ...baseOpts(home),
-      tasks: [task("doomed-task-here", ["a.md"])],
-      digests: { "a.md": digest("abandoned") },
+      entries: members.map(entry),
+      tasks: [task("auth-feature-work", members)],
+      digests: Object.fromEntries(
+        labels.flatMap((label, index) =>
+          label === "no digest" ? [] : [[`m${index}.md`, digest(label)]],
+        ),
+      ),
+      runner: (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn,
+      output: new Writable({
+        write(c, _e, cb) {
+          output.push(c.toString());
+          cb();
+        },
+      }),
+    });
+    const dir = path.join(home, "library", "auth-feature-work");
+    if (expected === "none") {
+      expect(calls).toBe(0);
+      expect(result.authored).toEqual([]);
+      expect(result.unverified).toEqual([]);
+      // The plain reason says why: every session was abandoned.
+      expect(result.skipped).toEqual([
+        {
+          slug: "auth-feature-work",
+          reason:
+            labels.length === 1
+              ? "its 1 session was abandoned"
+              : `all ${labels.length} sessions were abandoned`,
+        },
+      ]);
+      expect(fs.existsSync(dir)).toBe(false);
+      return;
+    }
+    expect(calls).toBe(1);
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    expect(result.skipped).toEqual([]);
+    const sources = JSON.parse(fs.readFileSync(path.join(dir, "sources.json"), "utf8"));
+    const oneshot = fs.readFileSync(path.join(dir, "auth-feature-work.oneshot.md"), "utf8");
+    if (expected === "verified") {
+      expect("outcome_verified" in sources).toBe(false);
+      expect(sources.confidence).toBe("high");
+      expect(oneshot).not.toContain("outcome: not verified");
+      expect(result.unverified).toEqual([]);
+      expect(output.join("")).not.toContain("outcome not verified");
+    } else {
+      // Written only as false, at the lowest confidence, and said in the header.
+      expect(sources.outcome_verified).toBe(false);
+      expect(sources.confidence).toBe("low");
+      expect(oneshot.split("-->")[0]).toContain("\n  outcome: not verified\n");
+      expect(result.unverified).toEqual(["auth-feature-work"]);
+      expect(output.join("")).toContain("low confidence, outcome not verified, 0 preferences");
+    }
+  });
+
+  describe("the outcome-not-verified mark", () => {
+    const opts = (home: string, outcome: Digest["outcome"], runner: RunnerFn) => ({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest(outcome) },
       runner,
     });
+    const sourcesOf = (home: string) =>
+      JSON.parse(
+        fs.readFileSync(path.join(home, "library", "auth-feature-work", "sources.json"), "utf8"),
+      );
+    const promptFile = (home: string) =>
+      path.join(home, "library", "auth-feature-work", "auth-feature-work.oneshot.md");
 
-    expect(called).toBe(false);
-    expect(result.authored).toEqual([]);
-    expect(result.skipped).toHaveLength(1);
-    expect(result.skipped[0]?.slug).toBe("doomed-task-here");
-    expect(result.skipped[0]?.reason).toContain("no completed/partial");
-    expect(fs.existsSync(path.join(home, "library", "doomed-task-here"))).toBe(false);
+    it("is kept while nothing changes and cleared once a session reaches a result", async () => {
+      const home = tmpHome();
+      writeExport(home, "a.md");
+      let calls = 0;
+      const runner = (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn;
+      await runAuthorStage(opts(home, "unclear", runner));
+      // The person rates it; a later rewrite keeps the rating.
+      fs.writeFileSync(
+        path.join(home, "library", "auth-feature-work", "sources.json"),
+        JSON.stringify({ ...sourcesOf(home), rating: "up" }),
+      );
+      const again = await runAuthorStage(opts(home, "unclear", runner));
+      expect(calls).toBe(1);
+      expect(again.resumed).toEqual(["auth-feature-work"]);
+      expect(again.unverified).toEqual(["auth-feature-work"]);
+      expect(sourcesOf(home).outcome_verified).toBe(false);
+
+      const reached = await runAuthorStage(opts(home, "completed", runner));
+      expect(calls).toBe(2);
+      expect(reached.authored).toEqual(["auth-feature-work"]);
+      expect(reached.unverified).toEqual([]);
+      const sources = sourcesOf(home);
+      expect("outcome_verified" in sources).toBe(false);
+      expect(sources.confidence).toBe("high");
+      expect(sources.rating).toBe("up");
+      expect(fs.readFileSync(promptFile(home), "utf8")).not.toContain("outcome: not verified");
+    });
+
+    it("on a prompt edited by hand, stays with the edit when a session later reaches a result", async () => {
+      const home = tmpHome();
+      writeExport(home, "a.md");
+      let calls = 0;
+      const runner = (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn;
+      await runAuthorStage(opts(home, "unclear", runner));
+      fs.appendFileSync(promptFile(home), "\nMy own addition.\n");
+      const edited = fs.readFileSync(promptFile(home), "utf8");
+      const before = sourcesOf(home);
+      const result = await runAuthorStage(opts(home, "completed", runner));
+      expect(calls).toBe(1);
+      expect(result.kept.map((kept) => kept.slug)).toEqual(["auth-feature-work"]);
+      expect(fs.readFileSync(promptFile(home), "utf8")).toBe(edited);
+      // A kept edit gets no provenance update, so the mark still describes what was written.
+      expect(sourcesOf(home)).toEqual(before);
+    });
+  });
+
+  describe("--force after a hand edit", () => {
+    const opts = (home: string, runner: RunnerFn, force?: boolean) => ({
+      ...baseOpts(home),
+      tasks: [task("auth-feature-work", ["a.md"])],
+      digests: { "a.md": digest("completed") },
+      runner,
+      force,
+    });
+    const promptFile = (home: string) =>
+      path.join(home, "library", "auth-feature-work", "auth-feature-work.oneshot.md");
+    const sourcesFile = (home: string) =>
+      path.join(home, "library", "auth-feature-work", "sources.json");
+
+    it("with unchanged inputs puts back the saved prompt without a new call", async () => {
+      const home = tmpHome();
+      writeExport(home, "a.md");
+      let calls = 0;
+      const runner = (async () => {
+        calls++;
+        return AUTHORED;
+      }) as RunnerFn;
+      await runAuthorStage(opts(home, runner));
+      const original = fs.readFileSync(promptFile(home), "utf8");
+      const sources = JSON.parse(fs.readFileSync(sourcesFile(home), "utf8"));
+      fs.writeFileSync(sourcesFile(home), JSON.stringify({ ...sources, rating: "down" }));
+      fs.appendFileSync(promptFile(home), "\nMy own addition.\n");
+
+      // Without --force nothing changes, and the prompt is counted once, as kept.
+      const kept = await runAuthorStage(opts(home, runner));
+      expect(kept.resumed).toEqual([]);
+      expect(kept.kept.map((task) => task.slug)).toEqual(["auth-feature-work"]);
+      expect(librarySentence(kept)).toBe("Library: 1 prompt kept (edited by you).");
+      expect(fs.readFileSync(promptFile(home), "utf8")).toContain("My own addition.");
+
+      const forced = await runAuthorStage(opts(home, runner, true));
+      expect(calls).toBe(1);
+      expect(forced.resumed).toEqual([]);
+      expect(forced.authored).toEqual(["auth-feature-work"]);
+      expect(fs.readFileSync(promptFile(home), "utf8")).toBe(original);
+      const after = JSON.parse(fs.readFileSync(sourcesFile(home), "utf8"));
+      expect(after.oneshot_hash).toBe(oneshotHash(original));
+      expect(after.rating).toBe("down");
+      // Now unedited: the next run resumes it.
+      expect((await runAuthorStage(opts(home, runner, true))).resumed).toEqual([
+        "auth-feature-work",
+      ]);
+      expect(calls).toBe(1);
+    });
+
+    it("with unchanged inputs but no saved result writes it again", async () => {
+      const home = tmpHome();
+      writeExport(home, "a.md");
+      let calls = 0;
+      const runner = (async () => {
+        calls++;
+        return { ...AUTHORED, oneshot_markdown: `Generated body ${calls}.` };
+      }) as RunnerFn;
+      await runAuthorStage(opts(home, runner));
+      fs.appendFileSync(promptFile(home), "\nMy own addition.\n");
+      fs.renameSync(path.join(home, "distill"), path.join(home, "distill-moved-aside"));
+      const forced = await runAuthorStage(opts(home, runner, true));
+      expect(calls).toBe(2);
+      expect(forced.authored).toEqual(["auth-feature-work"]);
+      expect(fs.readFileSync(promptFile(home), "utf8")).toContain("Generated body 2.");
+    });
   });
 
   it("resumes only when inputs and output are current; stale generation re-authors", async () => {
@@ -558,7 +806,7 @@ describe("runAuthorStage", () => {
     };
     const kept = await runAuthorStage(opts);
     expect(calls).toBe(0);
-    expect(kept.skipped[0]?.reason).toContain("no verified generation hash");
+    expect(kept.kept[0]?.reason).toContain("no verified generation hash");
     expect(fs.readFileSync(file, "utf8")).toBe("My hand-edited legacy prompt.");
     expect((await runAuthorStage({ ...opts, force: true })).authored).toEqual([
       "auth-feature-work",
@@ -888,27 +1136,29 @@ describe("runAuthorStage", () => {
   });
 
   // --- concurrency -----------------------------------------------------------
-  // A runner that records how many calls are in flight at once, releasing each
-  // only after every worker has had a chance to start (a shared barrier). The
-  // observed peak proves real overlap rather than accidental interleaving.
+  // A runner that records how many calls are in flight at once. Calls park
+  // until `target` are parked together; a fallback opens the gate on the next
+  // turn of the event loop, after every worker that can start has parked, so a
+  // smaller bound fails by assertion instead of hanging. No wall-clock waits.
   function trackingRunner(target: number): {
     runner: RunnerFn;
     maxActive: () => number;
   } {
     let active = 0;
     let peak = 0;
-    let release!: () => void;
-    const gate = new Promise<void>((r) => {
-      release = r;
-    });
+    let waiting: (() => void)[] = [];
+    const open = () => {
+      for (const go of waiting) go();
+      waiting = [];
+    };
     const runner: RunnerFn = (async () => {
       active++;
       peak = Math.max(peak, active);
-      // Once `target` calls are simultaneously parked, open the gate so they
-      // all resolve; with fewer than `target` workers the gate opens when the
-      // last-started worker parks (peak then equals the worker count).
-      if (active >= target) release();
-      await Promise.race([gate, new Promise((r) => setTimeout(r, 250))]);
+      await new Promise<void>((resolve) => {
+        waiting.push(resolve);
+        if (waiting.length >= target) open();
+        else setImmediate(open);
+      });
       active--;
       return AUTHORED;
     }) as RunnerFn;
@@ -979,7 +1229,8 @@ describe("runAuthorStage", () => {
     const runner: RunnerFn = (async (opts: RunClaudeOptions<unknown>) => {
       const m = /task-number-(\d+)/.exec(opts.prompt);
       const i = m ? Number(m[1]) : 0;
-      await new Promise((r) => setTimeout(r, (5 - i) * 5));
+      // Later tasks finish first: each waits one more turn of the event loop than the next.
+      for (let turn = 0; turn < 5 - i; turn++) await new Promise((r) => setImmediate(r));
       return AUTHORED;
     }) as RunnerFn;
 
@@ -1002,5 +1253,73 @@ describe("runAuthorStage", () => {
       "task-number-3",
       "task-number-4",
     ]);
+  });
+});
+
+// --- strict retry and named recovery --------------------------------------------
+
+describe("strict retry and named recovery follow the same rule", () => {
+  const SLUG = "auth-feature-work";
+  /** A saved grouping of one task whose sessions ended as `outcomes`. */
+  function saved(outcomes: Digest["outcome"][]) {
+    const home = tmpHome();
+    const members = outcomes.map((_, index) => `m${index}.md`);
+    for (const member of members)
+      fs.writeFileSync(path.join(home, "exports", member), `### t\n\ncontent of ${member}\n`);
+    fs.writeFileSync(
+      path.join(home, "exports", "manifest.json"),
+      JSON.stringify(members.map(entry)),
+    );
+    const digests = Object.fromEntries(
+      members.map((member, index) => [member, digest(outcomes[index] ?? "unclear")]),
+    );
+    const grouping = task(SLUG, members);
+    saveDigests(home, { generation: "g1", prompt_version: 1, digests });
+    saveTasks(home, { generation: "g1", prompt_version: 1, tasks: [grouping], misc: [] });
+    return { home, members, digests, grouping };
+  }
+  const sourcesOf = (home: string) =>
+    JSON.parse(fs.readFileSync(path.join(home, "library", SLUG, "sources.json"), "utf8"));
+
+  it("a strict retry of an unverified group writes its prompt with the mark", async () => {
+    const { home, members, digests, grouping } = saved(["unclear", "abandoned"]);
+    const failed = await runAuthorStage({
+      home,
+      entries: members.map(entry),
+      generation: "g1",
+      toolVersion: "0.1.0",
+      output: sink(),
+      tasks: [grouping],
+      digests,
+      runner: (async () => {
+        throw new Error("writer unavailable");
+      }) as RunnerFn,
+    });
+    expect(failed.failed).toHaveLength(1);
+    const handlers = createRetryHandlers(home);
+    const plan = prepareRetry({ home, stage: "author", handlers });
+    expect(plan.modelOperations).toHaveLength(1);
+    // A saved answer is checked again in full, so it is a realistic length.
+    const run = (async () => ({
+      ...AUTHORED,
+      oneshot_markdown: `${AUTHORED.oneshot_markdown} ${"Keep each change small and explain the decision behind it. ".repeat(2)}`,
+    })) as RunnerFn;
+    const outcome = await executeRetry(plan, {
+      handlers,
+      output: sink(),
+      getRunner: () => ({ name: "claude" as const, installHint: "", run }),
+    });
+    expect(outcome.failed).toEqual([]);
+    expect(sourcesOf(home)).toMatchObject({ outcome_verified: false, confidence: "low" });
+  });
+
+  it("named recovery prepares an unverified group and refuses one whose sessions were all abandoned", () => {
+    const unverified = saved(["unclear"]);
+    const [operation] = prepareTaskRecoveryInputs(unverified.home, [SLUG], { runner: "claude" });
+    expect(operation?.unitId).toBe(SLUG);
+    const abandoned = saved(["abandoned", "abandoned"]);
+    expect(() => prepareTaskRecoveryInputs(abandoned.home, [SLUG], { runner: "claude" })).toThrow(
+      `${SLUG}: all 2 sessions were abandoned, so it gets no prompt`,
+    );
   });
 });

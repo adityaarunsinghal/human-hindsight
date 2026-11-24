@@ -1,34 +1,76 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { toJsonSchema } from "../claude/schemas.js";
 import { writeFilePrivate } from "../core/fsutil.js";
+import { toJsonSchema } from "../distill/schemas.js";
+import {
+  codexDefaults,
+  hasOutsideCredentials,
+  missingBinaryHint,
+  RUNNER_INFO,
+  readCatalog,
+  readSignInHint,
+  readVersion,
+  requireBinary,
+  requireFlags,
+} from "./capabilities.js";
+import { cliErrorKind } from "./failures.js";
 import {
   AgentRunnerError,
   DEFAULT_TIMEOUT_MS,
+  DISTILL_SYSTEM,
   defaultIo,
   RetryableError,
+  type RunnerEnv,
   type RunnerIo,
+  requireConcreteModel,
   runWithCorrectiveRetry,
   snippet,
   stripFence,
+  TOOL_BAN_LINE,
 } from "./shared.js";
 import type { AgentRunner, RunOptions } from "./types.js";
 
-export const CODEX_INSTALL_HINT =
-  "`codex` CLI not found on PATH. Install it with `npm install -g @openai/codex`, " +
-  "then run `codex login`. Deterministic commands (scan/export) work without it.";
+const CODEX_INSTALL_HINT = missingBinaryHint("codex");
+
+/**
+ * Provider error codes and types inside a Codex error message. Codex passes a
+ * provider's JSON error body through as the message (captured:
+ * `{"error":{"message":...,"type":...,"code":...}}`); only those two typed
+ * fields are read, never the wording.
+ */
+function errorCodes(message: string): string[] {
+  try {
+    const body: unknown = JSON.parse(message);
+    const error =
+      body && typeof body === "object" ? (body as { error?: unknown }).error : undefined;
+    if (!error || typeof error !== "object") return [];
+    const { code, type } = error as { code?: unknown; type?: unknown };
+    return [code, type].filter((value): value is string => typeof value === "string");
+  } catch {
+    return [];
+  }
+}
 
 /** Parse only completed agent messages; progress and tool output aren't answers. */
-function eventResult(stdout: string): { text: string; error: string } {
+function eventResult(stdout: string): { text: string; error: string; model?: string } {
   let text = "";
   let error = "";
+  let model: string | undefined;
   for (const line of stdout.split(/\r?\n/)) {
     if (!line.trim()) continue;
     try {
       const event = JSON.parse(line);
       if (event?.type === "item.completed" && event.item?.type === "agent_message") {
         if (typeof event.item.text === "string") text = event.item.text;
+        if (typeof event.item.model === "string") model = event.item.model;
+      } else if (
+        event?.type === "turn.started" ||
+        event?.type === "turn.completed" ||
+        event?.type === "thread.started"
+      ) {
+        if (typeof event.model === "string") model = event.model;
+        if (event.type === "turn.completed") error = "";
       } else if (event?.type === "turn.failed") {
         error = typeof event.error?.message === "string" ? event.error.message : "turn failed";
       } else if (event?.type === "error" && typeof event.message === "string") {
@@ -38,8 +80,21 @@ function eventResult(stdout: string): { text: string; error: string } {
       // A wrapper's progress line is not a model answer.
     }
   }
-  return { text, error };
+  return { text, error, model };
 }
+
+/** Flags every model call passes; all are present in `codex exec --help` of 0.171.0. */
+const EXEC_FLAGS = [
+  "--json",
+  "--ephemeral",
+  "--sandbox",
+  "--output-schema",
+  "--output-last-message",
+  "--skip-git-repo-check",
+  "--color",
+  "--model",
+  "--config",
+] as const;
 
 /**
  * codex exec provides schema-constrained JSON in a final-message file. Each call
@@ -48,8 +103,8 @@ function eventResult(stdout: string): { text: string; error: string } {
  * user's CLI; nothing here calls an API directly.
  */
 export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo): Promise<T> {
-  const bin = await io.which("codex");
-  if (!bin) throw new AgentRunnerError("missing-binary", CODEX_INSTALL_HINT);
+  requireConcreteModel(opts.model);
+  const bin = await requireBinary("codex", io);
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "human-hindsight-codex-"));
   const schemaFile = path.join(scratch, "schema.json");
   const outputFile = path.join(scratch, "answer.json");
@@ -75,6 +130,10 @@ export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo)
       outputFile,
       "-c",
       "project_doc_max_bytes=0",
+      // Accepted by Codex 0.171.0 even with --strict-config, which rejects an
+      // unknown -c key. Older versions ignore keys they do not know.
+      "-c",
+      `developer_instructions=${JSON.stringify(DISTILL_SYSTEM)}`,
     ];
     if (opts.disableTools ?? true) {
       args.push(
@@ -93,27 +152,36 @@ export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo)
     if (opts.model) args.push("--model", opts.model);
     args.push("-"); // large prompts go through stdin, never the process argument list
     const prompt =
-      (opts.disableTools ?? true)
-        ? `${opts.prompt}\n\nDo not use any tools. Answer directly from the supplied content with JSON matching the output schema.`
-        : opts.prompt;
-    return await runWithCorrectiveRetry(
+      (opts.disableTools ?? true) ? `${opts.prompt}${TOOL_BAN_LINE.codex}` : opts.prompt;
+    let model = opts.model;
+    const value = await runWithCorrectiveRetry(
       prompt,
       opts.schema,
       async (input) => {
         fs.rmSync(outputFile, { force: true }); // a retry must never read a stale answer
-        const result = await io.spawn(bin, args, { input, timeoutMs, cwd: scratch });
+        const result = await io.spawn(bin, args, {
+          input,
+          timeoutMs,
+          cwd: scratch,
+          signal: opts.signal,
+        });
         lastOutput = result.stdout;
         lastStderr = result.stderr;
         if (result.timedOut) {
-          throw new AgentRunnerError("timeout", `codex invocation timed out after ${timeoutMs}ms`, {
+          throw new AgentRunnerError("timeout", `codex call timed out after ${timeoutMs}ms`, {
             stderr: result.stderr,
             output: result.stdout,
           });
         }
         const events = eventResult(result.stdout);
+        model = events.model ?? opts.model;
         if (result.code !== 0 || events.error) {
           throw new AgentRunnerError(
-            "cli-error",
+            cliErrorKind("codex", {
+              message: events.error,
+              codes: errorCodes(events.error),
+              stderr: result.stderr,
+            }),
             `codex exited ${result.code}: ${snippet(events.error || result.stderr || result.stdout) || "no output"}`,
             { stderr: result.stderr, output: result.stdout },
           );
@@ -140,13 +208,39 @@ export async function runCodex<T>(opts: RunOptions<T>, io: RunnerIo = defaultIo)
           { stderr: lastStderr, output: lastOutput },
         ),
     );
+    opts.onResolved?.({ runner: "codex", model });
+    return value;
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
 }
 
-export const codexRunner: AgentRunner = {
-  name: "codex",
-  installHint: CODEX_INSTALL_HINT,
-  run: (opts) => runCodex(opts),
-};
+/**
+ * `deps.env` and `deps.readFile` locate the Codex config the CLI itself loads:
+ * its default model keeps chosen models on the same region prefix, and a custom
+ * provider makes a negative `codex login status` only a hint.
+ */
+export function makeCodexRunner(io: RunnerIo = defaultIo, deps: RunnerEnv = {}): AgentRunner {
+  const env = deps.env ?? process.env;
+  const config = () => codexDefaults(env, deps.readFile);
+  return {
+    name: "codex",
+    displayName: RUNNER_INFO.codex.displayName,
+    binary: RUNNER_INFO.codex.binary,
+    installHint: CODEX_INSTALL_HINT,
+    version: () => readVersion(io, "codex"),
+    signInHint: () =>
+      readSignInHint(
+        io,
+        "codex",
+        {},
+        hasOutsideCredentials("codex", env) || Boolean(config().provider),
+      ),
+    listModels: () => readCatalog(io, "codex", {}, config().model),
+    async preflight() {
+      // The version is shown, not required: no flag or output shape depends on it.
+      await requireFlags(io, await requireBinary("codex", io), "codex", EXEC_FLAGS);
+    },
+    run: (opts) => runCodex(opts, io),
+  };
+}

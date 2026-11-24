@@ -1,0 +1,3 @@
+{"role":"user","content":"start the migration","ts":"2026-02-01T10:00:00.000000+00:00","meta":{"human":true}}
+{"role":"assistant","content":"Starting.","ts":"2026-02-01T10:00:01.000000+00:00","meta":{}}
+{"role":"user","content":"wait, use the staging table instead","ts":"2026-02-01T10:00:02.000000+00:00","meta":{"human":true,"steer":true}}

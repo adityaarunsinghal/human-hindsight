@@ -1,0 +1,30 @@
+human-hindsight suggest-subagents
+Generate specialist subagents from your working preferences.
+
+Examples
+  human-hindsight suggest-subagents --dry-run
+    Preview the preferences and model calls in the plan.
+
+  human-hindsight suggest-subagents
+    Review the plan and generate a set of specialist roles.
+
+  human-hindsight suggest-subagents --export ./my-subagents
+    Write the saved roles to a directory.
+
+Common options
+  --dry-run                Print the call plan and the inputs; run nothing
+  --quality balanced|best  Model plan for reading and writing (default:
+                           balanced)
+  --export <dir>           Write the saved suggestion as files under this
+                           directory (no model calls)
+  --target <tool>          With --export: claude, codex, kiro, kirocrew,
+                           knowledge, or all (default: all)
+
+More help
+  human-hindsight suggest-subagents --help --all
+    Every option for this command
+  human-hindsight doctor
+    Check your setup
+  human-hindsight help --all
+    All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

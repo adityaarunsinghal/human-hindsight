@@ -26,6 +26,7 @@ const fields = [
   "homepage",
   "bugs",
   "bin",
+  "files",
   "engines",
   "exports",
 ];
@@ -33,8 +34,6 @@ const manifest = Object.fromEntries(
   fields.filter((field) => pkg[field] !== undefined).map((field) => [field, pkg[field]]),
 );
 manifest.gitHead = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-manifest.bin = { "human-hindsight": "dist/cli.js" };
-manifest.files = ["dist"];
 for (const file of ["cli.js", "cli.d.ts", "THIRD_PARTY_NOTICES.txt"]) {
   assert(
     fs.existsSync(path.join("dist", file)),
@@ -42,13 +41,14 @@ for (const file of ["cli.js", "cli.d.ts", "THIRD_PARTY_NOTICES.txt"]) {
   );
 }
 fs.cpSync("dist", path.join(app, "dist"), { recursive: true });
+fs.mkdirSync(path.join(app, "launcher"));
+fs.copyFileSync(pkg.bin["human-hindsight"], path.join(app, pkg.bin["human-hindsight"]));
 fs.writeFileSync(path.join(app, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 for (const file of ["README.md", "LICENSE"]) fs.copyFileSync(file, path.join(app, file));
 for (const file of ["package.json", "cli.js", "README.md", "LICENSE"]) {
   fs.copyFileSync(path.join("compat/cc-hindsight", file), path.join(compat, file));
 }
 const wrapper = JSON.parse(fs.readFileSync(path.join(compat, "package.json"), "utf8"));
-wrapper.bin = { "cc-hindsight": "cli.js" };
 wrapper.gitHead = manifest.gitHead;
 assert.equal(wrapper.version, pkg.version);
 assert.equal(wrapper.dependencies["human-hindsight"], pkg.version);

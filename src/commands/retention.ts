@@ -1,8 +1,9 @@
 import type { Readable, Writable } from "node:stream";
 import { defineCommand } from "citty";
-import { askYesNo } from "../claude/consent.js";
 import { applyRetentionPlan, checkRetentionPlan, planRetention } from "../core/retention.js";
+import { askYesNoAnswer } from "../distill/consent.js";
 import { parseSourceMode } from "../sources/registry.js";
+import type { TerminalHost } from "../ui/live.js";
 import { resolvePaths, sharedArgs } from "./_shared.js";
 
 export interface RetentionArgs {
@@ -10,6 +11,7 @@ export interface RetentionArgs {
   "claude-dir"?: string;
   "codex-dir"?: string;
   "kiro-dir"?: string;
+  "kirocrew-dir"?: string;
   "opencode-dir"?: string;
   "opencode-db"?: string;
   source?: string;
@@ -21,7 +23,7 @@ export interface RetentionArgs {
 /** Always previews first. Only --apply plus confirmation (or --yes) writes. */
 export async function runRetention(
   args: RetentionArgs,
-  deps: { input?: Readable; output?: Writable } = {},
+  deps: { input?: Readable; output?: Writable; host?: TerminalHost } = {},
 ): Promise<number> {
   const out = deps.output ?? process.stdout;
   const write = (text = "") => out.write(`${text}\n`);
@@ -30,13 +32,13 @@ export async function runRetention(
   write("Local data retention (optional)");
   if (!plans.length) {
     write(
-      "No tool directories found. Select --source claude|codex|kiro|opencode or set a tool directory.",
+      "No tool directories found. Select --source claude|codex|kiro|kirocrew|opencode or set a tool directory.",
     );
     return 0;
   }
   for (const plan of plans) {
     write();
-    write(`${plan.tool}${plan.file ? ` — ${plan.file}` : ""}`);
+    write(`${plan.tool}${plan.file ? ` (${plan.file})` : ""}`);
     if (plan.error) write(`  ${plan.error}`);
     else if (plan.changes.length) for (const change of plan.changes) write(`  ${change}`);
     else if (plan.file) write("  Already configured for long retention.");
@@ -64,15 +66,20 @@ export async function runRetention(
     write("No changes applied. Use --apply --yes to opt in without an interactive prompt.");
     return 2;
   }
-  if (
-    !args.yes &&
-    !(await askYesNo("Apply these retention settings and back up existing files?", {
-      input: deps.input,
-      output: out,
-    }))
-  ) {
-    write("Declined; no changes applied.");
-    return 2;
+  if (!args.yes) {
+    const answer = await askYesNoAnswer(
+      "Apply these retention settings and back up existing files?",
+      { input: deps.input, output: out, host: deps.host },
+    );
+    // Ctrl-C means one thing everywhere: one line, exit 130.
+    if (answer === "interrupt") {
+      write("Interrupted; no changes applied.");
+      return 130;
+    }
+    if (answer !== "yes") {
+      write("Declined; no changes applied.");
+      return 2;
+    }
   }
   try {
     for (const plan of changed) checkRetentionPlan(plan); // preflight the whole selection
@@ -95,7 +102,6 @@ export async function runRetention(
 export default defineCommand({
   meta: {
     name: "retention",
-    description: "Optionally maximize local history retention; previews until --apply",
   },
   args: {
     ...sharedArgs,

@@ -3,9 +3,9 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { renderPlan } from "../src/claude/consent.js";
-import { ClusterSchema, type Digest } from "../src/claude/schemas.js";
 import { type DistillArgs, type ManifestEntry, runDistill } from "../src/commands/distill.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
+import { renderPlan } from "../src/distill/consent.js";
 import { OperationStore } from "../src/distill/operations.js";
 import {
   loadDigests,
@@ -13,6 +13,10 @@ import {
   runClusterStage,
   runDigestStage,
 } from "../src/distill/pipeline.js";
+import { ClusterSchema, type Digest } from "../src/distill/schemas.js";
+
+// Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
+setFileWriter(unflushedWriter);
 
 const homes: string[] = [];
 const digest: Digest = {
@@ -147,9 +151,9 @@ describe("strict retry command contract", () => {
         },
       ),
     ).toBe(0);
-    expect(f.text()).toContain("1 model operation(s)");
+    expect(f.text()).toContain("1 saved call to make again");
     expect(f.text()).toContain("recorded-model");
-    expect(f.text()).toContain("timeout 900s");
+    expect(f.text()).toContain("up to 900s");
     expect(runner).not.toHaveBeenCalled();
     expect(fs.readFileSync(path.join(f.home, "distill/operations.json"), "utf8")).toBe(before);
     expect(fs.existsSync(path.join(f.home, "distill/writer.lock"))).toBe(false);
@@ -270,7 +274,7 @@ describe("strict retry command contract", () => {
     const before = fs.readFileSync(path.join(f.home, "distill/operations.json"), "utf8");
     const runner = vi.fn();
     const confirm = vi.fn(async (plan) => {
-      expect(renderPlan(plan)).toContain("digest build-session.md");
+      expect(renderPlan(plan)).toContain("session read build-session.md");
       expect(plan.retry.operations).toHaveLength(1);
       expect(plan.retry.repairs).toHaveLength(0);
       return "declined" as const;

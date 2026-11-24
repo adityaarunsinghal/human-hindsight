@@ -1,0 +1,21 @@
+human-hindsight export
+Save your messages from coding sessions as Markdown.
+
+Examples
+  human-hindsight export
+    Export your messages from all available histories on this machine.
+
+  human-hindsight export --project my-app
+    Export one project. Use its name from scan.
+
+Common options
+  --project <name>    Only export sessions from this project
+  --source <tool>     History to read: claude, codex, kiro, kirocrew, opencode,
+                      or auto (default)
+  --min-messages <n>  Minimum human messages for a session to be exported
+
+More help
+  human-hindsight export --help --all  Every option for this command
+  human-hindsight doctor               Check your setup
+  human-hindsight help --all           All commands and options
+  https://github.com/adityaarunsinghal/human-hindsight#readme

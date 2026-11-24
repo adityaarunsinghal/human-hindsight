@@ -14,7 +14,7 @@ function lines(name: string): string[] {
   return fs.readFileSync(path.join(FIX, name), "utf8").split(/\r?\n/);
 }
 
-describe("kiro extract — K1/K4 admission", () => {
+describe("kiro extract: K1/K4 admission", () => {
   it("extracts only Prompt text, normalizing unix-seconds to ISO", () => {
     const { messages, badLines } = extractKiroMessages(lines("k1-prompt.jsonl"));
     expect(messages).toEqual([{ timestamp: "2026-07-14T03:33:20.000Z", text: "do the thing" }]);
@@ -34,7 +34,7 @@ describe("kiro extract — K1/K4 admission", () => {
   });
 });
 
-describe("kiro extract — K6 machine-piece drops", () => {
+describe("kiro extract: K6 machine-piece drops", () => {
   it("drops leading-<, bracket markers, and harness nudges; keeps real text", () => {
     const { messages, drops } = extractKiroMessages(lines("k6-machine.jsonl"));
     // Only the genuine human instruction survives.
@@ -52,7 +52,7 @@ describe("kiro extract — K6 machine-piece drops", () => {
   });
 });
 
-describe("kiro extract — K11 non-text Prompt blocks", () => {
+describe("kiro extract: K11 non-text Prompt blocks", () => {
   it("renders an image block as the R11-parity placeholder", () => {
     const { messages } = extractKiroMessages(lines("k11-unknown-block.jsonl"));
     // The placeholder joins the surviving text piece (blank-line separated).
@@ -67,7 +67,7 @@ describe("kiro extract — K11 non-text Prompt blocks", () => {
   });
 });
 
-describe("kiro extract — K12 boundaries & snapshot", () => {
+describe("kiro extract: K12 boundaries & snapshot", () => {
   it("ignores Clear/Compaction as human text; snapshot is not re-extracted", () => {
     const { messages } = extractKiroMessages(lines("k12-boundaries.jsonl"));
     // Two real prompts; the Compaction snapshot's duplicate of "first request"
@@ -96,7 +96,7 @@ describe("kiro extract — K12 boundaries & snapshot", () => {
   });
 });
 
-describe("kiro extract — K5 negative (tool cancel is machine text)", () => {
+describe("kiro extract: K5 negative (tool cancel is machine text)", () => {
   it("never extracts cancelled/rejected tool text; the human follow-up is its own Prompt", () => {
     const { messages } = extractKiroMessages(lines("k5-cancelled-tool.jsonl"));
     expect(messages.map((m) => m.text)).toEqual(["run the deploy", "actually do it differently"]);
@@ -104,7 +104,7 @@ describe("kiro extract — K5 negative (tool cancel is machine text)", () => {
   });
 });
 
-describe("kiro extract — K14 live-steering recovery", () => {
+describe("kiro extract: K14 live-steering recovery", () => {
   // Real kiro sessions wrap a message the human typed WHILE the agent was working
   // in a harness envelope: "[LIVE STEERING - New message from user]" plus
   // instructions, with the actual words inside a <user_message> tag. K6 dropped
@@ -131,18 +131,24 @@ describe("kiro extract — K14 live-steering recovery", () => {
     expect(steer).not.toContain("STEERING steer-");
   });
 
+  it("keeps a typed closing tag inside the steering message", () => {
+    const typed = "why does </user_message> show up in my log? keep going";
+    const envelope =
+      "[LIVE STEERING - New message from user]\n\nThe user sent a new message while you are working.\n\n" +
+      `<user_message id="steer-x">\n${typed}\n</user_message>\n\nIMPORTANT: After completing your work, say how you handled it.`;
+    const line = JSON.stringify({
+      version: 1,
+      kind: "Prompt",
+      data: { message_id: "m1", content: [{ kind: "text", data: envelope }], meta: {} },
+    });
+    expect(extractKiroMessages([line]).messages.map((m) => m.text)).toEqual([typed]);
+    expect(kiroTimeline([line]).map((e) => e.text)).toEqual([typed]);
+  });
+
   it("still drops an envelope whose user_message is empty", () => {
     const { messages, drops } = extractKiroMessages(lines("k14-live-steering.jsonl"));
     expect(messages).toHaveLength(2);
     expect(drops.some((d) => d.reason.startsWith("K6"))).toBe(true);
-  });
-
-  it("satisfies the SessionSource law", () => {
-    const msgs = extractKiroMessages(lines("k14-live-steering.jsonl")).messages;
-    const human = kiroTimeline(lines("k14-live-steering.jsonl")).filter((e) => e.kind === "human");
-    expect(human.map((e) => ({ timestamp: e.timestamp, text: e.text }))).toEqual(
-      msgs.map((m) => ({ timestamp: m.timestamp, text: m.text })),
-    );
   });
 
   it("recovers a steering message delivered on a ToolResults entry", () => {
@@ -158,20 +164,11 @@ describe("kiro extract — K14 live-steering recovery", () => {
     const { messages } = extractKiroMessages(lines("k14-steering-in-toolresults.jsonl"));
     for (const m of messages) expect(m.text).not.toContain("file contents the agent read");
   });
-
-  it("keeps extract and timeline in agreement for the ToolResults path", () => {
-    const f = "k14-steering-in-toolresults.jsonl";
-    const msgs = extractKiroMessages(lines(f)).messages;
-    const human = kiroTimeline(lines(f)).filter((e) => e.kind === "human");
-    expect(human.map((e) => ({ timestamp: e.timestamp, text: e.text }))).toEqual(
-      msgs.map((m) => ({ timestamp: m.timestamp, text: m.text })),
-    );
-  });
 });
 
-describe("kiro extract — SessionSource law (extract ↔ timeline agreement)", () => {
+describe("kiro extract: SessionSource law (extract ↔ timeline agreement)", () => {
   // Every extracted human message must appear as a `human` timeline event with
-  // identical (timestamp, text), in file order — the alignment invariant.
+  // identical (timestamp, text), in file order: the alignment invariant.
   for (const fixture of [
     "k1-prompt.jsonl",
     "k6-machine.jsonl",
@@ -179,6 +176,8 @@ describe("kiro extract — SessionSource law (extract ↔ timeline agreement)", 
     "k12-boundaries.jsonl",
     "k12-snapshot-only.jsonl",
     "k5-cancelled-tool.jsonl",
+    "k14-live-steering.jsonl",
+    "k14-steering-in-toolresults.jsonl",
   ]) {
     it(`holds for ${fixture}`, () => {
       const msgs = extractKiroMessages(lines(fixture)).messages;
@@ -190,8 +189,8 @@ describe("kiro extract — SessionSource law (extract ↔ timeline agreement)", 
   }
 });
 
-describe("kiro extract — K2 hybrid precedence (unit)", () => {
-  it("a parent-linked (rewind/subagent) session WITH .history is INCLUDED — step 1 beats step 2", () => {
+describe("kiro extract: K2 hybrid precedence (unit)", () => {
+  it("a parent-linked (rewind/subagent) session WITH .history is INCLUDED: step 1 beats step 2", () => {
     const hybrid: KiroSessionMeta = { hasHistory: true, parentSessionId: "parent-uuid" };
     const verdict = classifyKiroSession(hybrid, "[AGENT SYSTEM PROMPT] You are a spawned worker.");
     expect(verdict.include).toBe(true);
@@ -206,7 +205,7 @@ describe("kiro extract — K2 hybrid precedence (unit)", () => {
   });
 });
 
-describe("kiro extract — K13 self-recognition (classify)", () => {
+describe("kiro extract: K13 self-recognition (classify)", () => {
   const noHistoryMeta: KiroSessionMeta = { hasHistory: false };
   it("excludes a human-hindsight distill session even with no other markers", () => {
     const verdict = classifyKiroLines(noHistoryMeta, lines("k13-self.jsonl"));

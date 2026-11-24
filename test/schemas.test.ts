@@ -5,7 +5,7 @@ import {
   DigestSchema,
   MIN_ONESHOT_CHARS,
   toJsonSchema,
-} from "../src/claude/schemas.js";
+} from "../src/distill/schemas.js";
 
 describe("DigestSchema", () => {
   it("accepts a valid digest", () => {
@@ -95,7 +95,7 @@ describe("toJsonSchema", () => {
 
   it("carries the oneshot minimum-body floor into the wire schema as minLength", () => {
     // The constraint must reach the CLI/model via --json-schema, not live only
-    // in our re-validation — the model is told up front that stubs are invalid.
+    // in our re-validation; the model is told up front that stubs are invalid.
     const js = toJsonSchema(AuthorSchema);
     const props = js.properties as Record<string, { minLength?: number }>;
     expect(props.oneshot_markdown?.minLength).toBe(MIN_ONESHOT_CHARS);

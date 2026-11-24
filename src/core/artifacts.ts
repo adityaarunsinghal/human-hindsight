@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { PreferenceCitationSchema, PreferenceScopeSchema } from "../claude/schemas.js";
+import { PreferenceCitationSchema, PreferenceScopeSchema } from "../distill/schemas.js";
 
 /**
- * core/artifacts.ts — read-side validation for the tool's OWN on-disk
+ * core/artifacts.ts: read-side validation for the tool's OWN on-disk
  * artifacts. The pipeline preaches tolerant parsing for inputs it doesn't own;
  * its own artifacts deserve at least a cheap schema check so a hand-edited or
  * older-version `sources.json` degrades gracefully instead of crashing a
@@ -11,8 +11,8 @@ import { PreferenceCitationSchema, PreferenceScopeSchema } from "../claude/schem
  *
  * Philosophy: LOOSE objects (unknown / future keys pass through untouched, so
  * newer fields survive an older reader) and per-field `.catch` fallbacks (one
- * bad field never sinks the whole entry). A parse fails — and the caller skips +
- * reports the entry — only when the value isn't a sources-shaped object at all.
+ * bad field never sinks the whole entry). A parse fails (and the caller skips and
+ * reports the entry) only when the value isn't a sources-shaped object at all.
  */
 
 const PreferenceSchema = z.object({
@@ -25,7 +25,7 @@ const PreferenceSchema = z.object({
 });
 
 /** One truncation event recorded in provenance when `--truncate=extreme` cuts input. */
-export const TruncationSchema = z.object({
+const TruncationSchema = z.object({
   export: z.string(),
   block: z.number(),
   dropped_chars: z.number(),
@@ -36,7 +36,7 @@ export type Truncation = z.infer<typeof TruncationSchema>;
  * Read schema for `library/<slug>/sources.json`. Kept structurally identical to
  * the write-side shape the author stage produces; new optional fields
  * (oneshot_hash, rating, input_coverage, truncations) are tolerated for
- * forward/backward compatibility. `slug` is the one hard requirement — a file
+ * forward/backward compatibility. `slug` is the one hard requirement: a file
  * without it is not a sources record and is skipped.
  */
 export const SourcesJsonSchema = z.looseObject({
@@ -50,6 +50,7 @@ export const SourcesJsonSchema = z.looseObject({
   confidence: z.enum(["high", "medium", "low"]).catch("low"),
   authored_at: z.string().catch(""),
   model: z.string().nullable().catch(null),
+  runner: z.enum(["claude", "codex", "kiro", "opencode"]).optional().catch(undefined),
   prompt_version: z.number().catch(0),
   tool_version: z.string().catch(""),
   generation: z.string().catch(""),

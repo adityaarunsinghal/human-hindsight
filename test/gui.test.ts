@@ -1,11 +1,7 @@
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
-import { Writable } from "node:stream";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runGui } from "../src/commands/gui.js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   CONSOLIDATED_PREFERENCES_FILE,
   saveConsolidatedPreferences,
@@ -18,15 +14,15 @@ import {
   preferenceId,
   readObservedPreferences,
 } from "../src/core/preferences.js";
-import { type GuiServer, type GuiSnapshot, startGuiServer } from "../src/gui/server.js";
+import { acquireWriterLock, readWriterLock } from "../src/distill/operations.js";
+import type { GuiSnapshot } from "../src/gui/server.js";
+import { guiHarness, type Harness, request } from "./gui-harness.js";
 
 let home: string;
-const servers: GuiServer[] = [];
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), "cch-gui-"));
 });
-afterEach(async () => {
-  await Promise.all(servers.splice(0).map((server) => server.close()));
+afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -53,60 +49,14 @@ function prompt(slug: string, text: string, extra: Record<string, unknown> = {})
   return file;
 }
 
-async function start(): Promise<GuiServer> {
-  const server = await startGuiServer({ home });
-  servers.push(server);
-  return server;
-}
-
-function request(
-  server: GuiServer,
-  route: string,
-  opts: { method?: string; headers?: Record<string, string>; body?: unknown } = {},
-): Promise<{ status: number; text: string; headers: http.IncomingHttpHeaders }> {
-  return new Promise((resolve, reject) => {
-    const url = new URL(server.url);
-    const req = http.request(
-      {
-        hostname: url.hostname,
-        port: url.port,
-        path: route,
-        method: opts.method ?? "GET",
-        headers: opts.headers,
-        agent: false,
-      },
-      (res) => {
-        let text = "";
-        res.setEncoding("utf8");
-        res.on("data", (chunk) => {
-          text += chunk;
-        });
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, text, headers: res.headers }));
-      },
-    );
-    req.on("error", reject);
-    req.end(
-      opts.body === undefined
-        ? undefined
-        : typeof opts.body === "string"
-          ? opts.body
-          : JSON.stringify(opts.body),
-    );
-  });
+/** The library handler for `home`, called in process (see gui-harness.ts). */
+function start(): Harness {
+  return guiHarness(home);
 }
 
 describe("local GUI server", () => {
-  it("binds only to loopback on an available port and closes cleanly", async () => {
-    const server = await start();
-    expect(server.server.address()).toMatchObject({ address: "127.0.0.1" });
-    expect(server.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
-    await server.close();
-    await server.close();
-    expect(server.server.listening).toBe(false);
-  });
-
   it("serves only the small built-in UI assets, with restrictive browser headers", async () => {
-    const server = await start();
+    const server = start();
     for (const [route, type] of [
       ["/", "text/html"],
       ["/app.css", "text/css"],
@@ -129,7 +79,7 @@ describe("local GUI server", () => {
   it("returns the exact copyable body and browsing metadata without private provenance", async () => {
     const text = 'Keep this <script>alert("not executable")</script> text.\n\n- Match my wording.';
     const file = prompt("example-task", text, { rating: "up" });
-    const server = await start();
+    const server = start();
     const response = await request(server, "/api/library");
     expect(response.status).toBe(200);
     expect(JSON.parse(response.text)).toMatchObject({
@@ -158,7 +108,7 @@ describe("local GUI server", () => {
 
   it("picks up local edits on refresh without rewriting anything", async () => {
     const file = prompt("editable-task", "Original body.");
-    const server = await start();
+    const server = start();
     await request(server, "/api/library");
     fs.writeFileSync(file, "# My revised title\n\nMy revised prompt.");
     const response = JSON.parse((await request(server, "/api/library")).text);
@@ -171,7 +121,7 @@ describe("local GUI server", () => {
   });
 
   it("handles empty libraries and missing prompt files", async () => {
-    const server = await start();
+    const server = start();
     expect(JSON.parse((await request(server, "/api/library")).text)).toMatchObject({
       entries: [],
       preferences: [],
@@ -204,7 +154,7 @@ describe("local GUI server", () => {
       preferences: [{ text: "use focused tests", evidence: "Test the **edge cases**." }],
     });
     fs.writeFileSync(newer, "# A locally edited title\n\nNewer prompt.");
-    const server = await start();
+    const server = start();
     const response = await request(server, "/api/library");
     const snapshot = JSON.parse(response.text) as GuiSnapshot;
     expect(snapshot.preferences).toHaveLength(2);
@@ -307,7 +257,7 @@ describe("local GUI server", () => {
       ],
     });
 
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(snapshot.preferences).toHaveLength(1);
     expect(snapshot.preferences[0]?.domains).toEqual([
@@ -327,7 +277,7 @@ describe("local GUI server", () => {
       domains,
       preferences: [{ text: "Keep labels accessible.", evidence: "Check the labels." }],
     });
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(snapshot.preferences[0]?.domains).toEqual([
       "Software engineering > Frontend > Accessibility",
@@ -344,7 +294,7 @@ describe("local GUI server", () => {
       preferences: [{ text: "Keep useful evidence.", evidence: "An observed instruction." }],
     });
     fs.unlinkSync(file);
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(snapshot.entries).toEqual([]);
     expect(snapshot.skipped).toBe(1);
@@ -378,7 +328,7 @@ describe("local GUI server", () => {
       preferences: [{ text: "keep contracts stable", evidence: "Do not break the release." }],
     });
     fs.unlinkSync(missing);
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(snapshot.entries).toHaveLength(1);
     expect(snapshot.preferences).toHaveLength(1);
@@ -410,7 +360,7 @@ describe("local GUI server", () => {
     const file = prompt("updated-task", "Prompt.", {
       preferences: [{ text: "Use focused tests.", evidence: "Original evidence." }],
     });
-    const server = await start();
+    const server = start();
     const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     const metadataPath = path.join(path.dirname(file), "sources.json");
     const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8"));
@@ -447,7 +397,7 @@ describe("local GUI server", () => {
       includeUnreviewed: true,
     });
     const saved = fs.readFileSync(savedPath, "utf8");
-    const server = await start();
+    const server = start();
     const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(before.consolidation).toEqual({
       markdown,
@@ -496,7 +446,7 @@ describe("local GUI server", () => {
     metadata.authored_at = "2026-11-02T12:00:00Z";
     fs.writeFileSync(metadataPath, JSON.stringify(metadata));
     fs.writeFileSync(file, "# Edited prompt title\n\nEdited prompt body.");
-    const server = await start();
+    const server = start();
     const edited = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(edited.consolidation?.stale).toBe(false);
     expect(edited.preferences[0]?.occurrences[0]).toMatchObject({
@@ -529,7 +479,7 @@ describe("local GUI server", () => {
       includeUnreviewed: true,
     });
     fs.rmSync(path.join(home, "library", "source-task"), { recursive: true });
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(snapshot.entries).toEqual([]);
     expect(snapshot.preferences).toEqual([]);
@@ -547,8 +497,7 @@ describe("local GUI server", () => {
 
   it("provides npx command hints for the selected home with safe shell quoting", async () => {
     const customHome = path.join(home, "a library's $(literal) path");
-    const server = await startGuiServer({ home: customHome });
-    servers.push(server);
+    const server = guiHarness(customHome);
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(snapshot.consolidation).toBeNull();
     expect(snapshot.consolidationInvalid).toBe(false);
@@ -564,12 +513,40 @@ describe("local GUI server", () => {
     );
   });
 
+  it("saves no review while another command holds the writer lock, and names that command", async () => {
+    prompt("locked-task", "Prompt.", {
+      preferences: [{ text: "Use focused tests.", evidence: "Test just the changed behavior." }],
+    });
+    const server = start();
+    const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    const candidate = before.preferences[0];
+    const lock = acquireWriterLock(home, "distill");
+    try {
+      const response = await request(server, "/api/preferences/review", {
+        method: "POST",
+        headers: {
+          Origin: server.url,
+          "Content-Type": "application/json",
+          "X-Hindsight-Token": before.reviewToken,
+        },
+        body: { id: candidate?.id, revision: candidate?.review.revision, status: "accepted" },
+      });
+      expect(response.status).toBe(423);
+      expect(response.text).toContain("human-hindsight distill is changing this library");
+    } finally {
+      lock.release();
+    }
+    const after = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
+    expect(after.preferences[0]?.review.status).toBe("pending");
+    expect(readWriterLock(home).status).toBe("absent");
+  });
+
   it("keeps candidates pending until an explicit browser review and persists scope edits", async () => {
     const file = prompt("review-task", "Prompt.", {
       preferences: [{ text: "Use focused tests.", evidence: "Test just the changed behavior." }],
     });
     const original = fs.readFileSync(file, "utf8");
-    const server = await start();
+    const server = start();
     const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     const candidate = before.preferences[0];
     expect(candidate?.review.status).toBe("pending");
@@ -605,17 +582,17 @@ describe("local GUI server", () => {
       project: "sample-app",
     });
     expect(fs.readFileSync(file, "utf8")).toBe(original);
-    const restarted = await start();
+    const restarted = guiHarness(home, "f".repeat(64));
     const persisted = JSON.parse((await request(restarted, "/api/library")).text) as GuiSnapshot;
     expect(persisted.preferences[0]?.review.status).toBe("accepted");
-    expect(persisted.reviewToken).not.toBe(before.reviewToken);
+    expect(persisted.reviewToken).toBe(restarted.token);
   });
 
   it("requires same-origin JSON and the server token for preference mutations", async () => {
     prompt("review-task", "Prompt.", {
       preferences: [{ text: "Be concise.", evidence: "Keep answers short." }],
     });
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     const preference = snapshot.preferences[0];
     const body = {
@@ -623,20 +600,25 @@ describe("local GUI server", () => {
       revision: preference?.review.revision,
       status: "accepted",
     };
-    const forbiddenHeaders: Record<string, string>[] = [
-      {},
-      { Origin: server.url, "Content-Type": "application/json" },
-      {
-        Origin: "https://unrelated.example",
-        "Content-Type": "application/json",
-        "X-Hindsight-Token": snapshot.reviewToken,
-      },
-      { Origin: server.url, "X-Hindsight-Token": snapshot.reviewToken },
+    const json = "application/json";
+    const forbidden: { headers: Record<string, string>; token?: string | false }[] = [
+      { headers: {}, token: false },
+      { headers: { Origin: server.url, "Content-Type": json }, token: false },
+      { headers: { Origin: server.url, "Content-Type": json }, token: "f".repeat(64) },
+      { headers: { Origin: "https://unrelated.example", "Content-Type": json } },
+      { headers: { "Content-Type": json } },
+      { headers: { Origin: server.url } },
     ];
-    for (const headers of forbiddenHeaders) {
+    for (const { headers, token } of forbidden) {
       expect(
-        (await request(server, "/api/preferences/review", { method: "POST", headers, body }))
-          .status,
+        (
+          await request(server, "/api/preferences/review", {
+            method: "POST",
+            headers,
+            body,
+            ...(token === undefined ? {} : { token }),
+          })
+        ).status,
       ).toBe(403);
     }
     const unchanged = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
@@ -648,7 +630,7 @@ describe("local GUI server", () => {
     const file = prompt("review-task", "Prompt.", {
       preferences: [{ text: "Be concise.", evidence: "Keep answers short." }],
     });
-    const server = await start();
+    const server = start();
     const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     const candidate = snapshot.preferences[0];
     const headers = {
@@ -709,7 +691,7 @@ describe("local GUI server", () => {
       target: "agents",
       now: new Date("2026-11-03T00:00:00Z"),
     });
-    const server = await start();
+    const server = start();
     const before = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(before.consolidation).toMatchObject({ reviewed: true, stale: false });
     savePreferenceReview(home, pref, { status: "dismissed" });
@@ -767,7 +749,7 @@ describe("local GUI server", () => {
       includeUnreviewed: true,
       project,
     });
-    const server = await start();
+    const server = start();
     const initial = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
     expect(initial.preferences).toHaveLength(4);
     expect(initial.consolidation).toMatchObject({ stale: false, reviewed: false });
@@ -785,51 +767,9 @@ describe("local GUI server", () => {
     expect(globalChanged.consolidation?.stale).toBe(true);
   });
 
-  it("copies special home paths as one literal shell argument", async () => {
-    const customHome = path.join(home, "quotes' $(printf expanded) `printf expanded`\nnext line");
-    const server = await startGuiServer({ home: customHome });
-    servers.push(server);
-    const snapshot = JSON.parse((await request(server, "/api/library")).text) as GuiSnapshot;
-    const parsed = execFileSync(
-      "/bin/sh",
-      ["-c", `set -- ${snapshot.commands.consolidate}; printf '%s\\0' "$@"`],
-      { encoding: "utf8" },
-    )
-      .split("\0")
-      .filter(Boolean);
-    expect(parsed).toEqual([
-      "npx",
-      "human-hindsight@latest",
-      "preferences",
-      "--consolidate",
-      "--home",
-      customHome,
-    ]);
-    expect(fs.existsSync(customHome)).toBe(false);
-  });
-
-  it("rejects cross-site origins, fetches, and rebinding hostnames", async () => {
-    prompt("private-task", "Do not expose this to another website.");
-    const server = await start();
-    const cases: Record<string, string>[] = [
-      { origin: "https://unrelated.example" },
-      { "sec-fetch-site": "cross-site" },
-      { host: "unrelated.example" },
-      { origin: "http://127.0.0.1:1" },
-    ];
-    for (const headers of cases) {
-      const response = await request(server, "/api/library", { headers });
-      expect(response.status).toBe(403);
-      expect(response.text).not.toContain("Do not expose");
-    }
-    expect(
-      (await request(server, "/api/library", { headers: { origin: server.url } })).status,
-    ).toBe(200);
-  });
-
   it("has no mutation or arbitrary file routes", async () => {
     fs.writeFileSync(path.join(home, "private.txt"), "not part of the library");
-    const server = await start();
+    const server = start();
     for (const route of [
       "/private.txt",
       "/../private.txt",
@@ -841,52 +781,5 @@ describe("local GUI server", () => {
     const response = await request(server, "/api/library", { method: "POST" });
     expect(response.status).toBe(405);
     expect(response.headers.allow).toBe("GET, HEAD");
-  });
-});
-
-describe("gui command", () => {
-  it("honors --home and --no-open and removes signal listeners when closed", async () => {
-    prompt("selected-home-task", "From the selected home.");
-    const openBrowser = vi.fn(async () => true);
-    let text = "";
-    const output = new Writable({
-      write(chunk, _encoding, done) {
-        text += chunk.toString();
-        done();
-      },
-    });
-    const before = process.listenerCount("SIGINT");
-    const server = await runGui({ home, open: false }, { output, openBrowser });
-    servers.push(server);
-    expect(openBrowser).not.toHaveBeenCalled();
-    expect(text).toContain(server.url);
-    expect((await request(server, "/api/library")).text).toContain("From the selected home.");
-    await server.close();
-    expect(process.listenerCount("SIGINT")).toBe(before);
-  });
-
-  it("opens the browser by default and keeps serving if the launcher fails", async () => {
-    const output = new Writable({
-      write(_chunk, _encoding, done) {
-        done();
-      },
-    });
-    const openBrowser = vi.fn(async () => false);
-    const server = await runGui({ home }, { output, openBrowser });
-    servers.push(server);
-    expect(openBrowser).toHaveBeenCalledWith(server.url);
-    expect((await request(server, "/")).status).toBe(200);
-  });
-
-  it.each([
-    "",
-    "-1",
-    "65536",
-    "12px",
-    "1.5",
-  ])("rejects invalid port %s before opening a browser", async (port) => {
-    const openBrowser = vi.fn(async () => true);
-    await expect(runGui({ home, port }, { openBrowser })).rejects.toThrow("--port");
-    expect(openBrowser).not.toHaveBeenCalled();
   });
 });

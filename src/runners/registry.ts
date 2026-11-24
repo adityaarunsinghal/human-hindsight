@@ -1,22 +1,23 @@
 import type { SourceName } from "../sources/types.js";
-import { CLAUDE_INSTALL_HINT, claudeRunner } from "./claude.js";
-import { CODEX_INSTALL_HINT, codexRunner } from "./codex.js";
-import { KIRO_INSTALL_HINT, kiroRunner, makeKiroRunner } from "./kiro.js";
-import { makeOpenCodeRunner, OPENCODE_INSTALL_HINT } from "./opencode.js";
-import { AgentRunnerError, defaultIo, type RunnerIo } from "./shared.js";
-import type { AgentRunner } from "./types.js";
+import { RUNNER_INFO, requireBinary } from "./capabilities.js";
+import { makeClaudeRunner } from "./claude.js";
+import { makeCodexRunner } from "./codex.js";
+import { defaultKiroEnv, KIRO_EMPTY_RETRIES, makeKiroRunner } from "./kiro.js";
+import { makeOpenCodeRunner } from "./opencode.js";
+import { defaultIo, type RunnerEnv, type RunnerIo } from "./shared.js";
+import type { AgentRunner, RunnerName } from "./types.js";
 
 /**
- * runners/registry.ts — resolve which agent CLI distills.
+ * runners/registry.ts: resolve which agent CLI distills.
  *
  * The runner (which CLI produces digests/clusters/oneshots) is orthogonal to
  * the source (where transcripts are read): a user can mine kiro history but
  * distill with claude, or vice-versa. `--runner` defaults to `auto`, which
  * prefers the CLI matching the active source and falls back to whichever binary
- * is installed — so a kiro-only machine works out of the box.
+ * is installed, so a kiro-only machine works out of the box.
  */
 
-export type RunnerMode = SourceName | "auto";
+export type RunnerMode = RunnerName | "auto";
 
 /** Parse/validate a raw `--runner` value; defaults to `auto`. */
 export function parseRunnerMode(raw: string | undefined): RunnerMode {
@@ -33,7 +34,7 @@ export function parseRunnerMode(raw: string | undefined): RunnerMode {
 }
 
 /** Options for {@link resolveRunner}. */
-export interface ResolveRunnerOptions {
+export interface ResolveRunnerOptions extends RunnerEnv {
   /** Prefer the runner matching the active source under `auto`. */
   preferSource?: SourceName;
   /** Injectable binary lookup/spawn (testing). */
@@ -43,54 +44,56 @@ export interface ResolveRunnerOptions {
    * home's `runner-scratch/`); absent falls back to the OS temp dir.
    */
   scratchBase?: string;
+  /**
+   * True (the default for {@link makeRunner}) when the runner pool wraps the
+   * adapter and retries transient failures itself. {@link resolveRunner}, the
+   * path for callers outside the pool, sets it to false.
+   */
+  pooled?: boolean;
 }
 
+export { RUNNER_INFO };
+
 /**
- * Resolve the runner. EXPLICIT modes require that binary: a missing one throws
- * a typed `missing-binary` {@link AgentRunnerError} with the backend's install
- * hint at RESOLVE time — before any consent prompt, so the user learns the CLI
- * is absent before being asked to approve spending. `auto` prefers the runner
- * whose name matches `preferSource` when installed, else the first installed of
- * claude→codex→kiro; if neither binary is found it returns the claude runner so the
- * standard missing-binary hint surfaces on first use.
+ * A fresh adapter with one IO binding for discovery, model calls and teardown.
+ * Built for the runner pool unless `pooled` is false.
  */
+export function makeRunner(name: RunnerName, opts: ResolveRunnerOptions = {}): AgentRunner {
+  const io = opts.io ?? defaultIo;
+  const deps: RunnerEnv = { env: opts.env, readFile: opts.readFile };
+  switch (name) {
+    case "claude":
+      return makeClaudeRunner(io, deps);
+    case "codex":
+      return makeCodexRunner(io, deps);
+    // Inside the pool, the pool retries Kiro's empty successful exit itself.
+    case "kiro":
+      return makeKiroRunner({ ...defaultKiroEnv, io }, opts.scratchBase, {
+        emptyRetries: (opts.pooled ?? true) ? 0 : KIRO_EMPTY_RETRIES,
+        processEnv: opts.env,
+      });
+    case "opencode":
+      return makeOpenCodeRunner(io, opts.scratchBase);
+  }
+}
+
+/** Explicit selections fail before consent. Auto prefers the active source's CLI. */
 export async function resolveRunner(
   mode: RunnerMode,
   opts: ResolveRunnerOptions = {},
 ): Promise<AgentRunner> {
   const io = opts.io ?? defaultIo;
-  const has = async (bin: string) => (await io.which(bin)) !== null;
-  const kiro = () => (opts.scratchBase ? makeKiroRunner(undefined, opts.scratchBase) : kiroRunner);
-
-  if (mode === "claude") {
-    if (!(await has("claude"))) throw new AgentRunnerError("missing-binary", CLAUDE_INSTALL_HINT);
-    return claudeRunner;
+  // Callers of resolveRunner use the adapter directly, outside the pool.
+  const standalone: ResolveRunnerOptions = { ...opts, pooled: false };
+  if (mode !== "auto") {
+    await requireBinary(mode, io);
+    return makeRunner(mode, standalone);
   }
-  if (mode === "codex") {
-    if (!(await has("codex"))) throw new AgentRunnerError("missing-binary", CODEX_INSTALL_HINT);
-    return codexRunner;
+  const preferred = opts.preferSource === "kirocrew" ? "kiro" : opts.preferSource;
+  const order = new Set<RunnerName>(preferred ? [preferred] : []);
+  for (const name of ["claude", "codex", "kiro", "opencode"] as const) order.add(name);
+  for (const name of order) {
+    if (await io.which(RUNNER_INFO[name].binary)) return makeRunner(name, standalone);
   }
-  if (mode === "kiro") {
-    if (!(await has("kiro-cli"))) throw new AgentRunnerError("missing-binary", KIRO_INSTALL_HINT);
-    return kiro();
-  }
-  if (mode === "opencode") {
-    if (!(await has("opencode")))
-      throw new AgentRunnerError("missing-binary", OPENCODE_INSTALL_HINT);
-    return makeOpenCodeRunner(io, opts.scratchBase);
-  }
-
-  // auto — prefer the runner matching the active source when it is installed.
-  if (opts.preferSource === "kiro" && (await has("kiro-cli"))) return kiro();
-  if (opts.preferSource === "claude" && (await has("claude"))) return claudeRunner;
-  if (opts.preferSource === "codex" && (await has("codex"))) return codexRunner;
-  if (opts.preferSource === "opencode" && (await has("opencode")))
-    return makeOpenCodeRunner(io, opts.scratchBase);
-  // Otherwise first installed of claude → codex → kiro.
-  if (await has("claude")) return claudeRunner;
-  if (await has("codex")) return codexRunner;
-  if (await has("kiro-cli")) return kiro();
-  if (await has("opencode")) return makeOpenCodeRunner(io, opts.scratchBase);
-  // Neither found: return claude so its install hint surfaces on use.
-  return claudeRunner;
+  return makeRunner("claude", standalone);
 }

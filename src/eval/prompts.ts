@@ -1,9 +1,18 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import fixtures from "../../test/fixtures/prompt-evals/cases.json" with { type: "json" };
-import { AUTHOR_PROMPT_VERSION, buildAuthorPrompt } from "../claude/prompts/author.js";
-import { CLUSTER_PROMPT_VERSION } from "../claude/prompts/cluster.js";
-import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../claude/prompts/digest.js";
+import { buildConsolidatePrompt, CONSOLIDATE_PROMPT_VERSION } from "../commands/preferences.js";
+import { AnaphoraRecordSchema } from "../core/artifacts.js";
+import { validateConsolidation } from "../core/consolidated-preferences.js";
+import { exportMessages, validatePreferenceCandidates } from "../core/preference-evidence.js";
+import type { AggregatedPreference } from "../core/preferences.js";
+import type { RunnerFn } from "../distill/pipeline.js";
+import { AUTHOR_PROMPT_VERSION, buildAuthorPrompt } from "../distill/prompts/author.js";
+import { AUTHOR_ROLE_PROMPT_VERSION } from "../distill/prompts/author-role.js";
+import { CLUSTER_PROMPT_VERSION } from "../distill/prompts/cluster.js";
+import { buildDigestPrompt, DIGEST_PROMPT_VERSION } from "../distill/prompts/digest.js";
+import { GENERALIZE_PROMPT_VERSION } from "../distill/prompts/generalize.js";
+import { PROPOSE_PROMPT_VERSION } from "../distill/prompts/propose.js";
 import {
   AuthorSchema,
   ClusterSchema,
@@ -11,15 +20,9 @@ import {
   DigestResponseSchema,
   DigestSchema,
   PreferenceScopeSchema,
-} from "../claude/schemas.js";
-import { buildConsolidatePrompt, CONSOLIDATE_PROMPT_VERSION } from "../commands/preferences.js";
-import { AnaphoraRecordSchema } from "../core/artifacts.js";
-import { validateConsolidation } from "../core/consolidated-preferences.js";
-import { exportMessages, validatePreferenceCandidates } from "../core/preference-evidence.js";
-import type { AggregatedPreference } from "../core/preferences.js";
-import type { RunnerFn } from "../distill/pipeline.js";
+} from "../distill/schemas.js";
 
-const OriginSchema = z.enum(["claude", "codex", "kiro", "opencode"]);
+const OriginSchema = z.enum(["claude", "codex", "kiro", "kirocrew", "opencode"]);
 const RuleSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.string(), kind: z.literal("matches"), pattern: z.string() }),
   z.object({ id: z.string(), kind: z.literal("avoids"), pattern: z.string() }),
@@ -113,6 +116,10 @@ export const EVALUATION_VERSIONS = {
   cluster: CLUSTER_PROMPT_VERSION,
   author: AUTHOR_PROMPT_VERSION,
   consolidate: CONSOLIDATE_PROMPT_VERSION,
+  // suggest-subagents stages; versioned here like clustering, without cases yet.
+  subagent_generalize: GENERALIZE_PROMPT_VERSION,
+  subagent_propose: PROPOSE_PROMPT_VERSION,
+  subagent_author: AUTHOR_ROLE_PROMPT_VERSION,
 };
 
 export function evaluationHash(value: unknown): string {

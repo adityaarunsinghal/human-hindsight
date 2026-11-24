@@ -1,0 +1,12 @@
+{"role":"user","content":"the only human line","ts":"2026-02-01T10:00:00.000000+00:00","meta":{"human":true}}
+{"role":"assistant","content":"assistant reply","ts":"2026-02-01T10:00:01.000000+00:00","meta":{}}
+{"role":"tool","content":"tool output","ts":"2026-02-01T10:00:02.000000+00:00","meta":{}}
+{"role":"inject","content":"[SESSION CONTEXT] injected memory","ts":"2026-02-01T10:00:03.000000+00:00","meta":{}}
+{"role":"nudge","content":"[auto-nudge cycle 2] continue","ts":"2026-02-01T10:00:04.000000+00:00","meta":{}}
+{"role":"error","content":"throttled, retrying","ts":"2026-02-01T10:00:05.000000+00:00","meta":{}}
+{"role":"system","content":"system line","ts":"2026-02-01T10:00:06.000000+00:00","meta":{}}
+{"role":"subagent","content":"subagent brief","ts":"2026-02-01T10:00:07.000000+00:00","meta":{}}
+{"role":"notice","content":"host notice","ts":"2026-02-01T10:00:08.000000+00:00","meta":{}}
+{"role":"file","content":"file.txt","ts":"2026-02-01T10:00:09.000000+00:00","meta":{}}
+{"role":"card","content":"card payload","ts":"2026-02-01T10:00:10.000000+00:00","meta":{}}
+{"content":"a record with no role","ts":"2026-02-01T10:00:11.000000+00:00","meta":{}}

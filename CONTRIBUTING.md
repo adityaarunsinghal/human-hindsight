@@ -1,233 +1,120 @@
-# Contributing to human-hindsight
+# Contributing to Human Hindsight
 
-Thanks for helping. This codebase keeps a compact dependency tree, documents
-what its extraction keeps and drops, and runs its tests only against synthetic
-fixtures.
+An extraction fix usually starts with a synthetic example of a message that was lost, duplicated, or wrongly attributed to a person. For a terminal or browser change, describe what you were trying to do and where it broke. Please report security issues privately. [Security policy](SECURITY.md)
 
 ## Setup
 
-```bash
-git clone <repo> && cd human-hindsight
-npm install
-npm test                 # vitest run
-npm run lint             # biome check .
-npm run typecheck        # tsc --noEmit
-npm run build            # tsdown → dist/
-node dist/cli.js --help
+```sh
+git clone https://github.com/adityaarunsinghal/human-hindsight.git
+cd human-hindsight
+npm ci
+npm run build
+node launcher/cli.cjs --help
 ```
 
-Development/build tools require Node 22.18+ or Node 24.11+.
-The published CLI supports Node 22.13+ on Node 22, or Node 23.4+ on newer releases.
-OpenCode history uses Node's built-in SQLite, loaded only when that store is read.
-CI runs biome → typecheck → tests → build → a packed-file-list assertion
-(`scripts/check-pack.mjs`) on Ubuntu and macOS; all of it must stay green.
-Supported platforms are macOS and Linux; Windows code paths exist but are
-untested.
+Develop on macOS, Linux, or WSL.
 
-## Ground rules
+**Node for building and for running are different.**
 
-- **Publish a self-contained CLI.** Bundle the required JavaScript libraries,
-  include their license texts, and publish no npm dependencies or install hooks.
-  Keep the development lockfile out of the artifact. A new library needs to
-  justify its code size; the registry-style install test must still fetch only
-  the app (or the app plus its deprecated wrapper).
-- **Tests never read real agent stores or write outside temp dirs.**
-  Every test runs against synthetic fixtures under `test/fixtures/`. Because
-  `--source` defaults to `auto` (read whichever backend stores exist), a test
-  that only sets `--claude-dir` would silently pick up a dev's other stores;
-  pin `source: "claude"` or point every other tool directory at a nonexistent
-  path in fixture-scoped tests. `test/setup.ts` also isolates default tool paths.
-- **No LLM calls outside `distill` / `preferences --consolidate`**, and never
-  without the consent gate. Unit tests mock every agent runner's spawn layer;
-  no unit test invokes real agent CLIs. The separate OpenCode integration script
-  uses a loopback mock provider and temporary stores, with no paid requests.
-- **Retention is opt-in.** Default preview, `--yes` alone, and `--dry-run`
-  must not write. Apply only after `--apply` plus consent, preserve unrelated
-  settings, and back up existing files with owner-only permissions.
-- **Keep the GUI small and local.** Use the bundled vanilla assets and Node's
-  built-in server. Markdown is parsed with Marked and sanitized with DOMPurify
-  before inserting a DOM fragment. Raw HTML is escaped and images never fetch
-  remote content. Always copy the source Markdown. Do not expose arbitrary
-  filesystem or execution endpoints. The only mutation route saves an explicit
-  preference review: require same-origin JSON, the server's session token, a
-  known candidate, a current revision, and bounded input. Check dropdowns in
-  a real browser at narrow widths in both themes: one centered 12 × 8 px
-  chevron, a 12 px right inset, and 36 px reserved right padding.
-- **Follow-ups require a terminal and an explicit y.** Keep source/path/model
-  selections, never forward `--yes`, `--fresh`, `--apply`, `--retry-failed`, or
-  `--recover-tasks`, and keep the model-spending consent gate. Honor
-  `--no-follow-up`, pipes, and dry runs.
-- **Retry only the recorded selection.** Use synthetic operation histories and
-  fake runners to check exact operation identities, successful-output
-  preservation, queued exclusions, read-only preview, saved-result recovery,
-  and unchanged grouping. Exercise process interruption as well as thrown
-  errors. Older task recovery must select explicit saved slugs and never infer
-  a failed call from an absent output. Test both installed command names.
-- **Preserve rename compatibility.** Keep `CC_HINDSIGHT_HOME`, existing
-  `~/.cc-hindsight` libraries, and old `[cc-hindsight distill]` markers readable.
-  Historical fixtures deliberately retain the former name.
-- Conventional commits (`feat:`, `fix:`, `docs:`, `test:`, …).
+- **Building** uses the exact version in `.node-version`. The build tools need Node 22.18+ or 24.11+, and `node scripts/check-release.mjs` fails if `.node-version` drops below that. The pin is an exact version on purpose: some version managers read only exact versions.
+- **Running** the installed command needs Node 22.13+ on the 22 line, or 23.4+ (the `engines` field). `launcher/cli.cjs` is the installed entry point. It checks the Node version before loading the bundled CLI and prints how to upgrade. The `cc-hindsight` wrapper enters the same launcher. Keep the launcher parseable on Node 18 so that message can print.
 
-## The extraction fidelity contract
+## Checks
 
-`src/core/extract.ts` implements eleven audited rules (R1–R11, each documented
-where it is implemented) deciding what counts as human input in Claude Code
-JSONL. Every
-rule has a code comment citing the transcript shape it handles and a dedicated
-regression fixture. This is the most safety-critical code in the repo: a bug
-here silently corrupts everything downstream.
-
-## Adding a fixture for a new transcript shape
-
-Claude Code's JSONL format drifts. If you hit a session that exports wrongly
-(human text dropped, machine text admitted), here's the drill:
-
-1. **Find the offending line(s)** in the source file under
-   `~/.claude/projects/…/*.jsonl`. Run `human-hindsight export --verbose`; every
-   dropped piece is logged with its rule and a snippet.
-2. **Synthesize a minimal fixture.** Copy the *shape*, not your data: replace
-   every string with something generic ("do the thing", "/tmp/x.ts"). One JSON
-   object per line, smallest possible entry count. Drop it in
-   `test/fixtures/extract/` with a descriptive name (`r6-new-injection-tag.jsonl`).
-3. **Write the failing test** in `test/extract.test.ts` asserting exactly what
-   should come out (messages in order, drops recorded).
-4. **Fix the rule** in `src/core/extract.ts`, keeping the rule comment accurate.
-5. If you can't fix it, file the issue with the fixture attached. A shape
-   report with a synthetic fixture is a valuable kind of bug report.
-
-The same pattern applies to discovery (`test/fixtures/claude-home/`), export
-dedupe (`test/fixtures/export-home/`), and anaphora
-(`test/fixtures/anaphora-home/`). The kiro backend has its own fixture trees:
-`test/fixtures/kiro-home/` (discovery + the session-level classify gate) and
-`test/fixtures/kiro-extract/` (the K-rules); the drill is identical — copy the
-`{version, kind, data}` line shape, not your data.
-
-## Multi-backend architecture (the seam)
-
-human-hindsight reads Claude Code, Codex, Kiro, and OpenCode through one seam:
-
-- **`SessionSource`** (`src/sources/types.ts`) is the source-agnostic currency.
-  Each backend's adapter (`src/sources/{claude,codex,kiro,opencode}/`) turns raw lines into the
-  same `ExtractResult` + `TimelineEvent[]`; everything downstream (dedupe,
-  anaphora, outcome, render, distill) consumes only those and never parses raw
-  lines. Adding a backend = one new `sources/<name>/` adapter + a registry entry.
-  Database sources implement `read(session)` and `dispose()`, with a stable
-  `session.key` distinct from the physical database path. Store-level failures
-  use `SourceReadError` so export aborts before replacing any existing artifacts.
-- **The SessionSource law:** every message in `extract(lines).messages` MUST
-  appear as a `human` `TimelineEvent` from `timeline(lines)` with identical
-  `(timestamp, text)`, in file order. The dedupe key and the anaphora↔export
-  index alignment both depend on it — a backend satisfies it by producing both
-  texts from one shared per-entry function (claude: `humanEntryText`; kiro:
-  `promptText`). Each backend has an extract↔timeline agreement test; keep it.
-- **`AgentRunner`** (`src/runners/`) is the distill CLI seam. `shared.ts` holds
-  the backend-agnostic spawn/error/retry primitives; `claude.ts`, `codex.ts`, `kiro.ts`, and `opencode.ts`
-  each add their invocation specifics. The kiro runner layers two retries: a
-  transient **empty-stdout backoff** (kiro's "having trouble responding" returns
-  exit 0 + empty stdout — retry the *same* input, no corrective note) sits
-  *below* the shared **corrective retry** (bad JSON → retry once *with* a
-  corrective note). Don't collapse them: burning the corrective retry on a
-  transport blip wastes it.
-
-Codex fixtures live in `test/fixtures/codex-home/`. Preserve its
-`{timestamp,type,payload}` shape, including paired `response_item`/`event_msg`
-messages; a mirror must not become a second human turn. Discovery includes
-archived rollouts, deduplicates session IDs, and excludes generated subagents
-from export. Runner tests write synthetic final-message files through mocked
-spawns, exercising the same cleanup path as real `codex exec` calls.
-
-OpenCode tests synthesize SQLite and legacy JSON stores in temporary directories.
-Keep v1/v2 extraction, migration duplicates, WAL reads, failure preservation, and
-the extraction/timeline agreement covered. Its runner owns a private config and,
-on POSIX, the CLI process group; cleanup requires both the session ID and exact
-title/directory ownership. Never delete sessions by title alone.
-
-For real CLI validation with a synthetic provider:
-
-```bash
-node scripts/smoke-opencode.mjs /absolute/path/to/opencode
+```sh
+npm run lint          # biome
+npm run typecheck     # tsc --noEmit
+npm test              # unit tier
+npm run test:smoke    # smoke tier
+npm run test:budget   # unit tier against its time budget
+npm run build
 ```
 
-CI pins one CLI from each supported family. The smoke verifies JSON output,
-zero tool definitions, exclusion of ambient instructions/plugins/MCP, and
-session cleanup. Recheck the pinned upstream schema when adding new record types.
-The minimum-runtime job builds on Node 24, then uses `scripts/smoke-runtime.mjs`
-to exercise installed tarballs on Node 22.13 without development dependencies.
+CI runs `npx biome ci .`, which also fails on formatting. `npm run format` fixes formatting in place. Text a person reads (comments, test titles, printed lines) uses no em or en dash, and `test/source-text.test.ts` checks the tree for them; text sent to a model is left byte for byte. To see the stack of an unexpected failure, run the command with `HUMAN_HINDSIGHT_DEBUG=1`.
 
-## Prompt changes
+### Two test tiers
 
-The distill prompts live in `src/claude/prompts/`. The author prompt's realism
-contract (the t=0 test, the effort budget, never-copy-AI-prose) is pinned by
-`test/author.test.ts`. If you change the prompt, update the contract tests
-deliberately in the same PR and bump the stage's `*_PROMPT_VERSION` constant so
-provenance in `sources.json` stays honest.
+- **Unit (`npm test`):** in-process tests only. No child processes, sockets, real terminals, or sleeps. Inject the clock, environment, streams, and process runner, and use the helpers in `test/support/` (fake terminals, a scripted `RunnerIo`, a synthetic data home builder, a seeded clock, and text normalization for golden files; see `test/support/README.md`).
+- **Smoke (`npm run test:smoke`):** files named `*.smoke.test.ts`. Anything that starts a process, drives a pseudo-terminal, or packs a tarball belongs here.
+- **Budget (`npm run test:budget`):** runs the unit tier once and fails when the whole run, or any single test, takes longer than its budget. It runs at most six test files at once, so a single test's time does not grow with the number of cores. The defaults suit an idle developer machine and can be loosened with `HUMAN_HINDSIGHT_UNIT_BUDGET_MS` and `HUMAN_HINDSIGHT_SLOW_TEST_MS`. A unit test that is slow usually waits on real time or a real disk.
 
-`test/fixtures/prompt-evals` contains synthetic behavioral cases with acceptable
-outputs and deliberate counterexamples. They check intent preservation, rejected
-and conditional plans, discovered facts, scope, source evidence, and concise
-wording. They supplement the prompt-contract tests; passing a string assertion
-alone does not demonstrate useful model behavior.
+A bare `npx vitest run` runs both. Screens and help pages are compared with golden files under `test/golden/`, plus a few assertions on meaning.
 
-```bash
-node scripts/eval-prompts.mjs                     # list cases; no model call
-node scripts/eval-prompts.mjs --live --runner claude --case reject-deployment --out /tmp/hindsight-eval.json
-node scripts/eval-prompts.mjs --score /tmp/hindsight-eval.json  # offline scoring
-```
+### Synthetic data only
 
-Live evaluation is explicitly consented and records the model request, prompt
-versions, inputs, outputs, and check results. Compare the same cases before and
-after changing wording. The checks are transparent, limited criteria rather
-than a general claim of semantic equivalence.
+Every fixture is invented: no real names, emails, hostnames, account ids, tokens, home paths, or copied CLI output. `test/setup.ts` replaces `PATH` for every test with an empty folder plus system folders that hold no coding CLI, so a test can never start a real `claude`, `codex`, `kiro-cli`, or `opencode`. A test that needs one supplies a fake. When a case exercises one source, select it explicitly so `auto` cannot find a contributor's own stores. Model calls happen only in the separate, opt-in prompt evaluation (`node scripts/eval-prompts.mjs` lists its cases without calling a model).
 
-## Release checklist (maintainers)
+The unit tests also refuse to run when `src/gui/client.generated.ts` is older than its sources; run `npm run build`.
 
-```bash
-npm test && npm run lint && npm run typecheck && npm run build
-node scripts/check-release.mjs   # add vX.Y.Z to validate the intended release tag
+## How the code is organized
+
+| Area | Responsibility |
+| --- | --- |
+| `src/sources/` | Discover sessions, extract the person's turns, and build the timeline for Claude Code, Codex, Kiro CLI, Kiro Crew, and OpenCode. |
+| `src/runners/` | Find each CLI, probe its capabilities, run one isolated model call, classify failures, and switch between ready CLIs (`pool.ts`). |
+| `src/core/` | Dedupe messages, attach evidence for short replies and outcomes, resolve model plans, and read and write local artifacts. |
+| `src/distill/` | Stage inputs, prompt templates, response schemas, consent screens, checkpoints, reuse, and recovery. |
+| `src/commands/` and `src/ui/` | Commands, the guided home screen, help, and terminal rendering. |
+| `src/gui/` | The local browser view. |
+
+### Add a source
+
+A source implements `SessionSource` in `src/sources/types.ts`: `discover`, `extract`, `timeline`, and optionally `read`, `dispose`, and a session-level `classify`. Register it in `src/sources/registry.ts` and add its name to `SourceName`.
+
+The rule every source keeps: each extracted human message appears as a human timeline event with the identical timestamp and text, in file order. Dedupe and the evidence for short replies depend on that alignment. Drops are observable, with a reason, and corrupt lines are counted, never thrown.
+
+To fix an extraction bug:
+
+1. Reduce the failing record to a minimal synthetic transcript that keeps the data types, ordering, event names, and nesting.
+2. Add it under the source's folder in `test/fixtures/`. For a wrapper case, include both a machine wrapper and a human message that starts with a tag such as `<Button>`, and record which one survives.
+3. Assert the exported messages in order and the drop reasons.
+4. Fix the source or the shared rule (`src/sources/wrappers.ts` for leading machine blocks), and update the rule comment with the shape it now handles.
+
+`export --verbose` lists every drop and can print snippets of the input, so share synthetic reproductions only.
+
+### Add a runner
+
+A runner implements `AgentRunner` in `src/runners/types.ts`: `run`, plus `preflight`, `version`, `signInHint`, `listModels`, and `finalize` where the CLI supports them. A CLI that can take only a few calls at once sets `maxConcurrency`; the pool queues the rest and the plan's pace line names the limit. Register it in `src/runners/registry.ts`, and add its local probes (version, help, sign-in, models) to `PROBES` in `src/runners/capabilities.ts`. Give each probe its scope: `local`, `own-service` (a status command that answers offline but contacts the tool's own service when it can, such as Kiro CLI's sign-in status), or `network`. The home screen and `doctor` run `local` and `own-service` probes only.
+
+- `preflight`, probes, and plan screens never make a model call. A probe that contacts the CLI's service is announced on screen before it runs. The readiness check runs after consent, just before the first model call, once for each distinct model of the stages the plan will run, and not at all when everything is reused.
+- Start the CLI through the shared spawn helper in `src/runners/shared.ts`. On POSIX every child gets a process group of its own, so Ctrl-C and timeouts end the CLI and anything it started, with SIGKILL when SIGTERM is ignored.
+- Model choice comes only from the CLI's own model list. A plan label such as `balanced/bulk` never reaches a CLI.
+- Every CLI that may receive text is named in the approved plan. An explicit `--runner` or `--model` pins the run to one CLI.
+- Failures are classified from the CLI's typed error report first, then stderr. Each text rule cites a captured, sanitized fixture in `test/fixtures/runner-errors/`.
+- Use the CLI's isolation controls. When a CLI saves the generated session, clean up only sessions the run can prove it created.
+- Prompt templates and response schemas are shared across runners. A behavior change to a template bumps that stage's prompt version.
+
+## Kiro storage formats
+
+Kiro CLI keeps two stores under `~/.kiro/sessions/`, and the reader merges them.
+
+- **Flat store** (`sessions/cli/`): per session, `<uuid>.jsonl` (one `{version, kind, data}` event per line), `<uuid>.json` (metadata including `cwd` and `parent_session_id`), `<uuid>.history` (present only where a person typed), and a `.lock` while active. Only `Prompt` events carry the person's text, in `content[].kind == "text"` blocks. `meta.additionalContext` is always machine text and never read. `Clear` and `Compaction` are context boundaries. Timestamps are unix seconds.
+- **Per-session store** (`sessions/<workspace hash>/<session dir>/`): `messages.jsonl` (one `{id, timestamp, payload}` record per line; only `payload.type == "user"` is the person), `session.json` (including `workspacePaths`), plus `snapshots/` and `sub-executions/`, which are never read as sessions. A session present in both stores is read once, from this store.
+- **Which sessions count:** there is no per-message human flag, so the decision is per session. A session started by Human Hindsight's own model calls is always excluded. A `.history` file means a person typed there. Otherwise a parent link (flat store only) or an automation first prompt excludes the session, and anything else is kept.
+- **Kiro Crew** runs on top of Kiro CLI, so its chats also appear in the per-session store with injected context around the person's words. Those copies are excluded, and the count is reported. The person's side is read from Crew's own store, `~/.kiro/crew/sessions/` and `sessions/archive/`, one JSONL file per chat: `dashboard_chat-*` files are chats a person typed in, and other prefixes (scheduled jobs, setup) are automation. Only `role: "user"` records are the person, and messages typed while a role was working are kept.
+
+The Kiro runner drives `kiro-cli chat --no-interactive` with a no-tools agent written into a private working directory, and the prompt on stdin. Empty output with exit code 0 is treated as a transient failure. After the run it deletes only the sessions saved under its own working directory whose title carries its marker.
+
+## Commits
+
+Use Conventional Commit subjects in plain words: `feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `style:`, `chore:`, or `ci:`. Keep a commit to one concern. Keep build output, local test homes, and tarballs out of commits.
+
+## Prepare a release
+
+Update `package.json`, `package-lock.json`, and `compat/cc-hindsight/package.json` together. The wrapper pins the main package's exact version. Keep old data homes, environment variable aliases, and markers for generated sessions readable. Note any upgrade or downgrade limit in the version's changelog section, and at release time add its date and comparison link.
+
+```sh
+npm run build
+node scripts/check-release.mjs vX.Y.Z
 npm run stage:release
 node scripts/pack-release.mjs
 node scripts/smoke-install.mjs
 python3 scripts/smoke-flow.py
 python3 scripts/smoke-terminal.py
+python3 scripts/smoke-menu.py
 node scripts/smoke-gui.mjs
 ```
 
-The build minifies the CLI and embedded browser bundle and produces third-party license notices.
-The GUI smoke checks both tabs, five-level domain filters, Markdown copying,
-saved preferences, tips, and every dropdown in both themes. The terminal smoke
-uses only synthetic history and a fake runner to verify progress without model calls.
-The stage step creates `.release/human-hindsight` and `.release/cc-hindsight`
-with minimal publish manifests. Pack checks inspect those actual tarballs,
-including dependencies and scripts. A loopback npm registry exercises the
-normal `npx ...@latest` path with an empty cache.
-Staging copies the existing build; it does not rebuild. Build after final edits,
-and restage after the final commit so the manifest's `gitHead` matches the
-revision being verified. Keep `.release`, `dist`, tarballs, and local test homes
-out of commits.
+`pack-release.mjs` checks each tarball itself: the exact file list, executable bins, manifests that agree with the contents, the wrapper's version pin, and that the launcher still parses on old Node. That last check runs the Node binary named by `HUMAN_HINDSIGHT_OLDEST_NODE`, which must be Node 18 or older. Locally the check is skipped with a note when the variable is unset; in CI it is required. `smoke-gui.mjs` needs Chrome.
 
-For a version bump, update the main package/development lockfile and
-`compat/cc-hindsight/package.json` together, including the wrapper's exact
-`human-hindsight` dependency. The release workflow verifies both identities,
-publishes the new package first, then the deprecated wrapper, then creates the
-GitHub release. Reruns skip versions already published from the same commit.
-Prepare the changelog section and comparison links in the same PR as the
-version bump. Wait for PR CI, merge, and verify main CI for the merge commit
-before tagging that exact revision. Pushing `vX.Y.Z` triggers the release
-workflow; publish through its staged-package OIDC path.
-
-After publication, check both exact versions and both `latest` tags against
-the merge SHA, including the wrapper's exact dependency. Use separate empty npm
-caches to install and exercise `human-hindsight@X.Y.Z`, `cc-hindsight@X.Y.Z`,
-`human-hindsight@latest`, and `cc-hindsight@latest`. Check version/help and the
-synthetic retry scenario through those installed entrypoints. A green workflow
-or registry metadata alone does not prove the installed commands work.
-
-Each npm package needs a trusted publisher for
-`adityaarunsinghal/human-hindsight`, workflow `release.yml`, with direct
-`npm publish` allowed. New package names require a one-time authenticated
-bootstrap before their trusted-publisher settings can be configured.
-
-Library dependencies are exact-pinned and the development tree is locked in
-`package-lock.json`. Commit lockfile updates with dependency changes; never
-ship a development shrinkwrap. CI actions are SHA-pinned; bump the SHA and the tag
-comment together.
+Build after the final code change and restage after the final commit, so the package's `gitHead` matches the release commit. The workflows define the platform matrix: [CI workflow](.github/workflows/ci.yml). The release workflow runs the whole CI workflow first, and its publish job repeats both test tiers, the packaging checks, and the terminal and browser smokes on the packed tarballs before it publishes the main package, then the wrapper, and builds the GitHub release notes from this version's `CHANGELOG.md` section: [Release workflow](.github/workflows/release.yml). After publishing, run both package names through a fresh `npx`, by exact version and by `latest`.

@@ -1,10 +1,34 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { Writable } from "node:stream";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
-import { renderStatus } from "../src/commands/status.js";
-import { findEntry, parseOneshot, readLibrary, readLibraryIssues } from "../src/core/library.js";
+import { runPrune } from "../src/commands/prune.js";
+import {
+  agreementStatusLine,
+  agreementStatusText,
+  renderStatus,
+  type SuggestionState,
+  suggestionStatusText,
+} from "../src/commands/status.js";
+import { parseSourcesJson } from "../src/core/artifacts.js";
+import { setFileWriter, unflushedWriter } from "../src/core/fsutil.js";
+import {
+  GENERALIZED_PATH,
+  type GeneralizedArtifact,
+  type GeneralizedState,
+} from "../src/core/generalized.js";
+import {
+  findEntry,
+  isOutcomeVerified,
+  parseOneshot,
+  readLibrary,
+  readLibraryIssues,
+} from "../src/core/library.js";
+import { runDigestStage } from "../src/distill/pipeline.js";
 import { clipboardCommand, copyToClipboard } from "../src/ui/clipboard.js";
+import { type BuiltHome, homeBuilder } from "./support/home.js";
 
 // --- fixtures ----------------------------------------------------------------
 
@@ -153,6 +177,15 @@ describe("readLibrary / findEntry / parseOneshot", () => {
     expect(issues.find((i) => i.slug === "junk-entry-here")?.reason).toContain("not valid JSON");
   });
 
+  it("does not report the saved subagents directory as a broken entry", () => {
+    const home = tmpHome();
+    writeEntry(home, "good-entry-here");
+    fs.mkdirSync(path.join(home, "library", "subagents"), { recursive: true });
+    fs.writeFileSync(path.join(home, "library", "subagents", "suggestion.json"), "{}");
+    expect(readLibrary(home).map((e) => e.slug)).toEqual(["good-entry-here"]);
+    expect(readLibraryIssues(home)).toEqual([]);
+  });
+
   it("tolerates an odd confidence value without dropping the entry or crashing", () => {
     const home = tmpHome();
     // Hand-edited confidence outside the enum: .catch keeps the entry usable.
@@ -185,6 +218,20 @@ describe("readLibrary / findEntry / parseOneshot", () => {
 
 // --- status funnel ---------------------------------------------------------------
 
+describe("isOutcomeVerified", () => {
+  it("reads only an explicit false as not verified, so older files keep their meaning", () => {
+    const sources = (extra: Record<string, unknown>) => {
+      const parsed = parseSourcesJson({ slug: "some-task", ...extra });
+      if (!parsed) throw new Error("not a sources record");
+      return parsed;
+    };
+    expect(isOutcomeVerified(sources({}))).toBe(true);
+    expect(isOutcomeVerified(sources({ outcome_verified: true }))).toBe(true);
+    expect(isOutcomeVerified(sources({ outcome_verified: "false" }))).toBe(true);
+    expect(isOutcomeVerified(sources({ outcome_verified: false }))).toBe(false);
+  });
+});
+
 describe("renderStatus", () => {
   function strip(s: string): string {
     // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping ANSI codes
@@ -196,9 +243,10 @@ describe("renderStatus", () => {
     const out = strip(
       renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
     );
-    expect(out).toContain("discovered  0 session(s)");
-    expect(out).toContain("exported    0 session(s)");
-    expect(out).toContain("clustered   —");
+    expect(out).toContain("discovered  0 sessions");
+    expect(out).toContain("exported    0 sessions");
+    expect(out).toContain("grouped     none yet");
+    expect(out).toContain("written     none yet");
     expect(out).toContain("human-hindsight export");
   });
 
@@ -248,17 +296,82 @@ describe("renderStatus", () => {
     const out = strip(
       renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
     );
-    expect(out).toContain("exported    3 session(s)");
-    expect(out).toContain("digested    3 session(s)");
-    expect(out).toContain("clustered   3 task(s), 0 in misc");
-    expect(out).toContain("authored    1 of 3 task(s)");
+    expect(out).toContain("exported    3 sessions");
+    expect(out).toContain("read        3 sessions");
+    expect(out).toContain("grouped     3 tasks\n");
+    expect(out).toContain("written     1 of 3 prompts");
+    // Internal bookkeeping appears only with --verbose.
+    expect(out).not.toMatch(/^(digested|clustered|authored|retry) /m);
+    expect(out).not.toContain("generation");
     expect(out).toContain("✓ authored-task-here");
-    expect(out).toContain(
-      "· doomed-task-here skipped (no completed/partial outcomes: 1 abandoned)",
-    );
+    expect(out).toContain("· doomed-task-here skipped: every session in it was abandoned");
     expect(out).toContain("· pending-task-here pending");
-    expect(out).toContain("1 orphaned library entry");
-    expect(out).toContain("⚠ orphaned-task-here (generation g1)");
+    expect(out).toContain("1 library entry was left behind when sessions were regrouped");
+    expect(out).toContain("⚠ orphaned-task-here\n");
+    const verbose = strip(
+      renderStatus({
+        home,
+        claudeDir: path.join(home, "no-claude"),
+        source: "claude",
+        verbose: true,
+      }),
+    );
+    expect(verbose).toContain("⚠ orphaned-task-here  (generation g1)");
+    expect(verbose).toContain("read        3 sessions  (generation g2)");
+  });
+
+  it("a group is skipped only when every session was abandoned; unjudged is pending, unverified is said", () => {
+    const home = tmpHome();
+    fs.mkdirSync(path.join(home, "exports"), { recursive: true });
+    fs.mkdirSync(path.join(home, "distill"), { recursive: true });
+    const names = ["a.md", "b.md", "c.md", "d.md"];
+    fs.writeFileSync(
+      path.join(home, "exports", "manifest.json"),
+      JSON.stringify(names.map((name) => ({ export: name }))),
+    );
+    const digest = (outcome: string) => ({
+      goal: "g",
+      deliverable: "d",
+      domain: "x",
+      keywords: [],
+      outcome,
+    });
+    fs.writeFileSync(
+      path.join(home, "distill", "digests.json"),
+      JSON.stringify({
+        generation: "g2",
+        prompt_version: 1,
+        digests: {
+          "a.md": digest("unclear"),
+          "b.md": digest("abandoned"),
+          "c.md": digest("unclear"),
+          "d.md": digest("abandoned"),
+        },
+      }),
+    );
+    fs.writeFileSync(
+      path.join(home, "distill", "tasks.json"),
+      JSON.stringify({
+        generation: "g2",
+        prompt_version: 1,
+        tasks: [
+          { slug: "unclear-written", title: "t", rationale: "r", members: ["a.md"] },
+          { slug: "unclear-waiting", title: "t", rationale: "r", members: ["c.md", "d.md"] },
+          { slug: "all-abandoned", title: "t", rationale: "r", members: ["b.md"] },
+        ],
+        misc: [],
+      }),
+    );
+    writeEntry(home, "unclear-written", { generation: "g2", outcome_verified: false });
+    const out = strip(
+      renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
+    );
+    // The same words `list` uses.
+    expect(out).toContain("✓ unclear-written outcome not verified");
+    expect(out).toContain("· unclear-waiting pending");
+    expect(out).toContain("· all-abandoned skipped: every session in it was abandoned");
+    // A group still to be written makes distill the next step.
+    expect(out).toContain("next: human-hindsight distill");
   });
 
   it("flags stale digest-checkpoint keys whose session left the manifest (hygiene)", () => {
@@ -281,7 +394,7 @@ describe("renderStatus", () => {
     const out = strip(
       renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
     );
-    expect(out).toContain("1 digested session(s) no longer in the manifest");
+    expect(out).toContain("1 session summary is for a session no longer exported");
     expect(out).toContain("⚠ ghost.md");
   });
 
@@ -308,7 +421,7 @@ describe("renderStatus", () => {
         misc: [],
       }),
     );
-    // Library has the kept task AND a zombie from a prior clustering — SAME
+    // Library has the kept task AND a zombie from a prior clustering, SAME
     // generation g2 (incremental re-cluster mints no new id), slug no longer in
     // tasks.json. A generation-only orphan check would miss it entirely.
     writeEntry(home, "kept-task-here", { generation: "g2" });
@@ -318,17 +431,17 @@ describe("renderStatus", () => {
       renderStatus({ home, claudeDir: path.join(home, "no-claude"), source: "claude" }),
     );
     // Zombie is NOT counted as authored (1 of 1, not 2 of 1).
-    expect(out).toContain("authored    1 of 1 task(s)");
+    expect(out).toContain("written     1 of 1 prompt");
     expect(out).toContain("✓ kept-task-here");
     // ...and IS flagged as an orphan despite the matching generation.
-    expect(out).toContain("1 orphaned library entry");
+    expect(out).toContain("1 library entry was left behind when sessions were regrouped");
     expect(out).toContain("⚠ merged-away-task");
   });
 });
 
 // ---- status: dual-store discovered breakdown --------------------------------
 
-describe("renderStatus — per-source discovered breakdown", () => {
+describe("renderStatus: per-source discovered breakdown", () => {
   const FIXTURES = path.join(import.meta.dirname, "fixtures");
 
   it("shows (N claude, M kiro) when both stores are active, plus the orphan-history note", () => {
@@ -344,7 +457,7 @@ describe("renderStatus — per-source discovered breakdown", () => {
     expect(out).toContain("discovered");
     expect(out).toContain("(4 claude, 5 kiro)");
     // The orphan .history in kiro-home is surfaced here too.
-    expect(out).toContain("1 kiro session(s) whose transcript is gone");
+    expect(out).toContain("1 Kiro CLI session left out: the transcript was deleted");
   });
 
   it("shows no breakdown when a single store is active", () => {
@@ -358,5 +471,216 @@ describe("renderStatus — per-source discovered breakdown", () => {
     });
     expect(out).not.toContain("claude,");
     expect(out).not.toContain("kiro)");
+  });
+});
+
+describe("working agreements in status", () => {
+  const artifact = {
+    lessons: [{}, {}, {}],
+    generated_at: "2026-11-20T10:00:00.000Z",
+  } as unknown as GeneralizedArtifact;
+  it.each([
+    ["none", { state: "absent" }, "working agreements: none yet"],
+    [
+      "ready",
+      { state: "ok", artifact, stale: false },
+      "working agreements: 3, ready, generated 2026-11-20",
+    ],
+    [
+      "stale",
+      { state: "ok", artifact, stale: true },
+      "working agreements: 3, out of date since 2026-11-20; the next distill refreshes them",
+    ],
+    [
+      "damaged",
+      { state: "damaged", reason: "the file is not valid JSON" },
+      "working agreements: damaged (the file is not valid JSON); the next distill rebuilds them",
+    ],
+    [
+      "incomplete",
+      {
+        state: "ok",
+        artifact,
+        stale: false,
+        incomplete: { summarized: 4, total: 9, windowsFailed: 1 },
+      },
+      "working agreements: 3, 4 of 9 preferences summarized; run distill again to finish",
+    ],
+  ] as [string, GeneralizedState, string][])("%s is said in plain words", (_name, saved, line) => {
+    expect(stripVTControlCharacters(agreementStatusText(saved))).toBe(line);
+  });
+
+  it("reads the saved file through the reader that never throws", () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "hindsight-agreements-"));
+    try {
+      fs.mkdirSync(path.join(home, "library"), { recursive: true });
+      fs.writeFileSync(path.join(home, GENERALIZED_PATH), "{not json");
+      expect(stripVTControlCharacters(agreementStatusLine(home))).toMatch(
+        /^working agreements: damaged \(.+\); the next distill rebuilds them$/,
+      );
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("suggested subagents in status", () => {
+  const generatedAt = "2026-11-21T10:00:00.000Z";
+  it.each([
+    ["none", { state: "absent" }, "suggested subagents: none yet"],
+    [
+      "ready",
+      { state: "saved", roles: 2, generatedAt, stale: false },
+      "suggested subagents: 2 roles, ready, generated 2026-11-21",
+    ],
+    [
+      "one role",
+      { state: "saved", roles: 1, generatedAt, stale: false },
+      "suggested subagents: 1 role, ready, generated 2026-11-21",
+    ],
+    [
+      "out of date",
+      { state: "saved", roles: 2, generatedAt, stale: true },
+      "suggested subagents: 2 roles, out of date since 2026-11-21; run human-hindsight suggest-subagents to refresh them",
+    ],
+    [
+      "damaged",
+      { state: "damaged", reason: "the file is not valid JSON" },
+      "suggested subagents: unreadable (the file is not valid JSON)",
+    ],
+  ] as [string, SuggestionState, string][])("%s is said in plain words", (_name, saved, line) => {
+    const text = stripVTControlCharacters(suggestionStatusText(saved));
+    expect(text).toBe(line);
+    expect(text).not.toMatch(/\(current\)|\(stale\)/);
+  });
+});
+
+describe("status in plain words", () => {
+  const built: BuiltHome[] = [];
+  afterEach(() => {
+    while (built.length) built.pop()?.remove();
+  });
+  const plain = (home: BuiltHome, verbose = false) =>
+    stripVTControlCharacters(
+      renderStatus({
+        home: home.dir,
+        claudeDir: path.join(home.dir, "no-claude"),
+        source: "claude",
+        verbose,
+      }),
+    );
+
+  function editedAfterRegrouping(): BuiltHome {
+    const home = homeBuilder()
+      .session({
+        project: "alpha",
+        sessionId: "a1111111-0000-4000-8000-000000000001",
+        messages: ["Keep the change small."],
+      })
+      .digestAll()
+      .task({ slug: "small-change", members: [0] })
+      .library("small-change")
+      .build();
+    built.push(home);
+    // A later run grouped again (a new generation) and kept the edited prompt as it was.
+    const tasks = home.json<{ generation: string }>("distill/tasks.json");
+    fs.writeFileSync(
+      home.path("distill/tasks.json"),
+      JSON.stringify({ ...tasks, generation: "g-later" }),
+    );
+    fs.appendFileSync(
+      home.path("library/small-change/small-change.oneshot.md"),
+      "\nMy own words.\n",
+    );
+    return home;
+  }
+
+  it("a prompt the person edited is kept, not pending and not left behind", async () => {
+    const home = editedAfterRegrouping();
+    const out = plain(home);
+    expect(out).toContain("written     0 of 1 prompt, 1 kept as you edited it");
+    expect(out).toContain("✓ small-change kept (edited by you)");
+    expect(out).not.toMatch(/pending|left behind/);
+    expect(out).toMatch(/next:\s+human-hindsight gui/);
+    const cap = captureOut();
+    await runPrune({ home: home.dir, "dry-run": true }, { output: cap.out });
+    expect(cap.text()).toContain("No library entries were left behind.");
+  });
+
+  it("says how many preferences wait for review and where to review them", () => {
+    const home = homeBuilder()
+      .session({
+        project: "alpha",
+        sessionId: "a1111111-0000-4000-8000-000000000001",
+        messages: ["Keep the change small."],
+      })
+      .digest(0, { preferences: [{ text: "Keep changes small.", quote: "Keep the change small" }] })
+      .task({ slug: "small-change", members: [0] })
+      .library("small-change")
+      .build();
+    built.push(home);
+    const out = plain(home);
+    expect(out).toContain(
+      "preferences: 1 preference observed: 1 waiting for your review, none accepted yet.",
+    );
+    expect(out).toMatch(
+      / {2}Review them in your browser:\n {4}human-hindsight gui \S.* --tab=preferences\n/,
+    );
+  });
+});
+
+function captureOut(): { out: Writable; text: () => string } {
+  let text = "";
+  const out = new Writable({
+    write(chunk, _e, cb) {
+      text += chunk.toString();
+      cb();
+    },
+  });
+  return { out, text: () => stripVTControlCharacters(text) };
+}
+
+describe("status: unfinished calls", () => {
+  it("counts them in plain words and keeps the ledger's bookkeeping for --verbose", async () => {
+    setFileWriter(unflushedWriter);
+    const home = homeBuilder()
+      .session({
+        project: "alpha",
+        sessionId: "a1111111-0000-4000-8000-000000000001",
+        messages: ["Keep the change small."],
+      })
+      .build();
+    try {
+      const manifest =
+        home.json<Parameters<typeof runDigestStage>[0]["entries"]>("exports/manifest.json");
+      await runDigestStage({
+        home: home.dir,
+        entries: manifest,
+        output: captureOut().out,
+        runnerName: "claude",
+        model: "recorded-model",
+        runner: async () => {
+          throw new Error("network disconnected");
+        },
+      });
+      const status = (verbose: boolean) =>
+        stripVTControlCharacters(
+          renderStatus({
+            home: home.dir,
+            claudeDir: path.join(home.dir, "none"),
+            source: "claude",
+            verbose,
+          }),
+        );
+      const out = status(false);
+      expect(out).toContain("unfinished  1 session read did not finish");
+      expect(out).toMatch(
+        / {2}To try them again:\n {4}human-hindsight distill \S.* --retry-failed --dry-run\n/,
+      );
+      expect(out).not.toMatch(/retryable|local repair|ledger/);
+      expect(status(true)).toContain("ledger: 1 retryable, 0 local repairs, 0 blocked");
+    } finally {
+      home.remove();
+    }
   });
 });

@@ -23,7 +23,18 @@ if (args.includes("--help") || args.includes("--claude-help")) {
   console.log("--output-format --json-schema --tools --safe-mode --system-prompt --strict-mcp-config --mcp-config --settings --disable-slash-commands --no-chrome --no-session-persistence");
   process.exit(0);
 }
+// Local probes the runner makes before any model request.
+if (args[0] === "--version") {
+  console.log("2.1.999 (Claude Code)");
+  process.exit(0);
+}
+if (args[0] === "auth") process.exit(args[1] === "status" ? 0 : 1);
 const schema = JSON.parse(args[args.indexOf("--json-schema") + 1]);
+// The readiness request sent once after consent. It is not a stage call.
+if (schema.properties.ok) {
+  console.log(JSON.stringify({type: "result", subtype: "success", is_error: false, structured_output: {ok: true}}));
+  process.exit(0);
+}
 const prompt = fs.readFileSync(0, "utf8");
 const kind = schema.properties.goal ? "digest" : schema.properties.oneshot_markdown ? "author" : "unexpected";
 const unit = kind === "digest" ? prompt.match(/\\(file: ([^)]+)\\)/)?.[1] : prompt.match(/\\(slug: ([^)]+)\\)/)?.[1];
@@ -135,8 +146,12 @@ try {
     };
     const common = ["--home", home, "--no-follow-up"];
     const retry = ["distill", "--retry-failed", ...common];
-    assert.match(run(["distill", "--help"]), /retry-failed/);
-    assert.match(run(["distill", "--help"]), /recover-tasks/);
+    // Recovery flags are advanced: the short help points to the full reference,
+    // and the full reference must list them.
+    assert.match(run(["distill", "--help"]), /--help --all/);
+    const reference = run(["distill", "--help", "--all"]);
+    assert.match(reference, /retry-failed/);
+    assert.match(reference, /recover-tasks/);
     run(["distill", "--retry-stage=author", ...common], { status: 1 });
     run(["distill", "--runner=claude", "--no-group", "--yes", ...common], {
       env: { HH_RETRY_FAIL: "initial" },

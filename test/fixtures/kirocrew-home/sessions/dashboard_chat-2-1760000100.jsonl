@@ -1,0 +1,2 @@
+{"role":"user","content":"a chat whose metadata line is missing","ts":"2026-01-03T09:00:00.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{"human":true}}
+{"role":"assistant","content":"Noted.","ts":"2026-01-03T09:00:04.000000+00:00","source_thread":"dashboard","source_user":"dashboard","meta":{}}

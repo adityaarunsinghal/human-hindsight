@@ -2,11 +2,22 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { toJsonSchema } from "../claude/schemas.js";
 import { mkdirPrivate } from "../core/fsutil.js";
+import { toJsonSchema } from "../distill/schemas.js";
 import { OPENCODE_DISTILL_MARKER, object } from "../sources/opencode/extract.js";
 import { resolveOpenCodePaths } from "../sources/opencode/paths.js";
 import { openOpenCodeDatabase } from "../sources/opencode/store.js";
+import {
+  LOCAL_PROBE,
+  missingBinaryHint,
+  RUNNER_INFO,
+  readCatalog,
+  readSignInHint,
+  readVersion,
+  requireBinary,
+  versionNumber,
+} from "./capabilities.js";
+import { cliErrorKind } from "./failures.js";
 import { configureOpenCode, OPENCODE_AGENT, providerConfig } from "./opencode-config.js";
 import {
   AgentRunnerError,
@@ -15,16 +26,22 @@ import {
   embedSchema,
   RetryableError,
   type RunnerIo,
+  requireConcreteModel,
   runWithCorrectiveRetry,
   type SpawnOptions,
   type SpawnResult,
   snippet,
   stripFence,
 } from "./shared.js";
-import type { AgentRunner, RunOptions } from "./types.js";
+import type { AgentRunner, ModelCatalog, RunOptions, SignInHint } from "./types.js";
 
-export const OPENCODE_INSTALL_HINT =
-  "`opencode` CLI not found on PATH. Install with `npm install -g @opencode/cli`, then configure a provider in OpenCode. Scan/export work without the CLI.";
+const OPENCODE_INSTALL_HINT = missingBinaryHint("opencode");
+
+/**
+ * Calls OpenCode takes at once. Every `opencode run` writes to one local
+ * database; with ten in flight (1.18.15) four failed with "database is locked".
+ */
+const OPENCODE_MAX_CONCURRENCY = 2;
 
 interface Capabilities {
   major: 1 | 2;
@@ -39,22 +56,25 @@ function probe(io: RunnerIo, bin: string): Promise<Capabilities> {
   const existing = cache.get(bin);
   if (existing) return existing;
   const pending = (async () => {
-    const opts = { input: "", timeoutMs: 10_000 };
+    // Both answers gate the run (`--pure` or `--standalone`), so both get the help timeout.
+    const opts = LOCAL_PROBE;
     const version = await io.spawn(bin, ["--version"], opts);
-    const match = version.stdout.match(/\bv?(\d+)\.(\d+)\.(\d+)\b/);
-    const major = Number(match?.[1]);
-    if (version.code !== 0 || !match || (major !== 1 && major !== 2)) {
+    const major = Number(
+      versionNumber(`${version.stdout}\n${version.stderr}`, "opencode")?.split(".")[0],
+    );
+    if (version.code !== 0 || version.timedOut || (major !== 1 && major !== 2)) {
       throw new AgentRunnerError(
         "cli-error",
         "Cannot identify a supported OpenCode 1.x/2.x CLI version.",
       );
     }
     const help = await io.spawn(bin, ["run", "--help"], opts);
-    const flags = help.stdout + help.stderr;
+    const flags = new Set(`${help.stdout}\n${help.stderr}`.match(/--[\w-]+/g) ?? []);
     if (
       help.code !== 0 ||
+      help.timedOut ||
       !["--format", "--agent", "--title", major === 1 ? "--pure" : "--standalone"].every((flag) =>
-        flags.includes(flag),
+        flags.has(flag),
       )
     ) {
       throw new AgentRunnerError(
@@ -75,15 +95,20 @@ function probe(io: RunnerIo, bin: string): Promise<Capabilities> {
 export function parseOpenCodeOutput(stdout: string): {
   text: string;
   error: string;
+  /** The typed `statusCode` of the last error event, when it had one. */
+  status?: number;
   sessions: string[];
   cost: number;
+  model?: string;
 } {
   const messages = new Map<string, Map<string, string>>();
   const sessions = new Set<string>();
   const finished = new Set<string>();
   let lastMessage = "";
   let error = "";
+  let status: number | undefined;
   let cost = 0;
+  let model: string | undefined;
   for (const line of stdout.split(/\r?\n/)) {
     let event: Record<string, unknown> | undefined;
     try {
@@ -95,6 +120,12 @@ export function parseOpenCodeOutput(stdout: string): {
     if (typeof event.sessionID === "string" && /^ses_[\w-]+$/.test(event.sessionID))
       sessions.add(event.sessionID);
     const part = object(event.part);
+    if (event.type === "step_start" || event.type === "step_finish") {
+      const info = object(part?.model ?? event.model);
+      if (typeof info?.modelID === "string" && typeof info.providerID === "string") {
+        model = `${info.providerID}/${info.modelID}`;
+      } else if (typeof event.model === "string") model = event.model;
+    }
     if (event.type === "text" && part && typeof part.text === "string") {
       const message = typeof part.messageID === "string" ? part.messageID : "answer";
       const key =
@@ -110,14 +141,17 @@ export function parseOpenCodeOutput(stdout: string): {
     }
     if (event.type === "error") {
       const detail = object(event.error);
-      error =
+      const data = object(detail?.data);
+      const message =
         typeof detail?.message === "string"
           ? detail.message
-          : typeof object(detail?.data)?.message === "string"
-            ? String(object(detail?.data)?.message)
+          : typeof data?.message === "string"
+            ? data.message
             : typeof detail?.name === "string"
               ? detail.name
               : "OpenCode reported an error";
+      status = typeof data?.statusCode === "number" ? data.statusCode : undefined;
+      error = status !== undefined ? `${status} ${message}` : message;
     }
     if (event.type === "step_finish" && part) {
       const id = String(part.id ?? part.messageID ?? line);
@@ -134,8 +168,10 @@ export function parseOpenCodeOutput(stdout: string): {
   return {
     text: [...(messages.get(lastMessage)?.values() ?? [])].join(""),
     error,
+    ...(status !== undefined ? { status } : {}),
     sessions: [...sessions],
     cost,
+    ...(model ? { model } : {}),
   };
 }
 
@@ -170,12 +206,65 @@ function ownedSession(context: Context, id: string): boolean {
 export function makeOpenCodeRunner(io: RunnerIo = defaultIo, scratchBase?: string): AgentRunner {
   const contexts: Context[] = [];
   let cost = 0;
+  let version: Promise<string | undefined> | undefined;
+  const getVersion = () => (version ??= readVersion(io, "opencode"));
+  // Discover providers and models under the same isolated configuration as a run.
+  // No user plugin, project hook, or remote catalog refresh is needed for setup.
+  async function inspect<T>(
+    fallback: T,
+    read: (options: Partial<SpawnOptions>, settings: Record<string, unknown>) => Promise<T>,
+  ): Promise<T> {
+    let scratch: string | undefined;
+    try {
+      const major = Number((await getVersion())?.split(".")[0]);
+      if (major !== 1 && major !== 2) return fallback;
+      const settings = providerConfig(major);
+      scratch = fs.mkdtempSync(path.join(os.tmpdir(), "human-hindsight-opencode-probe-"));
+      const env = configureOpenCode(scratch, major, settings);
+      return await read({ cwd: scratch, env }, settings);
+    } catch {
+      return fallback;
+    } finally {
+      if (scratch) {
+        try {
+          fs.rmSync(scratch, { recursive: true, force: true });
+        } catch {
+          /* best effort */
+        }
+      }
+    }
+  }
   return {
     name: "opencode",
+    displayName: RUNNER_INFO.opencode.displayName,
+    binary: RUNNER_INFO.opencode.binary,
     installHint: OPENCODE_INSTALL_HINT,
+    maxConcurrency: OPENCODE_MAX_CONCURRENCY,
+    version: getVersion,
+    async preflight() {
+      await probe(io, await requireBinary("opencode", io));
+    },
+    signInHint: () =>
+      inspect<SignInHint>({ state: "unknown" }, (options, settings) =>
+        readSignInHint(
+          io,
+          "opencode",
+          options,
+          Boolean(settings.model || settings.provider || settings.providers),
+        ),
+      ),
+    listModels: () =>
+      inspect<ModelCatalog>({ ids: [], source: "none" }, (options, settings) =>
+        readCatalog(
+          io,
+          "opencode",
+          options,
+          typeof settings.model === "string" ? settings.model : undefined,
+        ),
+      ),
     async run<T>(opts: RunOptions<T>): Promise<T> {
-      const bin = await io.which("opencode");
-      if (!bin) throw new AgentRunnerError("missing-binary", OPENCODE_INSTALL_HINT);
+      requireConcreteModel(opts.model);
+      const bin = await requireBinary("opencode", io);
       const { major } = await probe(io, bin);
       const settings = providerConfig(major);
       const base = scratchBase ?? os.tmpdir();
@@ -207,7 +296,6 @@ export function makeOpenCodeRunner(io: RunnerIo = defaultIo, scratchBase?: strin
         options: {
           cwd: scratch,
           env,
-          processGroup: true,
           input: "",
           timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         },
@@ -228,17 +316,26 @@ export function makeOpenCodeRunner(io: RunnerIo = defaultIo, scratchBase?: strin
         `${OPENCODE_DISTILL_MARKER}\n${opts.prompt}`,
         JSON.stringify(toJsonSchema(opts.schema)),
       );
-      return runWithCorrectiveRetry(
+      let model = opts.model;
+      const value = await runWithCorrectiveRetry(
         input,
         opts.schema,
         async (prompt) => {
           let result: SpawnResult;
           try {
-            result = await io.spawn(bin, args, { ...context.options, input: prompt });
-          } catch {
+            result = await io.spawn(bin, args, {
+              ...context.options,
+              input: prompt,
+              signal: opts.signal,
+            });
+          } catch (err) {
+            if ((err as NodeJS.ErrnoException | null)?.code === "ENOENT") {
+              throw new AgentRunnerError("missing-binary", OPENCODE_INSTALL_HINT);
+            }
             throw new AgentRunnerError("cli-error", "Could not start the OpenCode CLI.");
           }
           const parsed = parseOpenCodeOutput(result.stdout);
+          model = parsed.model ?? opts.model;
           for (const id of parsed.sessions) context.sessions.add(id);
           cost += parsed.cost;
           if (result.timedOut)
@@ -248,8 +345,13 @@ export function makeOpenCodeRunner(io: RunnerIo = defaultIo, scratchBase?: strin
             );
           if (result.code !== 0 || parsed.error) {
             throw new AgentRunnerError(
-              "cli-error",
+              cliErrorKind("opencode", {
+                message: parsed.error,
+                status: parsed.status,
+                stderr: result.stderr,
+              }),
               `OpenCode failed: ${snippet(parsed.error || result.stderr || "no error detail")}`,
+              { stderr: result.stderr },
             );
           }
           try {
@@ -264,6 +366,8 @@ export function makeOpenCodeRunner(io: RunnerIo = defaultIo, scratchBase?: strin
             `OpenCode response failed validation after one retry: ${detail}`,
           ),
       );
+      opts.onResolved?.({ runner: "opencode", model });
+      return value;
     },
     costSummary: () => (cost > 0 ? `OpenCode reported cost: $${cost.toFixed(4)}` : undefined),
     async finalize() {

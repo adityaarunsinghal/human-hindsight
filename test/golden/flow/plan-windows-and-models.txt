@@ -1,0 +1,6 @@
+  distill will call your local `claude` CLI (your subscription/credits):
+    •  3,000 session reads
+    •    ~61 grouping calls (estimated 60 batches and 1 merge; the size limit per call may need more batches)
+    • ~1,000 prompt writing calls (one per task; the exact count is known after grouping)
+  Approximately 4,061 calls in total. Nothing is sent anywhere except through your own claude CLI.
+  Models: reads and writing: session-model; grouping: grouping-model.

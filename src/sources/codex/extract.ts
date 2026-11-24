@@ -1,44 +1,135 @@
+import { renderDecisionLine, renderQuestionLine } from "../questions.js";
+import { isRecord, snippet } from "../read.js";
 import type { Drop, ExtractResult, TimelineEvent } from "../types.js";
+import { leadingWrappers } from "../wrappers.js";
 import { isCodexAutomation } from "./discover.js";
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+/**
+ * C2: the context blocks Codex itself writes into a user message. Exact names,
+ * case-sensitive, and only as complete blocks at the start of the message
+ * (repeated): that is the only place the harness puts them. The same tags
+ * inside what the person wrote (a question about `<skill>`, a pasted XML
+ * `<permissions>` element) are the person's words and survive.
+ */
+const CODEX_CONTEXT_TAGS: ReadonlySet<string> = new Set([
+  "environment_context",
+  "user_instructions",
+  "permissions",
+  "collaboration_mode",
+  "turn_aborted",
+  "subagent_notification",
+  "skill",
+]);
+
+/**
+ * The AGENTS.md block Codex writes at the start of a message. Its heading names
+ * the folder the instructions came from, or no folder for instructions that
+ * apply everywhere.
+ */
+const AGENTS_BLOCK =
+  /^# AGENTS\.md instructions(?: for [^\n]*)?\n+\s*<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>\s*/;
+
+/**
+ * The image markers Codex writes around an attached image, each as a text part
+ * of its own: `<image>`, `<image name=[Image #1]>`, the same with the local
+ * file it came from (`path="..."`), and `</image>`. Removed only
+ * when a part is made of nothing else, so an `<image>` element the person
+ * pasted (SVG, HTML) survives.
+ */
+const IMAGE_MARKERS_ONLY =
+  /^(?:\s*(?:<image(?: name=\[Image #\d+\])?(?: path="[^"\n]*")?>|<\/image>))+\s*$/;
+
+/** The placeholder line the composer leaves where an image was attached. */
+const IMAGE_PLACEHOLDER_LINE = /^\[Image #\d+\]\s*$/gm;
+
+const IDE_CONTEXT = "# Context from my IDE setup:";
+const IDE_REQUEST = "## My request for Codex:";
+
+/**
+ * C2: a shell command the person typed after `!` in Codex. Codex records it as
+ * a user message of its own: `<user_shell_command>` holding `<command>` (what
+ * was typed) and `<result>` (exit code, duration, output). The command is kept
+ * as `[command] !the command`, the same rule as Claude Code's shell commands;
+ * the result is machine text. Its output may print the closing tag, so the
+ * last closer ends the block.
+ */
+const SHELL_COMMAND_TAG = "user_shell_command";
+const SHELL_COMMAND_RULES = { output: new Set([SHELL_COMMAND_TAG]) } as const;
+const SHELL_COMMAND_TEXT = /^\s*<command>\n?([\s\S]*?)\n?<\/command>/;
+
+interface LeadingContext {
+  /** `[command] !...` lines for the shell commands found, in order. */
+  commands: string[];
+  /** The person's words after the context. */
+  rest: string;
 }
 
-function excerpt(text: string): string {
-  const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > 120 ? `${flat.slice(0, 117)}...` : flat;
+/** Remove the leading context blocks (C2), repeatedly, until the person's words. */
+function withoutLeadingContext(text: string): LeadingContext {
+  let rest = text;
+  const commands: string[] = [];
+  for (;;) {
+    const agents = AGENTS_BLOCK.exec(rest);
+    if (agents) {
+      rest = rest.slice(agents[0].length);
+      continue;
+    }
+    const shell = leadingWrappers(rest, new Set([SHELL_COMMAND_TAG]), {
+      ...SHELL_COMMAND_RULES,
+      shape: false,
+      unclosedIsMachine: false,
+    });
+    const [block] = shell.blocks;
+    if (block?.tag === SHELL_COMMAND_TAG) {
+      const command = SHELL_COMMAND_TEXT.exec(block.body)?.[1]?.trim();
+      if (command) commands.push(`[command] !${command}`);
+      rest = rest.trim().slice(block.raw.length).trim();
+      continue;
+    }
+    const { blocks, text: after } = leadingWrappers(rest, CODEX_CONTEXT_TAGS, {
+      shape: false,
+      unclosedIsMachine: false,
+    });
+    if (!blocks.length) return { commands, rest };
+    rest = after;
+  }
 }
 
 /**
- * Only known Codex context wrappers are removed. Human HTML/XML survives.
- * The IDE prepends context before "## My request for Codex:"; the protocol's
- * own strip_user_message_prefix uses the same marker.
+ * Only what Codex wrote is removed; human HTML/XML survives (see C2 above).
+ * The IDE writes its context, then "## My request for Codex:" on its own line,
+ * then the request. A selection inside the context can contain that same line,
+ * so the request starts after the last heading that begins a line, which is
+ * how Codex's own transcript view reads it (`rsplit_once` on the heading).
+ * IDE context with no request heading at all holds no request: it is machine
+ * text whole and is dropped with a record.
  */
 function humanText(raw: string, drops: Drop[], timestamp: string): string {
   let text = raw.trim();
-  const request = "## My request for Codex:";
-  if (text.startsWith("# Context from my IDE setup:") || text.startsWith(request)) {
-    const start = text.indexOf(request);
-    if (start >= 0) text = text.slice(start + request.length).trim();
+  if (text.startsWith(IDE_CONTEXT) || text.startsWith(IDE_REQUEST)) {
+    const lastLine = text.lastIndexOf(`\n${IDE_REQUEST}`);
+    // No heading at the start of a line: fall back to the first one anywhere.
+    const start = lastLine >= 0 ? lastLine + 1 : text.indexOf(IDE_REQUEST);
+    if (start < 0) {
+      drops.push({
+        reason: "C2: IDE context without a request",
+        snippet: snippet(text),
+        timestamp,
+      });
+      return "";
+    }
+    text = text.slice(start + IDE_REQUEST.length).trim();
   }
   const before = text;
-  text = text
-    .replace(
-      /^# AGENTS\.md instructions for [^\n]*\n+\s*<INSTRUCTIONS>[\s\S]*?<\/INSTRUCTIONS>\s*/i,
-      "",
-    )
-    .replace(
-      /<(environment_context|user_instructions|permissions|collaboration_mode|turn_aborted|subagent_notification|skill)(?:\s[^>]*)?>[\s\S]*?<\/\1>\s*/gi,
-      "",
-    )
-    .replace(/<\/?image(?:\s[^>]*)?>/gi, "")
-    .replace(/^\[Image #\d+\]\s*$/gm, "")
-    .trim();
+  const context = IMAGE_MARKERS_ONLY.test(text)
+    ? { commands: [], rest: "" }
+    : withoutLeadingContext(text);
+  text = context.rest.replace(IMAGE_PLACEHOLDER_LINE, "").trim();
   if (text !== before) {
-    drops.push({ reason: "C2: injected context", snippet: excerpt(before), timestamp });
+    const reason = context.commands.length ? "C2: shell command result" : "C2: injected context";
+    drops.push({ reason, snippet: snippet(before), timestamp });
   }
-  return text;
+  return [...context.commands, text].filter(Boolean).join("\n\n");
 }
 
 function contentText(content: unknown, human: boolean, drops: Drop[], timestamp: string): string {
@@ -48,7 +139,7 @@ function contentText(content: unknown, human: boolean, drops: Drop[], timestamp:
   if (!Array.isArray(content)) return "";
   return content
     .flatMap((part) => {
-      if (!record(part)) return [];
+      if (!isRecord(part)) return [];
       if (
         (part.type === "input_text" || part.type === "output_text" || part.type === "text") &&
         typeof part.text === "string"
@@ -66,7 +157,7 @@ function contentText(content: unknown, human: boolean, drops: Drop[], timestamp:
 function objectValue(value: unknown): Record<string, unknown> | null {
   try {
     const parsed = typeof value === "string" ? JSON.parse(value) : value;
-    return record(parsed) ? parsed : null;
+    return isRecord(parsed) ? parsed : null;
   } catch {
     return null;
   }
@@ -75,21 +166,22 @@ function objectValue(value: unknown): Record<string, unknown> | null {
 interface Question {
   id: string;
   text: string;
-  labels: string[];
+  surface: string;
 }
 
 function questionsFrom(args: Record<string, unknown>): Question[] {
   if (!Array.isArray(args.questions)) return [];
   return args.questions.flatMap((q) => {
-    if (!record(q)) return [];
+    if (!isRecord(q)) return [];
     const text = typeof q.question === "string" ? q.question : q.title;
     if (typeof text !== "string" || !text.trim()) return [];
-    const labels = Array.isArray(q.options)
-      ? q.options.flatMap((o) =>
-          typeof o === "string" ? [o] : record(o) && typeof o.label === "string" ? [o.label] : [],
-        )
-      : [];
-    return [{ id: typeof q.id === "string" ? q.id : text, text, labels }];
+    return [
+      {
+        id: typeof q.id === "string" ? q.id : text,
+        text,
+        surface: renderQuestionLine(text, q.options, q.multiSelect === true),
+      },
+    ];
   });
 }
 
@@ -113,7 +205,7 @@ function parse(lines: string[]): ExtractResult & { events: TimelineEvent[] } {
     if (!line.trim()) continue;
     try {
       const entry: unknown = JSON.parse(line);
-      if (record(entry)) entries.push(entry);
+      if (isRecord(entry)) entries.push(entry);
       else badLines++;
     } catch {
       badLines++;
@@ -121,7 +213,7 @@ function parse(lines: string[]): ExtractResult & { events: TimelineEvent[] } {
   }
   if (
     entries.some(
-      (e) => e.type === "session_meta" && record(e.payload) && isCodexAutomation(e.payload),
+      (e) => e.type === "session_meta" && isRecord(e.payload) && isCodexAutomation(e.payload),
     )
   ) {
     return {
@@ -148,7 +240,7 @@ function parse(lines: string[]): ExtractResult & { events: TimelineEvent[] } {
       if (event.kind === "human") {
         drops.push({
           reason: "C3: mirrored user message",
-          snippet: excerpt(event.text),
+          snippet: snippet(event.text),
           timestamp: event.timestamp,
         });
       }
@@ -160,7 +252,7 @@ function parse(lines: string[]): ExtractResult & { events: TimelineEvent[] } {
 
   for (const entry of entries) {
     const payload = entry.payload;
-    if (!record(payload)) continue;
+    if (!isRecord(payload)) continue;
     const timestamp = typeof entry.timestamp === "string" ? entry.timestamp : "";
     if (
       entry.type === "compacted" ||
@@ -208,14 +300,12 @@ function parse(lines: string[]): ExtractResult & { events: TimelineEvent[] } {
         events.push({
           kind: "question",
           timestamp,
-          text: qs
-            .map((q) => `${q.text}${q.labels.length ? ` [${q.labels.join(", ")}]` : ""}`)
-            .join("\n"),
+          text: qs.map((q) => q.surface).join("\n"),
         });
         last = undefined;
       } else if (name === "update_plan" && Array.isArray(args.plan)) {
         const steps = args.plan.flatMap((p) =>
-          record(p) && typeof p.step === "string" ? [p.step] : [],
+          isRecord(p) && typeof p.step === "string" ? [p.step] : [],
         );
         events.push({ kind: "plan", timestamp, text: steps.join("\n") });
         last = undefined;
@@ -224,18 +314,13 @@ function parse(lines: string[]): ExtractResult & { events: TimelineEvent[] } {
       const qs = questions.get(payload.call_id);
       questions.delete(payload.call_id);
       const output = objectValue(payload.output);
-      if (!qs || !record(output?.answers)) continue;
+      if (!qs || !isRecord(output?.answers)) continue;
       const answers = output.answers;
       const decisions = qs.flatMap((q) => {
         const answer = answers[q.id];
-        const values = record(answer) ? answer.answers : answer;
-        const text =
-          typeof values === "string"
-            ? values
-            : Array.isArray(values)
-              ? values.filter((v) => typeof v === "string").join(", ")
-              : "";
-        return text.trim() ? [`[decision] "${q.text}" → ${text.trim()}`] : [];
+        const values = isRecord(answer) ? answer.answers : answer;
+        const line = renderDecisionLine(q.text, values);
+        return line ? [line] : [];
       });
       emit({ kind: "human", timestamp, text: decisions.join("\n") }, "response");
     }

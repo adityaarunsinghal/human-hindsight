@@ -1,5 +1,5 @@
 /**
- * core/render.ts — deterministic, byte-stable export rendering.
+ * core/render.ts: deterministic, byte-stable export rendering.
  *
  * Turns a deduped corpus session into the per-session markdown artifact and
  * allocates its `<project>-<uuid8>.md` filename. Pure and deterministic: given
@@ -51,9 +51,14 @@ export function exportFileName(
   const proj = sanitize(project) || "project";
   const stem = sanitize(sessionId) || "session";
 
+  // A name never ends in "-": two ids sharing their first eight characters
+  // (`aaaaaaaa-1111...`, `aaaaaaaa-2222...`) would give the second
+  // `app-aaaaaaaa-.md`. Such a prefix is passed over, so it reads
+  // `app-aaaaaaaa-2.md`.
+  const taken = (candidate: string) => used.has(candidate) || candidate.endsWith("-.md");
   let length = 8;
   let name = `${proj}-${stem.slice(0, length)}.md`;
-  while (used.has(name)) {
+  while (taken(name)) {
     if (length < stem.length) {
       length++;
       name = `${proj}-${stem.slice(0, length)}.md`;
@@ -61,7 +66,7 @@ export function exportFileName(
     }
     // Whole id consumed and still colliding: append a numeric suffix.
     let counter = 2;
-    while (used.has(`${proj}-${stem}-${counter}.md`)) counter++;
+    while (taken(`${proj}-${stem}-${counter}.md`)) counter++;
     name = `${proj}-${stem}-${counter}.md`;
     break;
   }

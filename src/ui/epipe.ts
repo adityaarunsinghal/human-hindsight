@@ -1,7 +1,7 @@
 import type { Writable } from "node:stream";
 
 /**
- * ui/epipe.ts — quiet EPIPE handling for piped output.
+ * ui/epipe.ts: quiet EPIPE handling for piped output.
  *
  * When a downstream reader closes early (`human-hindsight list | head`), writes to
  * our stdout/stderr raise EPIPE. That's normal Unix behavior, not a crash: exit
@@ -30,6 +30,6 @@ export function epipeHandler(exit: ExitFn = process.exit as ExitFn) {
 }
 
 /** Attach the EPIPE handler to a stream's `error` event. */
-export function installEpipeHandler(stream: Writable, exit: ExitFn = process.exit as ExitFn): void {
-  stream.on("error", epipeHandler(exit));
+export function installEpipeHandler(stream: Writable): void {
+  stream.on("error", epipeHandler());
 }

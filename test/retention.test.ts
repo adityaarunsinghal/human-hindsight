@@ -181,6 +181,69 @@ describe("optional local retention", () => {
   });
 });
 
+describe("Kiro Crew retention entry", () => {
+  /** A synthetic Crew store with one chat, so the store-exists probe passes. */
+  function crewStore(): string {
+    const dir = path.join(root, "crew");
+    fs.mkdirSync(path.join(dir, "sessions", "archive"), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, "sessions", "dashboard_chat-1-1760000000.jsonl"),
+      '{"_type":"metadata","title":"t"}\n',
+    );
+    return dir;
+  }
+
+  /** Every file under a dir with its bytes, to prove nothing was written. */
+  function snapshot(dir: string): Map<string, string> {
+    const out = new Map<string, string>();
+    for (const rel of fs.readdirSync(dir, { recursive: true }) as string[]) {
+      const file = path.join(dir, rel);
+      if (fs.statSync(file).isFile()) out.set(rel, fs.readFileSync(file, "utf8"));
+    }
+    return out;
+  }
+
+  it("--source kirocrew reports the store and writes nothing, even with --apply --yes", async () => {
+    const dir = crewStore();
+    const before = snapshot(dir);
+    const code = await runRetention(
+      { ...args, "kirocrew-dir": dir, source: "kirocrew", apply: true, yes: true },
+      { output },
+    );
+    expect(code).toBe(0);
+    expect(stdout).toContain("kirocrew");
+    expect(stdout).toContain(`Kiro Crew chats: ${path.join(dir, "sessions")}`);
+    expect(stdout).toContain(path.join(dir, "sessions", "archive"));
+    expect(stdout).toContain("archives it rather than deleting it");
+    expect(stdout).toContain("no setting is invented");
+    expect(stdout).toContain("No changes needed.");
+    expect(snapshot(dir)).toEqual(before);
+  });
+
+  it("auto includes the entry when the Crew store exists", () => {
+    const dir = crewStore();
+    const plans = planRetention("auto", resolvePaths({ ...args, "kirocrew-dir": dir }));
+    const crew = plans.find((p) => p.tool === "kirocrew");
+    expect(crew).toBeDefined();
+    expect(crew?.changes).toEqual([]);
+    expect(crew?.file).toBeUndefined();
+  });
+
+  it("auto leaves it out when the Crew dir has no chat store", () => {
+    const dir = path.join(root, "crew-empty");
+    fs.mkdirSync(path.join(dir, "sessions"), { recursive: true });
+    const plans = planRetention("auto", resolvePaths({ ...args, "kirocrew-dir": dir }));
+    expect(plans.some((p) => p.tool === "kirocrew")).toBe(false);
+  });
+
+  it("an explicit --source kirocrew reports even a missing store, writing nothing", () => {
+    const dir = path.join(root, "crew-missing");
+    const plans = planRetention("kirocrew", resolvePaths({ ...args, "kirocrew-dir": dir }));
+    expect(plans.map((p) => p.tool)).toEqual(["kirocrew"]);
+    expect(fs.existsSync(dir)).toBe(false);
+  });
+});
+
 describe("Codex TOML edits", () => {
   it.each([
     'model="mine"\nhistory.persistence="none"\nhistory.max_bytes=1024\n',

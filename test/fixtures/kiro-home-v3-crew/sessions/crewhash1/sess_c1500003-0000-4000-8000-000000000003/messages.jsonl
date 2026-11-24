@@ -1,0 +1,2 @@
+{"id": "1", "timestamp": "2026-11-03T10:00:00.000Z", "payload": {"type": "user", "content": "[SESSION RESUMED -- synthetic resume block]\nearlier context was dropped\ncarry on with the migration"}}
+{"id": "2", "timestamp": "2026-11-03T10:00:01.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "resuming"}}

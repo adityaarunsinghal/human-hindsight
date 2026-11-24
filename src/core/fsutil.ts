@@ -3,12 +3,12 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * core/fsutil.ts — owner-only writes for the private data directory.
+ * core/fsutil.ts: owner-only writes for the private data directory.
  *
  * Exports contain "anything sensitive you ever pasted into a session" (README),
  * yet default file modes are world-readable (0644). A tool this explicit about
  * the sensitivity of its output should keep `~/.human-hindsight` and everything
- * under it readable only by its owner. POSIX only — Node ignores `mode` on
+ * under it readable only by its owner. POSIX only: Node ignores `mode` on
  * Windows, which is a harmless no-op there.
  */
 
@@ -16,14 +16,29 @@ import path from "node:path";
 export const DIR_MODE = 0o700;
 /** Owner-only file mode (rw-------). */
 export const FILE_MODE = 0o600;
+/** Owner-only executable mode (rwx------), for a script the person is told to run. */
+const EXECUTABLE_MODE = 0o700;
+
+/**
+ * The mode a generated file gets wherever it lands (a folder or a zip entry):
+ * a script, which starts with `#!`, is owner-executable; anything else is
+ * owner-only. One rule for every writer, so an exported tree and its zip match.
+ */
+export function generatedFileMode(content: string | Uint8Array): number {
+  const script =
+    typeof content === "string"
+      ? content.startsWith("#!")
+      : content.length >= 2 && content[0] === 0x23 && content[1] === 0x21;
+  return script ? EXECUTABLE_MODE : FILE_MODE;
+}
 
 /** `mkdir -p` with owner-only mode; best-effort chmod of the leaf for pre-existing dirs. */
 export function mkdirPrivate(dir: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
   try {
-    fs.chmodSync(dir, DIR_MODE); // mkdirSync's mode applies on create only — tighten pre-existing dirs
+    fs.chmodSync(dir, DIR_MODE); // mkdirSync's mode applies on create only; tighten pre-existing dirs
   } catch {
-    // not owner / unsupported (e.g. Windows) — mode is best-effort
+    // not owner / unsupported (e.g. Windows): mode is best-effort
   }
 }
 
@@ -33,26 +48,30 @@ export function writeFilePrivate(file: string, data: string): void {
   try {
     fs.chmodSync(file, FILE_MODE); // writeFileSync's mode only applies on create
   } catch {
-    // not owner / unsupported — best-effort
+    // not owner / unsupported: best-effort
   }
 }
 
 /**
- * Replace one private file after flushing a unique same-directory temporary.
- * Directory flush is best-effort: Windows and some filesystems do not support
- * it. Multi-file publications still need their own durable transaction intent.
+ * How a private file reaches the disk. Every atomic write in the data home goes
+ * through the active writer, so the flush policy is chosen in one place.
  */
-export function atomicWriteFilePrivate(file: string, data: string): void {
-  mkdirPrivate(path.dirname(file));
+export interface FileWriter {
+  /** Replace `file` with `data` in one step: readers see the old or the new bytes. */
+  replace(file: string, data: string): void;
+}
+
+function replaceFile(file: string, data: string, flush: boolean): void {
   const temporary = `${file}.${crypto.randomUUID()}.tmp`;
   let fd: number | undefined;
   try {
     fd = fs.openSync(temporary, "wx", FILE_MODE);
     fs.writeFileSync(fd, data);
-    fs.fsyncSync(fd);
+    if (flush) fs.fsyncSync(fd);
     fs.closeSync(fd);
     fd = undefined;
     fs.renameSync(temporary, file);
+    if (!flush) return;
     try {
       const dir = fs.openSync(path.dirname(file), "r");
       try {
@@ -67,4 +86,49 @@ export function atomicWriteFilePrivate(file: string, data: string): void {
     if (fd !== undefined) fs.closeSync(fd);
     fs.rmSync(temporary, { force: true });
   }
+}
+
+/**
+ * The product writer: flush a unique same-directory temporary, rename it over
+ * the target, then flush the directory. Directory flush is best-effort: Windows
+ * and some filesystems do not support it.
+ */
+export const durableWriter: FileWriter = {
+  replace: (file, data) => replaceFile(file, data, true),
+};
+
+/**
+ * Same atomic rename, without waiting for the disk. Only for tests: a crash of
+ * the machine (not of the process) could lose the last writes.
+ */
+export const unflushedWriter: FileWriter = {
+  replace: (file, data) => replaceFile(file, data, false),
+};
+
+let activeWriter: FileWriter = durableWriter;
+
+/** Install a writer (tests use {@link unflushedWriter} or a failing one). Returns the previous writer. */
+export function setFileWriter(writer: FileWriter): FileWriter {
+  const previous = activeWriter;
+  activeWriter = writer;
+  return previous;
+}
+
+/**
+ * Replace one private file atomically through the active writer.
+ * Multi-file publications still need their own durable transaction intent.
+ *
+ * `foreignFolder` is for a file that lives in a folder this tool does not own,
+ * such as a coding tool's settings: the folder is created owner-only when it is
+ * missing, and an existing folder keeps the permissions it has.
+ */
+export function atomicWriteFilePrivate(
+  file: string,
+  data: string,
+  options: { foreignFolder?: boolean } = {},
+): void {
+  const dir = path.dirname(file);
+  if (options.foreignFolder) fs.mkdirSync(dir, { recursive: true, mode: DIR_MODE });
+  else mkdirPrivate(dir);
+  activeWriter.replace(file, data);
 }

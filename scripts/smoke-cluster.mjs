@@ -23,7 +23,18 @@ if (args.includes("--help") || args.includes("--claude-help")) {
   console.log("--output-format --json-schema --tools --safe-mode --system-prompt --strict-mcp-config --mcp-config --settings --disable-slash-commands --no-chrome --no-session-persistence");
   process.exit(0);
 }
+// Local probes the runner makes before any model request.
+if (args[0] === "--version") {
+  console.log("2.1.999 (Claude Code)");
+  process.exit(0);
+}
+if (args[0] === "auth") process.exit(args[1] === "status" ? 0 : 1);
 const schema = JSON.parse(args[args.indexOf("--json-schema") + 1]);
+// The readiness request sent once after consent. It is not a stage call.
+if (schema.properties.ok) {
+  console.log(JSON.stringify({type: "result", subtype: "success", is_error: false, structured_output: {ok: true}}));
+  process.exit(0);
+}
 const prompt = fs.readFileSync(0, "utf8");
 const modelIndex = args.indexOf("--model");
 const model = modelIndex < 0 ? null : args[modelIndex + 1];
@@ -177,7 +188,8 @@ try {
       "--cluster-batch-size=2",
       "--yes",
     ];
-    const help = run(["distill", "--help"]);
+    // Clustering controls are advanced options, listed in the full reference.
+    const help = run(["distill", "--help", "--all"]);
     assert.match(help, /cluster-model/);
     assert.match(help, /cluster-batch-size/);
 

@@ -24,7 +24,7 @@ beforeAll(() => {
   }
 });
 
-describe("discoverKiroSessions — flat store, grouped by cwd", () => {
+describe("discoverKiroSessions: flat store, grouped by cwd", () => {
   it("groups sessions by metadata cwd into projects", () => {
     const projects = discoverKiroSessions(KIRO_HOME, { countEntries: false });
     const names = projects.map((p) => p.shortName).sort();
@@ -51,7 +51,7 @@ describe("discoverKiroSessions — flat store, grouped by cwd", () => {
 
   it("ignores .json/.history/.lock companions and the tasks-sidecar subdir", () => {
     const projects = discoverKiroSessions(KIRO_HOME, { countEntries: false });
-    // Only the 5 .jsonl sessions become SessionInfo — never the lock/sidecar,
+    // Only the 5 .jsonl sessions become SessionInfo, never the lock/sidecar,
     // and never the orphan .history (its transcript is gone).
     const total = projects.reduce((n, p) => n + p.sessions.length, 0);
     expect(total).toBe(5);
@@ -79,7 +79,7 @@ describe("discoverKiroSessions — flat store, grouped by cwd", () => {
   });
 });
 
-describe("kiroSource — SessionSource classify (K2)", () => {
+describe("kiroSource: SessionSource classify (K2)", () => {
   const source = kiroSource(KIRO_HOME);
   const projects = source.discover({ countEntries: false });
   const byFile = new Map(
@@ -110,7 +110,7 @@ describe("kiroSource — SessionSource classify (K2)", () => {
     expect(source.classify?.(s)).toBe("interactive");
   });
 
-  it("INCLUDES a hybrid session (parent-linked AND .history) — K2 step-1 precedence", () => {
+  it("INCLUDES a hybrid session (parent-linked AND .history): K2 step-1 precedence", () => {
     // A rewind/agent-spawned child a human later steered: .history overrides
     // the parent_session_id exclusion AND the automation first prompt.
     const meta = discoverKiroSessions(KIRO_HOME, { countEntries: false })
@@ -124,7 +124,7 @@ describe("kiroSource — SessionSource classify (K2)", () => {
   });
 });
 
-describe("countOrphanHistories — .history with no transcript", () => {
+describe("countOrphanHistories: .history with no transcript", () => {
   it("counts the orphan in the fixture store (transcript deleted)", () => {
     // s-deleted-orphan.history exists with no s-deleted-orphan.jsonl.
     expect(countOrphanHistories(KIRO_HOME)).toBe(1);

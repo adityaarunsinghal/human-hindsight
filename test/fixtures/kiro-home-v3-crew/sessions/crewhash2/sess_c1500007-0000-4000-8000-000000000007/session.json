@@ -1,0 +1,8 @@
+{
+  "id": "sess_c1500007-0000-4000-8000-000000000007",
+  "title": "k15 crew cron cwd",
+  "agentMode": "vibe",
+  "workspacePaths": ["/synthetic/root/kirocrew-workspace/cron_nightly0123abcd"],
+  "createdAt": "2026-11-07T10:00:00.000Z",
+  "status": "idle"
+}

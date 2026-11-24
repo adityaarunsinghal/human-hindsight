@@ -1,0 +1,6 @@
+{"role":"user","content":"good line","ts":"2026-02-01T10:00:00.000000+00:00","meta":{}}
+{not json
+[1,2,3]
+"a bare string"
+
+{"role":"user","content":"still read after the bad lines","ts":"2026-02-01T10:00:01.000000+00:00","meta":{}}

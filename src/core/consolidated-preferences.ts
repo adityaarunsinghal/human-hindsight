@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { z } from "zod";
@@ -7,8 +7,9 @@ import {
   ConsolidateSchema,
   PreferenceCitationSchema,
   PreferenceScopeSchema,
-} from "../claude/schemas.js";
-import { FILE_MODE, mkdirPrivate } from "./fsutil.js";
+} from "../distill/schemas.js";
+import type { ResolvedCall } from "../runners/types.js";
+import { atomicWriteFilePrivate } from "./fsutil.js";
 import { type AggregatedPreference, type PreferencesTarget, preferenceId } from "./preferences.js";
 
 export const CONSOLIDATED_PREFERENCES_FILE = "preferences.consolidated.json";
@@ -17,6 +18,12 @@ const SavedPreferencesSchema = z
   .object({
     version: z.union([z.literal(1), z.literal(2)]),
     generated_at: z.iso.datetime(),
+    resolved: z
+      .object({
+        runner: z.enum(["claude", "codex", "kiro", "opencode"]),
+        model: z.string().optional(),
+      })
+      .optional(),
     source_hash: z.string().regex(/^[a-f0-9]{64}$/),
     source_preferences: z.array(
       z.object({
@@ -261,12 +268,24 @@ export function materializeConsolidation(
   });
 }
 
+/**
+ * The target recorded in the saved artifact. The artifact records the rendered
+ * FORMAT, and `kirocrew` renders the `kiro` steering block byte for byte, so it
+ * is stored as `kiro`. That keeps `SavedPreferencesSchema.target` at its
+ * existing three values, so saved artifacts stay readable by older releases
+ * and no reader has to learn a fourth value that means the same thing.
+ */
+export function savedTarget(target: PreferencesTarget): "claude" | "kiro" | "agents" {
+  return target === "kirocrew" ? "kiro" : target;
+}
+
 /** Keep the last successful result intact until its replacement is fully written. */
 export function saveConsolidatedPreferences(
   home: string,
   opts: {
     source: AggregatedPreference[];
     consolidated: Consolidated;
+    resolved?: ResolvedCall;
     taskCount: number;
     target: PreferencesTarget;
     markdown: string;
@@ -278,13 +297,11 @@ export function saveConsolidatedPreferences(
   const parsed = ConsolidateSchema.parse(opts.consolidated);
   const problems = validateConsolidation(opts.source, parsed);
   if (problems.length) throw new Error(`Invalid consolidated preferences: ${problems.join("; ")}`);
-  const dir = path.join(home, "library");
-  mkdirPrivate(dir);
-  const file = path.join(dir, CONSOLIDATED_PREFERENCES_FILE);
-  const temp = `${file}.${randomUUID()}.tmp`;
+  const file = path.join(home, "library", CONSOLIDATED_PREFERENCES_FILE);
   const artifact: SavedPreferences = {
     version: 2,
     generated_at: opts.now.toISOString(),
+    resolved: opts.resolved,
     source_hash: preferencesFingerprint(opts.source),
     source_preferences: opts.source.map((p) => ({
       id: preferenceId(p),
@@ -296,21 +313,13 @@ export function saveConsolidatedPreferences(
       occurrences: p.occurrences,
     })),
     task_count: opts.taskCount,
-    target: opts.target,
+    target: savedTarget(opts.target),
     project: opts.project,
     include_unreviewed: opts.includeUnreviewed ?? false,
     preferences: parsed.preferences,
     markdown: opts.markdown,
   };
-  try {
-    fs.writeFileSync(temp, `${JSON.stringify(artifact, null, 2)}\n`, {
-      flag: "wx",
-      mode: FILE_MODE,
-    });
-    fs.renameSync(temp, file);
-  } finally {
-    fs.rmSync(temp, { force: true });
-  }
+  atomicWriteFilePrivate(file, `${JSON.stringify(artifact, null, 2)}\n`);
   return file;
 }
 

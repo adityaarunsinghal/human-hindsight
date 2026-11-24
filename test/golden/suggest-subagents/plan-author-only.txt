@@ -1,0 +1,13 @@
+  Subagent plan
+
+  Reads    Your saved roles: 1 of 2 needs a written prompt (evidence-checker).
+  Runs on  Kiro CLI
+           This run stays on this CLI.
+  Calls    1 call to write a role prompt.
+           An answer that fails its checks gets one more try. Up to 10 at a
+           time.
+  Models   Kiro CLI uses its own default model for every step.
+  Sending  The saved roles and their working agreements go to your provider
+           through Kiro CLI, the same way your normal sessions do, and the calls
+           use your tokens there. Before the first model call, one tiny request
+           checks that Kiro CLI is ready.

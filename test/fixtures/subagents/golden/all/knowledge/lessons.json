@@ -1,0 +1,134 @@
+{
+  "lessons": [
+    {
+      "id": "separate-verified-from-inferred",
+      "title": "Separate what was verified from what was inferred",
+      "instruction": "When reporting results, say which claims you checked by running something, which you inferred from reading code or documents, and which you did not exercise at all. Do not call work done until the path a user takes has been checked.",
+      "applies_when": "Reporting the outcome of any change, investigation or analysis.",
+      "exceptions": "A trivial edit whose effect is visible in the diff needs no separate report.",
+      "disposition": "generalized",
+      "source_ids": [
+        "p01",
+        "p02"
+      ]
+    },
+    {
+      "id": "match-length-to-question",
+      "title": "Match the answer's length to the question",
+      "instruction": "Answer a simple question in one sentence. Add explanation, evidence or a longer document only when the question or the task needs it.",
+      "applies_when": "Choosing how long a reply or handoff should be.",
+      "exceptions": "Do not compress a requested document or a necessary technical explanation.",
+      "disposition": "generalized",
+      "source_ids": [
+        "p03"
+      ]
+    },
+    {
+      "id": "trace-numbers-to-source",
+      "title": "Trace every reported number to its source",
+      "instruction": "Every number in a report names the artifact it came from and how it was computed. Recount totals from the source data rather than carrying figures forward from an earlier draft.",
+      "applies_when": "Writing a report, readout or summary that quotes counts, rates or totals.",
+      "exceptions": "",
+      "disposition": "generalized",
+      "source_ids": [
+        "p04",
+        "p05"
+      ]
+    },
+    {
+      "id": "show-the-baseline",
+      "title": "Show the current baseline next to a new result",
+      "instruction": "When presenting a new model, method or measurement, show the current production or incumbent result beside it on the same data, so the comparison is visible without a second lookup.",
+      "applies_when": "Presenting an evaluation or a before-and-after comparison.",
+      "exceptions": "When no baseline exists, say so instead of omitting the column.",
+      "disposition": "generalized",
+      "source_ids": [
+        "p06"
+      ]
+    },
+    {
+      "id": "dry-run-before-writes",
+      "title": "Dry-run a write before running it for real",
+      "instruction": "A script that changes stored data defaults to a dry run that prints what it would change. The real run needs an explicit flag and writes an audit log of what it changed.",
+      "applies_when": "Writing or running any script that mutates a database, bucket or shared file.",
+      "exceptions": "Throwaway local scratch data needs no dry-run mode.",
+      "disposition": "generalized",
+      "source_ids": [
+        "p07"
+      ]
+    },
+    {
+      "id": "back-up-before-migrating",
+      "title": "Back up data before changing it in place",
+      "instruction": "Before a migration or bulk edit, copy the affected data to versioned storage and write down how to restore it. Verify the copy before starting the change.",
+      "applies_when": "Migrating, reshaping or bulk-editing stored data.",
+      "exceptions": "",
+      "disposition": "generalized",
+      "source_ids": [
+        "p08"
+      ]
+    },
+    {
+      "id": "plain-register-for-shared-docs",
+      "title": "Write shared documents in a plain register",
+      "instruction": "Write documents other people will read for a first-time reader: define terms where they first appear, describe things at their real size, and leave out marketing language.",
+      "applies_when": "Writing a README, design note, readout or any document meant for others.",
+      "exceptions": "Private working notes may be informal.",
+      "disposition": "generalized",
+      "source_ids": [
+        "p09",
+        "p10"
+      ]
+    },
+    {
+      "id": "settings-panel-chevron",
+      "title": "Keep the settings dropdown chevron centered",
+      "instruction": "In the webapp settings panel, keep a single dropdown chevron vertically centered with a fixed gutter after the label, and check it at narrow widths in both themes.",
+      "applies_when": "Changing the webapp settings panel.",
+      "exceptions": "",
+      "disposition": "contextual",
+      "source_ids": [
+        "p11"
+      ]
+    },
+    {
+      "id": "staging-endpoint-moved",
+      "title": "The old staging endpoint was retired",
+      "instruction": "Requests to the previous staging endpoint fail since it was retired; tests and scripts written before the move need the new endpoint.",
+      "applies_when": "Reading or reviving old test scripts.",
+      "exceptions": "",
+      "disposition": "historical",
+      "source_ids": [
+        "p12"
+      ]
+    }
+  ],
+  "set_aside": [
+    {
+      "source_ids": [
+        "p13"
+      ],
+      "reason": "A one-off file name for a single task, not a reusable preference."
+    },
+    {
+      "source_ids": [
+        "p14"
+      ],
+      "reason": "Acknowledgement with no instruction in it."
+    }
+  ],
+  "shared": [
+    "separate-verified-from-inferred",
+    "match-length-to-question"
+  ],
+  "playbooks": [
+    {
+      "name": "settings-panel-review",
+      "purpose": "Project notes to read before touching one product's settings panel or its old test scripts.",
+      "lesson_ids": [
+        "settings-panel-chevron",
+        "staging-endpoint-moved"
+      ]
+    }
+  ]
+}

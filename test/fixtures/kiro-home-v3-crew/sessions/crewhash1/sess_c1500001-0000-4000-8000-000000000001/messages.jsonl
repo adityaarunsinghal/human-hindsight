@@ -1,0 +1,4 @@
+{"id": "1", "timestamp": "2026-11-01T10:00:00.000Z", "payload": {"type": "user", "content": "quick question about the build"}}
+{"id": "2", "timestamp": "2026-11-01T10:00:01.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "sure"}}
+{"id": "3", "timestamp": "2026-11-01T10:00:02.000Z", "payload": {"type": "user", "content": "[SYNTHETIC CONTEXT BLOCK]\nsynthetic memory line\n[END SYNTHETIC CONTEXT BLOCK]\n\n[CURRENT USER REQUEST -- respond to this]\nfix the flaky export test\n\n<EnvironmentContext>\nno files open\n</EnvironmentContext>"}}
+{"id": "4", "timestamp": "2026-11-01T10:00:03.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "fixed"}}

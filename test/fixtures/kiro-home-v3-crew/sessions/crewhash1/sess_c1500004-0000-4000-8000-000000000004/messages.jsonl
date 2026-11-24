@@ -1,0 +1,2 @@
+{"id": "1", "timestamp": "2026-11-04T10:00:00.000Z", "payload": {"type": "user", "content": "[RUNTIME] synthetic runtime note\nlist the open tickets"}}
+{"id": "2", "timestamp": "2026-11-04T10:00:01.000Z", "payload": {"type": "assistant", "operationType": "Say", "content": "listed"}}

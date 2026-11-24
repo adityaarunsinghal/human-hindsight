@@ -1,5 +1,5 @@
 /**
- * sources/claude/index.ts — the Claude Code backend as a SessionSource.
+ * sources/claude/index.ts: the Claude Code backend as a SessionSource.
  *
  * Binds a claude config dir to the moved discover/extract/timeline functions.
  * Claude classifies human-vs-machine per-entry inside `extract` (R2), so it
@@ -14,7 +14,7 @@ import { extractMessages, extractTimeline } from "./extract.js";
 export function claudeSource(claudeDir: string): SessionSource {
   return {
     name: "claude",
-    discover(opts?: { countEntries?: boolean }): ProjectInfo[] {
+    discover(opts?: { countEntries?: boolean; readProjectPaths?: boolean }): ProjectInfo[] {
       return discoverProjects(claudeDir, opts);
     },
     extract: extractMessages,
