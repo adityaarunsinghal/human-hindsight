@@ -594,7 +594,11 @@ export function createGuiHandler(opts: {
         }
       case "/api/preferences/generalized":
         try {
-          return json({ ...savedAgreements(home), live: opts.liveBatches?.snapshot() });
+          return json({
+            ...savedAgreements(home),
+            live: opts.liveBatches?.snapshot(),
+            running: opts.liveBatches?.isRunning(),
+          });
         } catch {
           return failed("Could not read the saved preferences.");
         }

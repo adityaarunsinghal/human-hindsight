@@ -1434,6 +1434,8 @@ async function distillSelectedSessions(opts: {
             lesson.source_ids.includes(preferenceId(highlight)),
         )?.instruction;
     }
+    // Nothing more arrives from here on, so the page stops saying so.
+    liveLibrary?.update({ kind: "finished" });
     // One story about the preferences, the same sentence `status` and
     // `preferences` print, with the review command alone on its own line.
     for (const line of fitLines(preferenceStoryLines(home, { ...args, home }), width)) write(line);

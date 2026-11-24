@@ -49,6 +49,7 @@ export async function serveLiveLibrary(home: string): Promise<void> {
   const gui = await startGuiServer({ home, liveBatches });
   const stopLater = () => {
     liveBatches.update({ kind: "interrupted" });
+    liveBatches.update({ kind: "finished" });
     setTimeout(() => void gui.close(), AFTER_EXIT_MS).unref();
   };
   if (!process.connected || !process.send) {
@@ -57,5 +58,5 @@ export async function serveLiveLibrary(home: string): Promise<void> {
   }
   process.on("message", (message) => liveBatches.update(message as BatchUpdate));
   process.once("disconnect", stopLater);
-  process.send(`${gui.url}/#${sessionFragment("prompts", gui.token)}`);
+  process.send(`${gui.url}/#${sessionFragment("preferences", gui.token)}`);
 }

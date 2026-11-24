@@ -1118,7 +1118,7 @@ describe("the run", () => {
         false,
       );
       if (mode === "failed") throw new Error("could not bind");
-      return { address: "http://127.0.0.1:1111/#prompts&token=test", update: vi.fn() };
+      return { address: "http://127.0.0.1:1111/#preferences&token=test", update: vi.fn() };
     });
     const { code, text } = await run(
       { home, yes: true, library: mode !== "disabled" },

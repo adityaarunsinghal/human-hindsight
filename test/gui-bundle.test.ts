@@ -9,6 +9,7 @@ import {
   sessionFragment,
   splitFragment,
 } from "../src/gui/session.js";
+import { STILL_ARRIVING } from "../src/gui/tips.js";
 import { bundleSources } from "./support/bundle-guard.js";
 
 /**
@@ -37,6 +38,11 @@ describe("the built page script", () => {
     expect(GUI_JS).not.toMatch(/ [a-z]+\(s\)[ .,:;]/);
     // The skipped-files line counts with countLabel and names the exact status command.
     expect(GUI_JS).toContain("could not be read. Run this for details: ");
+  });
+
+  it("says more is arriving while the reflection that opened the page is still running", () => {
+    expect(GUI_JS).toContain(STILL_ARRIVING.prompts);
+    expect(GUI_JS).toContain(STILL_ARRIVING.preferences);
   });
 
   it("uses one interval to refresh saved results", () => {

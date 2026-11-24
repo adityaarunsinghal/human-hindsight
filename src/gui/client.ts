@@ -79,7 +79,14 @@ import {
   subagentsHash,
   subagentsKeyFromHash,
 } from "./subagents-view.js";
-import { commandNamed, earlierPromptNotice, guidance, initTips, promptCountLines } from "./tips.js";
+import {
+  commandNamed,
+  earlierPromptNotice,
+  guidance,
+  initTips,
+  promptCountLines,
+  STILL_ARRIVING,
+} from "./tips.js";
 
 // The session key arrives in the address fragment. Take it out of the address
 // bar before anything else runs, so it is not bookmarked, shared, or kept in
@@ -692,9 +699,11 @@ function promptsOverview() {
     guidance: promptItems.length ? guidance.prompts : "",
     message: promptItems.length
       ? undefined
-      : startHere(
-          "There are no prompts yet. Run this in your terminal to read your sessions and build them, then choose Refresh:",
-        ),
+      : agreements?.running
+        ? notice(STILL_ARRIVING.prompts)
+        : startHere(
+            "There are no prompts yet. Run this in your terminal to read your sessions and build them, then choose Refresh:",
+          ),
     action,
   });
 }
@@ -944,9 +953,11 @@ function preferencesOverview() {
     label: "Preferences guide",
     description: live
       ? "Read the summaries as each batch finishes, or open a preference to see its evidence."
-      : preferences.length || agreementItems.length
-        ? "There are no current observations to feature in a reflection. You can browse saved preferences and their sources."
-        : "Your reflection will appear here when your sessions have been read.",
+      : agreements?.running && preferences.length
+        ? STILL_ARRIVING.preferences
+        : preferences.length || agreementItems.length
+          ? "There are no current observations to feature in a reflection. You can browse saved preferences and their sources."
+          : "Your reflection will appear here when your sessions have been read.",
     link: () => undefined,
     guidance: "",
     message:
