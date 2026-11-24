@@ -22,8 +22,8 @@ Quality
   sonnet for session reads, opus for grouping and writing
 
 Plan  25 session reads, about 1 grouping call, and about 8 writing calls.
-  Then summarize preferences across your saved library, up to 100 observations
-  per call. Finished batches are reused.
+  Meanwhile, summarize preferences across your saved library, up to 100
+  observations per call. Finished batches are reused.
   Up to 10 at a time. Grouping runs one call at a time.
 Sending  Selected session text and working preferences go through Claude Code to
   its provider, using your tokens.

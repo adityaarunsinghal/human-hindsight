@@ -1098,7 +1098,7 @@ describe("the run", () => {
     "failed",
     "disabled",
     "plain",
-  ] as const)("serves saved prompts before preference summaries in the %s library case", async (mode) => {
+  ] as const)("opens the library once the reads are saved, before grouping, in the %s library case", async (mode) => {
     vi.stubEnv("TERM", "xterm");
     vi.stubEnv("FORCE_COLOR", undefined);
     vi.stubEnv("NO_COLOR", mode === "no-color" ? "1" : undefined);
@@ -1112,8 +1112,10 @@ describe("the run", () => {
     });
     const startLibrary = vi.fn(async () => {
       calls.push("library");
+      // The reads are saved and nothing is written yet: the page fills in from here.
+      expect(fs.existsSync(path.join(home, "distill", "digests.json"))).toBe(true);
       expect(fs.existsSync(path.join(home, "library", "task-s00", "task-s00.oneshot.md"))).toBe(
-        true,
+        false,
       );
       if (mode === "failed") throw new Error("could not bind");
       return { address: "http://127.0.0.1:1111/#prompts&token=test", update: vi.fn() };
@@ -1130,14 +1132,54 @@ describe("the run", () => {
     expect(code).toBe(0);
     if (mode === "available" || mode === "no-color" || mode === "failed") {
       if (mode === "no-color") expect(output.raw()).not.toContain("\x1b]8;;http://127.0.0.1");
-      expect(calls.indexOf("library")).toBeGreaterThan(calls.indexOf("author"));
+      expect(calls.indexOf("library")).toBeGreaterThan(calls.lastIndexOf("digest"));
+      expect(calls.indexOf("library")).toBeLessThan(calls.indexOf("window"));
+      // The summaries start right after, beside grouping and writing.
       expect(calls.indexOf("generalize")).toBeGreaterThan(calls.indexOf("library"));
+      expect(calls.indexOf("generalize")).toBeLessThan(calls.indexOf("author"));
       expect(text).toContain(
         mode === "failed" ? "To browse your saved library" : "http://127.0.0.1:1111/",
       );
+      if (mode !== "failed") {
+        expect(text).toContain("Your reflections are open while this runs:");
+        expect(flat(text)).toContain(
+          "Your preferences are there now. Summaries and prompts arrive as they finish. The link works for 30 minutes after this run.",
+        );
+        expect(text.indexOf("Your reflections are open")).toBeLessThan(
+          text.indexOf("Grouping sessions"),
+        );
+      }
     } else {
       expect(startLibrary).not.toHaveBeenCalled();
     }
+  });
+
+  it("summaries still running when the prompts are written show their progress from then on", async () => {
+    const home = tmpHome(sessions(2));
+    let written!: () => void;
+    const promptsWritten = new Promise<void>((resolve) => {
+      written = resolve;
+    });
+    const order: string[] = [];
+    const claude = fakeCli("claude", ALIASES, async (opts) => {
+      const stage = stageOf(opts);
+      order.push(stage);
+      // The summary call outlasts grouping and writing.
+      if (stage === "generalize") await promptsWritten;
+      const value = answer(opts, { preferences: true });
+      if (stage === "author") setImmediate(written);
+      return value;
+    });
+    const { code, text } = await run({ home, yes: true }, { runners: [claude] });
+    expect(code).toBe(0);
+    // It started beside the other steps, and nothing of it was printed until they were done.
+    expect(order.indexOf("generalize")).toBeLessThan(order.indexOf("author"));
+    const summarizing = text.indexOf("Summarizing working preferences (");
+    expect(summarizing).toBeGreaterThan(text.indexOf("Library: 1 prompt written."));
+    expect(text.indexOf("Working preferences could not be summarized")).toBeGreaterThan(
+      summarizing,
+    );
+    expect(fs.readdirSync(path.join(home, "library"))).toContain("task-s00");
   });
 
   it("runs every stage without a terminal: plain progress lines and a summary (golden)", async () => {
@@ -1571,8 +1613,8 @@ describe("the run", () => {
       .split("\n")
       .filter((line) => line.includes("Working preferences could not be summarized"));
     expect(notices).toHaveLength(1);
-    // The progress display's own failure line, then the one notice; nothing else repeats the error.
-    expect(flat(text).split("synthetic summary failure").length - 1).toBe(2);
+    // The summaries ran beside the other steps, so the one notice names the failure once.
+    expect(flat(text).split("synthetic summary failure").length - 1).toBe(1);
   });
 
   it("Ctrl-C during the session reads: ends promptly with 130, aborts the call in flight, says what is saved, and a rerun reuses finished reads", async () => {

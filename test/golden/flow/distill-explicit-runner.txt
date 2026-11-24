@@ -8,7 +8,7 @@ Checking available coding CLIs…
   Runs on  Codex (codex 9.9.9)
            This run stays on this CLI.
   Calls    3 session reads, about 1 grouping call, and about 1 writing call.
-           Then summarize preferences across your saved library, up to 100
+           Meanwhile, summarize preferences across your saved library, up to 100
            observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
   Models   1 Fast: gpt-5.6-terra for every step

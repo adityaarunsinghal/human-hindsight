@@ -7,7 +7,7 @@ Checking available coding CLIs…
   Reads    3 sessions, about 1 prompt, plus your working preferences.
   Runs on  Claude Code (claude 9.9.9)
   Calls    3 session reads, about 1 grouping call, and about 1 writing call.
-           Then summarize preferences across your saved library, up to 100
+           Meanwhile, summarize preferences across your saved library, up to 100
            observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
   Models   1 Fast: sonnet for every step

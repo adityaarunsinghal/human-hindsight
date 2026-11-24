@@ -487,7 +487,7 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
   if (plan.generalize)
     row(
       "",
-      `Then summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
+      `Meanwhile, summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
     );
   row(
     "",

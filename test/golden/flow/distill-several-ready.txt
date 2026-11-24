@@ -9,7 +9,7 @@ Checking available coding CLIs…
            Also ready if needed: Codex, OpenCode. If Claude Code stops working
            during the run, the work moves on and the screen says so.
   Calls    4 session reads, about 1 grouping call, and about 1 writing call.
-           Then summarize preferences across your saved library, up to 100
+           Meanwhile, summarize preferences across your saved library, up to 100
            observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
   Models   1 Fast: sonnet for every step

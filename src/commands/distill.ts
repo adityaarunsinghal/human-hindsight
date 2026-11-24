@@ -50,7 +50,7 @@ import {
 } from "../distill/pipeline.js";
 import { guardRun, mutableOutput } from "../distill/run-guard.js";
 import type { Digest } from "../distill/schemas.js";
-import { startStageProgress } from "../distill/stage-events.js";
+import { heldProgress, startStageProgress } from "../distill/stage-events.js";
 import type { LiveLibrary } from "../gui/live-library.js";
 import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerIo } from "../runners/shared.js";
@@ -221,6 +221,38 @@ export function computePlan(
     clusterMergeEstimate,
     authorEstimate,
   };
+}
+
+/**
+ * The lines that hand over the library link. They are printed as soon as the
+ * library holds something, so they say what is there and what is still to come.
+ */
+export function libraryLinkLines(o: {
+  address: string;
+  /** The reads found preferences, so that view has something to show. */
+  preferences: boolean;
+  /** What this run still adds, in the order it arrives: "summaries", "prompts". */
+  arriving: string[];
+  width: number;
+  color: boolean;
+  /** On a remote machine: the command that forwards the port. */
+  forward?: string;
+}): string[] {
+  const s = palette(o.color);
+  const link = o.color ? `\u001b]8;;${o.address}\u001b\\${o.address}\u001b]8;;\u001b\\` : o.address;
+  const more = o.arriving.join(" and ");
+  const note = [
+    o.preferences ? "Your preferences are there now." : "Your prompts are there now.",
+    ...(more ? [`${more.charAt(0).toUpperCase()}${more.slice(1)} arrive as they finish.`] : []),
+    "The link works for 30 minutes after this run.",
+  ].join(" ");
+  const lines = [
+    s.bold(more ? "Your reflections are open while this runs:" : "Your reflections are open:"),
+    `  ${link}`,
+    ...wrapText(note, o.width, { indent: "  " }).map(s.dim),
+  ];
+  if (o.forward) lines.push("  On your laptop, forward the port first:", `    ${o.forward}`);
+  return lines;
 }
 
 /** A session left out for its size: its export name and its length. */
@@ -1143,6 +1175,146 @@ async function distillSelectedSessions(opts: {
     // completing the reachable work. Blocked-by-budget sessions count too.
     let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
 
+    const reviews = readPreferenceReviews(home);
+    const observed = readObservedPreferences(home);
+    const batch = new Set(Object.keys(digestsForCluster));
+    const highlight = reviews.invalid
+      ? undefined
+      : observed.find(
+          (pref) =>
+            pref.verified &&
+            pref.occurrences.some(
+              (occurrence) => occurrence.quote && batch.has(occurrence.exportName ?? ""),
+            ) &&
+            preferenceReview(home, pref, reviews.reviews).status !== "dismissed",
+        );
+
+    // The library opens as soon as it holds something: the preferences found
+    // by the reads now, the summaries and the prompts as each one finishes.
+    let liveLibrary: LiveLibrary | undefined;
+    const summarizing = args.generalize !== false;
+    const openLibrary = async (arriving: string[]) => {
+      if (liveLibrary || args.library === false) return;
+      if (!isInteractive({ input: deps.input, output: out })) return;
+      const preferences = observed.length > 0;
+      if (!preferences && !readLibrary(home).length) return;
+      try {
+        const { startLiveLibrary } = await import("../gui/live-library.js");
+        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(home);
+        const { isRemoteSession, forwardCommand } = await import("./gui.js");
+        const { address } = liveLibrary;
+        write();
+        for (const line of libraryLinkLines({
+          address,
+          preferences,
+          arriving,
+          width,
+          color: canColor({ output: out }),
+          forward: isRemoteSession(process.env)
+            ? forwardCommand(Number(new URL(address).port), process.env)
+            : undefined,
+        }))
+          write(line);
+      } catch {
+        command("To browse your saved library, run:", nextCommandText("gui", { ...args, home }));
+      }
+    };
+    await openLibrary([...(summarizing ? ["summaries"] : []), "prompts"]);
+
+    // The preference summaries need only the reads, so they start here and
+    // run beside grouping and writing. A failure never fails the library.
+    type SummaryOutcome = {
+      line: string;
+      incomplete: boolean;
+      /** The stage ran, so its result line stands apart from the lines above. */
+      ran?: boolean;
+      lessons?: GeneralizeResult["lessonList"];
+    };
+    const startSummaries = async (): Promise<{ finish(): Promise<SummaryOutcome> }> => {
+      const failed = (error: unknown): SummaryOutcome => ({
+        incomplete: true,
+        ran: true,
+        line: `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run npx human-hindsight reflect to finish them.`,
+      });
+      const model = session.modelFor("generalize");
+      let preferences: ReturnType<typeof planGeneralize>;
+      try {
+        preferences = planGeneralize({
+          home,
+          budget,
+          model,
+          identityRunner: session.identityRunner,
+          selection: "all-candidates",
+          current: reviews.invalid ? undefined : { prefs: observed, reviews: reviews.reviews },
+        });
+      } catch (error) {
+        return { finish: async () => failed(error) };
+      }
+      if (!preferences)
+        return {
+          finish: async () => ({
+            line: "No working preferences to summarize yet.",
+            incomplete: false,
+          }),
+        };
+      if (preferences.damaged)
+        say("Your saved preference summaries could not be read and will be rebuilt.");
+      const inputs = preferences.inputs.length;
+      const label = `Summarizing working preferences (${counted(inputs, "signal")}, ${counted(preferences.windows.length, "batch", "batches")})`;
+      // A stage with calls to make checks the CLI first, here in the open, so
+      // the check's lines never land inside another step's progress display.
+      if (preferences.reusable < preferences.windows.length) await ready();
+      // Only one step owns the progress display, so this one reports into a
+      // held sink until the other steps are done.
+      const held = heldProgress();
+      let settled = false;
+      liveLibrary?.update({ kind: "begin", total: preferences.windows.length });
+      const running = runGeneralizeStage({
+        onBatch: (index, lessons) => liveLibrary?.update({ kind: "batch", index, lessons }),
+        home,
+        plan: preferences,
+        runner: gatedRun,
+        model,
+        concurrency,
+        timeoutMs,
+        output: out,
+        progress: held,
+      })
+        .then(
+          (result): SummaryOutcome => {
+            const incomplete = result.status !== "done";
+            liveLibrary?.update({ kind: incomplete ? "interrupted" : "complete" });
+            return {
+              line: preferencesLine(result, inputs),
+              incomplete,
+              ran: true,
+              lessons: result.lessonList,
+            };
+          },
+          (error: unknown): SummaryOutcome => {
+            liveLibrary?.update({ kind: "interrupted" });
+            return failed(error);
+          },
+        )
+        .finally(() => {
+          settled = true;
+        });
+      return {
+        async finish() {
+          // Still going once the other steps are done: its progress shows from here.
+          const display = settled ? undefined : startStageProgress(out, label, progressOptions);
+          if (display) held.show(display);
+          try {
+            return await running;
+          } finally {
+            display?.end();
+            if (!display) for (const line of held.unseen()) write(line);
+          }
+        },
+      };
+    };
+    const summaries = summarizing ? await startSummaries() : undefined;
+
     write();
     let stage: "cluster" | "author" = "cluster";
     phase = "grouping";
@@ -1244,104 +1416,23 @@ async function distillSelectedSessions(opts: {
       hadFailure = true;
     }
 
-    const reviews = readPreferenceReviews(home);
-    const observed = readObservedPreferences(home);
-    let liveLibrary: LiveLibrary | undefined;
-    if (
-      args.library !== false &&
-      isInteractive({ input: deps.input, output: out }) &&
-      (readLibrary(home).length || observed.length)
-    ) {
-      try {
-        const { startLiveLibrary } = await import("../gui/live-library.js");
-        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(home);
-        const { address } = liveLibrary;
-        write("Browse your library now or within 30 minutes after this command exits:");
-        write(
-          canColor({ output: out })
-            ? `\u001b]8;;${address}\u001b\\${address}\u001b]8;;\u001b\\`
-            : address,
-        );
-        const { isRemoteSession, forwardCommand } = await import("./gui.js");
-        if (isRemoteSession(process.env)) {
-          write("On your laptop, forward the port first:");
-          write(forwardCommand(Number(new URL(address).port), process.env));
-        }
-      } catch {
-        command("To browse your saved library, run:", nextCommandText("gui", { ...args, home }));
-      }
-    }
-    const batch = new Set(Object.keys(digestsForCluster));
-    const highlight = reviews.invalid
-      ? undefined
-      : observed.find(
-          (pref) =>
-            pref.verified &&
-            pref.occurrences.some(
-              (occurrence) => occurrence.quote && batch.has(occurrence.exportName ?? ""),
-            ) &&
-            preferenceReview(home, pref, reviews.reviews).status !== "dismissed",
-        );
+    // Nothing to open after the reads (no preference in them): the prompts are there now.
+    await openLibrary(summarizing ? ["summaries"] : []);
+
     let instruction: string | undefined;
     let preferenceSummariesIncomplete = false;
-    // Working preferences come last. A failure here never fails the library.
-    if (args.generalize !== false) {
+    if (summaries) {
       phase = "preferences";
-      let progress: ReturnType<typeof startStageProgress> | undefined;
-      try {
-        const model = session.modelFor("generalize");
-        const preferences = planGeneralize({
-          home,
-          budget,
-          model,
-          identityRunner: session.identityRunner,
-          selection: "all-candidates",
-          current: reviews.invalid ? undefined : { prefs: observed, reviews: reviews.reviews },
-        });
-        if (preferences?.damaged)
-          say("Your saved preference summaries could not be read and will be rebuilt.");
-        if (preferences) {
-          progress = startStageProgress(
-            out,
-            `Summarizing working preferences (${counted(preferences.inputs.length, "signal")}, ${counted(preferences.windows.length, "batch", "batches")})`,
-            progressOptions,
-          );
-          liveLibrary?.update({ kind: "begin", total: preferences.windows.length });
-          const result = await runGeneralizeStage({
-            onBatch: (index, lessons) => liveLibrary?.update({ kind: "batch", index, lessons }),
-            home,
-            plan: preferences,
-            runner: gatedRun,
-            model,
-            concurrency,
-            timeoutMs,
-            output: out,
-            progress,
-          });
-          progress.end();
-          write();
-          preferenceSummariesIncomplete = result.status !== "done";
-          liveLibrary?.update({ kind: preferenceSummariesIncomplete ? "interrupted" : "complete" });
-          say(preferencesLine(result, preferences.inputs.length));
-          if (highlight)
-            instruction = result.lessonList.find(
-              (lesson) =>
-                lesson.disposition === "generalized" &&
-                lesson.source_ids.includes(preferenceId(highlight)),
-            )?.instruction;
-        } else {
-          write("No working preferences to summarize yet.");
-        }
-      } catch (error) {
-        preferenceSummariesIncomplete = true;
-        liveLibrary?.update({ kind: "interrupted" });
-        progress?.end();
-        say(
-          `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run npx human-hindsight reflect to finish them.`,
-        );
-      } finally {
-        progress?.end();
-      }
+      const outcome = await summaries.finish();
+      preferenceSummariesIncomplete = outcome.incomplete;
+      if (outcome.ran) write();
+      say(outcome.line);
+      if (highlight && outcome.lessons)
+        instruction = outcome.lessons.find(
+          (lesson) =>
+            lesson.disposition === "generalized" &&
+            lesson.source_ids.includes(preferenceId(highlight)),
+        )?.instruction;
     }
     // One story about the preferences, the same sentence `status` and
     // `preferences` print, with the review command alone on its own line.
