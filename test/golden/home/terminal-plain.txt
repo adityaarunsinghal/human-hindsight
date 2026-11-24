@@ -1,15 +1,17 @@
-│ Human Hindsight 2.1.2
+│ Human Hindsight 2.1.3
 │ Understand how you work. Codify your taste.
 │
 │ Your history
 │ Claude Code  12 sessions · 3 projects
 │ 12 sessions across 3 projects
+│ No session text leaves this machine until you approve a plan.
 ────────────────────────────────────────────────────────────────────────
 
 What would you like to do?
 › 1  Reflect on my history (recommended)  export, then review the plan
-• 2  Export my messages  local Markdown
-• 3  Show projects  history inventory
-• 4  Check setup  tools and sign-in
+• 2  Suggest subagents  reads my sessions, then proposes roles
+• 3  Export my messages  local Markdown
+• 4  Show projects  history inventory
+• 5  Check setup  tools and sign-in
 • q  Quit
   Choose [1]:

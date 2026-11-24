@@ -1,10 +1,11 @@
-│ Human Hindsight 2.1.2
+│ Human Hindsight 2.1.3
 │ Understand how you work. Codify your taste.
 │
 │ Your history
 │ Claude Code  0 sessions · 0 projects
 │ No history matches this selection.
 │ To see every project, run npx human-hindsight scan
+│ No session text leaves this machine until you approve a plan.
 ────────────────────────────────────────────────────────────────────────
 
 → next: npx human-hindsight doctor --home=<ROOT>/home --claude-dir=<ROOT>/claude --codex-dir=<ROOT>/codex --kiro-dir=<ROOT>/kiro --kirocrew-dir=<ROOT>/kirocrew --opencode-dir=<ROOT>/opencode --project=nothing-matches

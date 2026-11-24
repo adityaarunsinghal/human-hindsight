@@ -135,7 +135,8 @@ def run_case(work, name, keys, expected, code, columns, o=None):
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", o.get("rows", 24), columns, 0, 0))
     before = stty(slave)
     env = {k: v for k, v in os.environ.items() if k not in {"CI", "HUMAN_HINDSIGHT_PLAIN", "NO_COLOR", "FORCE_COLOR", "LC_ALL", "LC_CTYPE"}}
-    env.update({"TERM": "xterm-256color", "LANG": "en_US.UTF-8"})
+    # DISPLAY: a desktop terminal. On Linux a machine with no display counts as remote.
+    env.update({"TERM": "xterm-256color", "LANG": "en_US.UTF-8", "DISPLAY": ":0"})
     if o.get("start"):
         env["SMOKE_START"] = "1"
     # Keys pressed before the menu process exists wait in the terminal's queue.

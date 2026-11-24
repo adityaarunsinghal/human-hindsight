@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Writable } from "node:stream";
 import { defineCommand } from "citty";
 import { checkedValue, oneOf, wholeNumber } from "../core/value-rule.js";
+import { isAddressInUse, retireLiveLibrary } from "../gui/handoff.js";
 import { TABS, type Tab } from "../gui/landing.js";
 import { type GuiServer, startGuiServer } from "../gui/server.js";
 import { sessionFragment } from "../gui/session.js";
@@ -14,16 +15,24 @@ import { resolvePaths, sharedArgs } from "./_shared.js";
 export const TAB_RULE = oneOf(TABS);
 export const PORT_RULE = wholeNumber(0, "a whole number from 0 to 65535", 65535);
 
-/** Over SSH the port is fixed, so one forwarding command keeps working across restarts. */
+/**
+ * On a remote machine the port is fixed, so one forwarded port keeps working
+ * from run to run and across restarts.
+ */
 export const REMOTE_PORT = 4317;
 
 /**
- * Remote means an SSH session: the browser runs on another machine. A Linux
- * machine without a display is not remote by itself; WSL in particular is a
+ * Remote means the browser runs on another machine: an SSH session, or a
+ * Linux machine with no display to open a browser on (a session through a
+ * terminal multiplexer or a web console carries no SSH variables). WSL is a
  * local machine whose browser runs on the Windows side.
  */
-export function isRemoteSession(env: NodeJS.ProcessEnv): boolean {
-  return Boolean(env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY);
+export function isRemoteSession(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  if (env.SSH_CONNECTION || env.SSH_CLIENT || env.SSH_TTY) return true;
+  return platform === "linux" && !isWsl(env) && !env.DISPLAY && !env.WAYLAND_DISPLAY;
 }
 
 export function isWsl(env: NodeJS.ProcessEnv): boolean {
@@ -38,6 +47,28 @@ export function browserCommands(env: NodeJS.ProcessEnv, platform: NodeJS.Platfor
 }
 
 /** The command to run on the laptop: forwards the same port on both ends. */
+/**
+ * What to do on the laptop so an address on this machine opens there: the
+ * forwarding command, and, for the fixed port, the one line of SSH
+ * configuration that makes every later address open with no command at all.
+ */
+export function forwardingLines(
+  port: number,
+  env: NodeJS.ProcessEnv,
+  host?: Parameters<typeof forwardCommand>[2],
+): string[] {
+  const lines = [
+    forwardCommand(port, env, host),
+    "(Use your usual SSH destination instead if you connect through an alias or a jump host.)",
+  ];
+  if (port === REMOTE_PORT)
+    lines.push(
+      "To skip this from now on, add this line under the host in ~/.ssh/config on your laptop:",
+      `  LocalForward ${port} 127.0.0.1:${port}`,
+    );
+  return lines;
+}
+
 export function forwardCommand(
   port: number,
   env: NodeJS.ProcessEnv,
@@ -148,10 +179,6 @@ function removeStaleRedirects(home: string): void {
   }
 }
 
-function isAddressInUse(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | undefined)?.code === "EADDRINUSE";
-}
-
 export interface GuiSession extends GuiServer {
   /** The address to open: the base URL with the tab and the session key in its fragment. */
   address: string;
@@ -169,6 +196,8 @@ export async function runGui(
     env?: NodeJS.ProcessEnv;
     platform?: NodeJS.Platform;
     start?: typeof startGuiServer;
+    /** Stops a view an earlier reflection left on the fixed port (testing). */
+    retire?: typeof retireLiveLibrary;
     host?: Parameters<typeof forwardCommand>[2];
   } = {},
 ): Promise<GuiSession> {
@@ -178,7 +207,7 @@ export async function runGui(
   const platform = deps.platform ?? process.platform;
   const start = deps.start ?? startGuiServer;
   const output = deps.output ?? process.stdout;
-  const remote = isRemoteSession(env);
+  const remote = isRemoteSession(env, platform);
   const home = resolvePaths(args).home;
   removeStaleRedirects(home);
   // The redirect file, while the browser is on its way to the page.
@@ -188,6 +217,8 @@ export async function runGui(
   if (args.port !== undefined) {
     gui = await start({ home, port: Number(args.port), onAuthenticated });
   } else if (remote) {
+    // A view an earlier reflection left on the port stops first.
+    await (deps.retire ?? retireLiveLibrary)(home, REMOTE_PORT);
     try {
       gui = await start({ home, port: REMOTE_PORT, onAuthenticated });
     } catch (error) {
@@ -216,10 +247,11 @@ export async function runGui(
   output.write(`human-hindsight library: ${address}\n`);
   if (remote) {
     output.write(
-      `This is an SSH session, so open the library on your laptop.\n` +
+      `This is a remote machine, so open the library on your laptop.\n` +
         `1. In a second terminal on your laptop, forward the port:\n` +
-        `   ${forwardCommand(Number(new URL(gui.url).port), env, deps.host)}\n` +
-        `   (Use your usual SSH destination instead if you connect through an alias or a jump host.)\n` +
+        `${forwardingLines(Number(new URL(gui.url).port), env, deps.host)
+          .map((line) => `   ${line}\n`)
+          .join("")}` +
         `2. Open this address on your laptop:\n   ${address}\n`,
     );
   } else if (args.open !== false) {

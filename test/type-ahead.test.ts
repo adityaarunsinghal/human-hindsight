@@ -157,8 +157,9 @@ describe("a menu or question never takes keys typed before it opened", () => {
   });
 });
 
-const START: StartQuestion<"balanced" | "best"> = {
+const START: StartQuestion<"fast" | "balanced" | "best"> = {
   options: [
+    { key: "fast", label: "Fast", detail: "fast-model for every step" },
     { key: "balanced", label: "Balanced", detail: "fast-model reads, strong-model writes" },
     { key: "best", label: "Best", detail: "strong-model reads, top-model writes" },
   ],
@@ -249,8 +250,9 @@ describe("the Start question starts only on s", () => {
   });
 
   it.each([
-    ["1", "balanced"],
-    ["2", "best"],
+    ["1", "fast"],
+    ["2", "balanced"],
+    ["3", "best"],
   ])("held %s only selects, never starts; s then starts that plan", async (key, plan) => {
     const input = fakeInput();
     const output = fakeOutput({ columns: 100, rows: 40 });
@@ -423,6 +425,7 @@ function plan(): DistillPlan {
       pinned: false,
       qualityChoice: true,
       plans: {
+        fast: { bulk: "fast-model", major: "fast-model", notes: [] },
         balanced: { bulk: "fast-model", major: "strong-model", notes: [] },
         best: { bulk: "strong-model", major: "top-model", notes: [] },
       },
@@ -431,6 +434,14 @@ function plan(): DistillPlan {
     concurrency: 10,
     generalize: true,
     choices: {
+      fast: {
+        digest: "fast-model",
+        cluster: "fast-model",
+        author: "fast-model",
+        generalize: "fast-model",
+        reusable: 0,
+        regenerating: 0,
+      },
       balanced: {
         digest: "fast-model",
         cluster: "strong-model",

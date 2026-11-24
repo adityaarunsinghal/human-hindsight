@@ -61,3 +61,53 @@ export function startStageProgress(
     },
   };
 }
+
+/** A progress sink that can be given its display after the stage has started. */
+export interface HeldProgress extends StageProgressSink {
+  /** Show the stage from here on: what it reported so far is passed on first. */
+  show(display: StageProgressSink): void;
+  /** Notes the stage reported while it had no display. */
+  unseen(): string[];
+}
+
+/**
+ * The sink of a stage that runs beside another one. Only one stage owns the
+ * progress display at a time, so this one holds what it reports until `show`
+ * hands it a display. A stage that ends unseen leaves its notes to be printed.
+ */
+export function heldProgress(): HeldProgress {
+  let display: StageProgressSink | undefined;
+  let started: [total: number, concurrency: number] | undefined;
+  const items: StageItem[] = [];
+  const notes: string[] = [];
+  return {
+    start(total, concurrency) {
+      started = [total, concurrency];
+      display?.start(total, concurrency);
+    },
+    running(id, label, project) {
+      display?.running?.(id, label, project);
+    },
+    item(event) {
+      if (display) display.item(event);
+      else items.push(event);
+    },
+    note(line) {
+      if (display) display.note(line);
+      else notes.push(line);
+    },
+    detail(line) {
+      display?.detail?.(line);
+    },
+    end() {
+      display?.end();
+    },
+    show(next) {
+      display = next;
+      if (started) next.start(...started);
+      for (const event of items.splice(0)) next.item(event);
+      for (const line of notes.splice(0)) next.note(line);
+    },
+    unseen: () => notes,
+  };
+}

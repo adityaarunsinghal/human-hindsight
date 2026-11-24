@@ -13,7 +13,7 @@ installEpipeHandler(process.stdout as unknown as Writable);
 installEpipeHandler(process.stderr as unknown as Writable);
 
 if (process.send && process.argv[2] === LIBRARY_WORKER && process.argv[3]) {
-  await serveLiveLibrary(process.argv[3]);
+  await serveLiveLibrary(process.argv[3], Number(process.argv[4]) || 0);
 } else if (!isEnvironmentWorker()) {
   const { main, forwardRootFlags } = await import("./main.js");
   const { createShowUsage, rejectUnknownInput } = await import("./commands/help.js");

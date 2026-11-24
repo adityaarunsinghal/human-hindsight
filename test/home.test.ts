@@ -3,7 +3,15 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type HomeAction, type HomeArgs, type HomeIo, runHome } from "../src/commands/home.js";
+import {
+  type ActionCommands,
+  type HomeAction,
+  type HomeArgs,
+  type HomeIo,
+  PRIVACY_LINE,
+  runAction,
+  runHome,
+} from "../src/commands/home.js";
 import type { HistoryCounts } from "../src/core/environment-history.js";
 import { PRIVACY_REMINDER } from "../src/core/privacy.js";
 import { PROBES } from "../src/runners/capabilities.js";
@@ -294,6 +302,32 @@ describe("first run, without a terminal", () => {
     await expect(golden(t.text, t)).toMatchFileSnapshot(`golden/home/pipe-${name}.txt`);
   });
 
+  it.each([
+    ["no history", {}],
+    ["one ready CLI", READY_HISTORY],
+    ["a saved library", { ...READY_HISTORY, saved: "library" }],
+  ] as [
+    string,
+    Case,
+  ][])("%s: says once, in the card, that no session text leaves the machine before a plan is approved", async (_name, c) => {
+    const sentence = "No session text leaves this machine until you approve a plan.";
+    expect(PRIVACY_LINE).toBe(sentence);
+    const said = (text: string) =>
+      text
+        .split("\n")
+        .filter((row) => row.startsWith("│"))
+        .map((row) => row.replace(/^│ ?/, "").trim())
+        .join(" ")
+        .split(sentence).length - 1;
+    // Printed once to a pipe, and once in a live frame at 80 and at 60 columns.
+    const piped = await run({ ...c, terminal: { tty: false } }, []);
+    expect(said(piped.text)).toBe(1);
+    for (const columns of [80, 60]) {
+      const live = await run({ ...c, terminal: { columns, rows: 24 } });
+      expect(said(live.shown), `${columns} columns`).toBe(1);
+    }
+  });
+
   it("an empty machine gets the friendly empty state, not an install command or a zero count", async () => {
     const t = await run({ terminal: { tty: false } }, []);
     expect(t.text).toContain("No session history found on this machine yet.");
@@ -436,12 +470,26 @@ describe("first run, in a terminal", () => {
     [
       "one CLI ready",
       READY_HISTORY,
-      ["Reflect on my history", "Export my messages", "Show projects", "Check setup", "Quit"],
+      [
+        "Reflect on my history",
+        "Suggest subagents",
+        "Export my messages",
+        "Show projects",
+        "Check setup",
+        "Quit",
+      ],
     ],
     [
       "exported only",
       { ...READY_HISTORY, saved: "exported" },
-      ["Reflect on my history", "Export my messages", "Show projects", "Check setup", "Quit"],
+      [
+        "Reflect on my history",
+        "Suggest subagents",
+        "Export my messages",
+        "Show projects",
+        "Check setup",
+        "Quit",
+      ],
     ],
     [
       "exported, no CLI",
@@ -544,11 +592,85 @@ describe("first run, in a terminal", () => {
 
   it.each([
     ["Enter takes the recommended item", [KEYS.enter], "build"],
-    ["a digit takes that item", ["3"], "scan"],
-    ["arrows move, Enter takes", [KEYS.down, KEYS.enter], "export"],
+    ["a digit takes that item", ["4"], "scan"],
+    ["arrows move, Enter takes", [KEYS.down, KEYS.enter], "suggest"],
+    // Offered from the first run: it makes the reads it needs.
+    ["Suggest subagents is the second item on a first run", ["2"], "suggest"],
   ] as [string, string[], HomeAction][])("%s", async (_name, keys, action) => {
     const t = await run(READY_HISTORY, keys);
     expect(t.dispatched).toEqual([action]);
+  });
+});
+
+describe("what each first-screen action runs", () => {
+  /** A data home in the given state, and the commands an action started on it. */
+  function world(state: { exported?: boolean; preferences?: boolean; sessions?: number } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hh-home-action-"));
+    roots.push(dir);
+    if (state.exported) {
+      fs.mkdirSync(path.join(dir, "exports"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "exports", "manifest.json"), "[]");
+    }
+    const started: string[] = [];
+    const commands: Partial<ActionCommands> = {
+      scan: (() => {
+        started.push("scan");
+      }) as never,
+      exportSessions: (() => {
+        started.push("export");
+        return { exportedSessions: state.sessions ?? 3 };
+      }) as never,
+      run: async (command, args) => {
+        const flags = args as { prompts?: boolean; subagents?: boolean; tab?: string };
+        started.push(
+          `${command}${flags.prompts === false ? " --no-prompts" : ""}${flags.subagents ? " --subagents" : ""}${flags.tab ? ` --tab=${flags.tab}` : ""}`,
+        );
+        return 0;
+      },
+      subagents: async () => {
+        started.push("suggest-subagents");
+        return 0;
+      },
+    };
+    const home = state.preferences ? sampleHome().build().dir : dir;
+    if (state.preferences) roots.push(home);
+    const act = (action: HomeAction) =>
+      runAction(action, { home }, { output: fakeOutput(), runnerAvailable: true, home }, commands);
+    return { act, started };
+  }
+
+  it.each([
+    // Checking the setup, browsing, and reading never export anything.
+    ["doctor", {}, ["doctor"]],
+    ["gui", {}, ["gui --tab=preferences"]],
+    ["preferences", {}, ["preferences"]],
+    ["scan", {}, ["scan"]],
+    ["reflect", {}, ["reflect"]],
+    // The paths that need an export make one, then go on.
+    ["export", {}, ["export"]],
+    ["build", {}, ["export", "reflect"]],
+    ["refresh", { exported: true }, ["export", "reflect"]],
+    // Subagents with nothing read yet: export if needed, then one run without prompts.
+    ["suggest", {}, ["export", "reflect --no-prompts --subagents"]],
+    ["suggest", { exported: true }, ["reflect --no-prompts --subagents"]],
+    // With preferences saved, the subagent command plans from them.
+    ["suggest", { preferences: true }, ["suggest-subagents"]],
+  ] as [
+    HomeAction,
+    Parameters<typeof world>[0],
+    string[],
+  ][])("%s on %o starts %j", async (action, state, expected) => {
+    const { act, started } = world(state);
+    expect(await act(action)).toBe(0);
+    expect(started).toEqual(expected);
+  });
+
+  it("an export that finds no session ends there, with where to look", async () => {
+    for (const action of ["build", "suggest"] as const) {
+      const { act, started } = world({ sessions: 0 });
+      expect(await act(action)).toBe(0);
+      expect(started).toEqual(["export"]);
+    }
   });
 });
 
@@ -762,7 +884,7 @@ describe("terminal modes", () => {
     await settle();
     await settle();
     expect(t.output.text()).toContain("Choose [1]:");
-    t.input.press("3\n");
+    t.input.press("4\n");
     expect(await done).toBe(0);
     expect(t.dispatched).toEqual(["scan"]);
     expect(t.input.rawModeCalls).toEqual([]);

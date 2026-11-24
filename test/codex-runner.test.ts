@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
-import { runCodex } from "../src/runners/codex.js";
+import { makeCodexRunner, runCodex } from "../src/runners/codex.js";
 import type { RunnerIo, SpawnOptions, SpawnResult } from "../src/runners/shared.js";
 
 const schema = z.object({ answer: z.string() });
@@ -12,7 +12,11 @@ const argsFile = (args: string[], flag: string) => {
   if (!file) throw new Error(`missing ${flag}`);
   return file;
 };
-const ioFor = (spawn: RunnerIo["spawn"]): RunnerIo => ({ which: () => "/usr/bin/codex", spawn });
+const ioFor = (spawn: RunnerIo["spawn"]): RunnerIo => ({
+  which: () => "/usr/bin/codex",
+  spawn: (bin, args, opts) =>
+    args[0] === "mcp" ? Promise.resolve({ ...success, stdout: "[]" }) : spawn(bin, args, opts),
+});
 
 describe("Codex runner", () => {
   it("passes schema/model, uses stdin and private scratch space, and cleans up", async () => {
@@ -45,6 +49,24 @@ describe("Codex runner", () => {
     expect(calls).toBe(1);
     expect(path.basename(scratch)).toMatch(/^human-hindsight-codex-/);
     expect(fs.existsSync(scratch)).toBe(false);
+  });
+
+  it("sets the reasoning effort of a call only when one is given", async () => {
+    const effortOf = async (effort?: "low" | "high" | "xhigh") => {
+      let seen: string | undefined;
+      const io = ioFor(async (_bin, args) => {
+        seen = args.find((arg) => arg.startsWith("model_reasoning_effort="));
+        expect(seen === undefined || args[args.indexOf(seen) - 1] === "-c").toBe(true);
+        fs.writeFileSync(argsFile(args, "--output-last-message"), '{"answer":"ready"}');
+        return success;
+      });
+      await runCodex({ prompt: "p", schema, model: "m", effort }, io);
+      return seen;
+    };
+    expect(await effortOf("low")).toBe('model_reasoning_effort="low"');
+    expect(await effortOf("xhigh")).toBe('model_reasoning_effort="xhigh"');
+    // Without one the call inherits the person's own Codex setting, as before.
+    expect(await effortOf()).toBeUndefined();
   });
 
   it("accepts completed JSONL agent messages when a wrapper omits the output file", async () => {
@@ -118,6 +140,85 @@ describe("Codex runner", () => {
     expect(calls).toHaveLength(1);
     expect(calls[0]?.timeoutMs).toBe(100);
     expect(fs.existsSync(calls[0]?.cwd ?? "")).toBe(false);
+  });
+
+  it("shares MCP discovery across concurrent reads and corrective retries", async () => {
+    let discoveries = 0;
+    let discoveryCwd = "";
+    const calls: string[][] = [];
+    const attempts = new Set<string>();
+    const runner = makeCodexRunner({
+      which: () => "/fixture/codex",
+      async spawn(_bin, args, opts) {
+        if (args[0] === "mcp") {
+          discoveries++;
+          discoveryCwd = opts.cwd ?? "";
+          expect(opts.input).toBe("");
+          return {
+            ...success,
+            stdout: JSON.stringify([
+              { name: "with-hyphen_1", enabled: true, env: { PRIVATE: "secret-marker" } },
+              { name: "off", enabled: false },
+              { name: "bad.key", enabled: true },
+              { name: "with-hyphen_1", enabled: true },
+              null,
+            ]),
+          };
+        }
+        calls.push(args);
+        const file = argsFile(args, "--output-last-message");
+        fs.writeFileSync(file, attempts.has(file) ? '{"answer":"ready"}' : '{"wrong":12}');
+        attempts.add(file);
+        return success;
+      },
+    });
+    await Promise.all([
+      runner.run({ prompt: "first", schema }),
+      runner.run({ prompt: "second", schema }),
+    ]);
+    expect(discoveries).toBe(1);
+    expect(attempts.has(path.join(discoveryCwd, "answer.json"))).toBe(true);
+    expect(calls).toHaveLength(4);
+    for (const args of calls) {
+      expect(args.filter((arg) => arg.startsWith("mcp_servers."))).toEqual([
+        "mcp_servers.with-hyphen_1.enabled=false",
+      ]);
+      expect(args.join(" ")).not.toContain("secret-marker");
+    }
+  });
+
+  it.each([
+    "throws",
+    "unsupported",
+    "malformed",
+    "timeout",
+  ])("falls back when MCP discovery is %s", async (failure) => {
+    let discoveries = 0;
+    const runner = makeCodexRunner({
+      which: () => "/fixture/codex",
+      async spawn(_bin, args) {
+        if (args[0] === "mcp") {
+          discoveries++;
+          if (failure === "throws") throw new Error("unsupported wrapper");
+          return {
+            ...success,
+            code: failure === "unsupported" ? 1 : 0,
+            timedOut: failure === "timeout",
+            stdout: failure === "malformed" ? "bad JSON" : '[{"name":"ignore","enabled":true}]',
+          };
+        }
+        expect(args.some((arg) => arg.startsWith("mcp_servers."))).toBe(false);
+        fs.writeFileSync(argsFile(args, "--output-last-message"), '{"answer":"ready"}');
+        return success;
+      },
+    });
+    await expect(runner.run({ prompt: "p", schema, disableTools: false })).resolves.toEqual({
+      answer: "ready",
+    });
+    expect(discoveries).toBe(0);
+    await runner.run({ prompt: "p", schema });
+    await runner.run({ prompt: "p", schema });
+    expect(discoveries).toBe(1);
   });
 
   it("reports a missing binary without trying to spawn", async () => {

@@ -37,8 +37,13 @@ import { gunzipSync } from "node:zlib";
 //   2.1.0      ~793 kB    800_000  Runner selection, reflection reader and saved-read summaries.
 //                                  Compressed package budget remains 280_000 bytes.
 //   2.1.1      ~801 kB    805_000  Live local library, incremental preferences and terminal pills.
-export const BUNDLE_BUDGET = 805_000;
-export const TARBALL_BUDGET = 280_000;
+//   2.1.3      ~813 kB    820_000  Fast plan and per-plan reasoning effort, preference summaries
+//                                  beside grouping and writing, the direct path to subagents,
+//                                  one port for the view on a remote machine, ordered runners.
+//                                  The tarball reached 279,225 bytes, so its compressed
+//                                  budget goes from 280_000 to 290_000.
+export const BUNDLE_BUDGET = 820_000;
+export const TARBALL_BUDGET = 290_000;
 
 // The oldest Node the launcher is checked against.
 const OLDEST_NODE_MAJOR = 18;

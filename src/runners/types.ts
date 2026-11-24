@@ -44,6 +44,9 @@ export interface ResolvedCall {
   model?: string;
 }
 
+/** How hard a model is asked to reason on one call. A model plan sets it. */
+export type Effort = "low" | "high" | "xhigh";
+
 /** Options for a single stage invocation (backend-agnostic). */
 export interface RunOptions<T> {
   /** The stage prompt; delivered on stdin. */
@@ -52,6 +55,11 @@ export interface RunOptions<T> {
   schema: ZodType<T>;
   /** `--model` pass-through. */
   model?: string;
+  /**
+   * Reasoning effort for this call. A runner passes it only where its CLI is
+   * known to take it; otherwise, and when absent, the CLI's own setting applies.
+   */
+  effort?: Effort;
   /** Per-invocation timeout in ms (default {@link DEFAULT_TIMEOUT_MS}). */
   timeoutMs?: number;
   /** Disable tool use (default true: distill stages need no tools). */
@@ -80,6 +88,8 @@ export interface Capabilities {
   noSessionPersistence?: boolean;
   /** All required Claude isolation flags were advertised by the installed CLI. */
   isolation?: "safe-mode";
+  /** Whether `--effort` is accepted. */
+  effort?: boolean;
 }
 
 /**
@@ -103,6 +113,11 @@ export interface AgentRunner {
   readonly maxConcurrency?: number;
   /** Local capability checks only; never makes a model call. */
   preflight?(): Promise<void>;
+  /**
+   * Whether this CLI takes a reasoning effort per call, known once `preflight`
+   * has run. Absent or false: its calls run at the CLI's own setting.
+   */
+  acceptsEffort?(): boolean;
   version?(): Promise<string | undefined>;
   signInHint?(): Promise<SignInHint>;
   listModels?(): Promise<ModelCatalog>;

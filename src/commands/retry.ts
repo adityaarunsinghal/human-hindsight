@@ -53,9 +53,12 @@ export function validateRetryArguments(args: DistillArgs): void {
   ) {
     throw new Error("--retry-stage must be all, digest, cluster, or author");
   }
-  if (args.runner !== undefined && parseRunnerMode(args.runner) === "auto") {
+  if (
+    args.runner !== undefined &&
+    (args.runner.includes(",") || parseRunnerMode(args.runner) === "auto")
+  ) {
     throw new Error(
-      "Strict retry requires an explicit runner name; omit --runner to inherit recorded settings",
+      "Strict retry takes one runner name; omit --runner to inherit recorded settings",
     );
   }
 }

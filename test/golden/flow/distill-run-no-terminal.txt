@@ -7,17 +7,18 @@ Checking available coding CLIs…
   Reads    3 sessions, about 1 prompt, plus your working preferences.
   Runs on  Claude Code (claude 9.9.9)
   Calls    3 session reads, about 1 grouping call, and about 1 writing call.
-           Then summarize preferences across your saved library, up to 100
+           Meanwhile, summarize preferences across your saved library, up to 100
            observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
-  Models   1 Balanced (selected): sonnet for session reads, opus for grouping
+  Models   1 Fast: sonnet for every step
+           2 Balanced (selected): sonnet for session reads, opus for grouping
            and writing
-           2 Best: opus for session reads, fable for grouping and writing
+           3 Best: opus for session reads, fable for grouping and writing
   Sending  The selected session text and your working preferences go to your
            provider through Claude Code, the same way your normal sessions do,
-           and the calls use your tokens there. Before the first model call, two
-           tiny requests, one for each model, check that Claude Code is ready;
-           when everything is reused, nothing is sent.
+           and the calls use your tokens there. Before the first model call, one
+           tiny request for each model checks that Claude Code is ready; when
+           everything is reused, nothing is sent.
 Preparing reflection · Claude Code · Balanced
 3 sessions across 1 project
 Project  alpha ×3

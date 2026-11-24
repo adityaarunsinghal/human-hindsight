@@ -63,11 +63,13 @@ export interface StartOption<Q extends string> {
   key: Q;
   label: string;
   detail?: string;
+  /** The color of this option's pill, as red;green;blue. */
+  ink?: string;
 }
 
 export interface StartQuestion<Q extends string> {
   title?: string;
-  /** Plans to choose between with `1` and `2`. None: `s` starts the one plan. */
+  /** Plans to choose between by number. None: `s` starts the one plan. */
   options?: readonly StartOption<Q>[];
   /** The option selected when the question opens. */
   selected?: Q;
@@ -112,8 +114,7 @@ export function startLines<Q extends string>(
   const rows = options.map((option, i) => {
     const label = named[i] ?? option.label;
     const active = option === selected;
-    const ink = option.key === "best" ? "246;161;199" : "141;227;228";
-    return choicePill(active, String(i + 1), label, ink, o.color === true);
+    return choicePill(active, String(i + 1), label, option.ink ?? "141;227;228", o.color === true);
   });
   const besides = options.map((option, i) =>
     option.detail

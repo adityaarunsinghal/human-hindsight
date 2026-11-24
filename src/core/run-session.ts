@@ -12,14 +12,21 @@ import {
   orderCandidates,
   type PoolEvent,
 } from "../runners/pool.js";
-import { makeRunner, parseRunnerMode, RUNNER_INFO } from "../runners/registry.js";
+import { makeRunner, parseRunnerList, RUNNER_INFO } from "../runners/registry.js";
 import { AgentRunnerError, type RunnerIo } from "../runners/shared.js";
 import type { AgentRunner, ModelCatalog, RunnerName } from "../runners/types.js";
 import { writeAbove } from "../ui/live.js";
 import { canColor } from "../ui/mode.js";
 import { palette } from "../ui/style.js";
 import { installedRunnerNames, readExportSessionShare } from "./environment.js";
-import { isPlanLabel, type ModelRole, planLabel, planModels, type Quality } from "./model-plan.js";
+import {
+  isPlanLabel,
+  type ModelRole,
+  planLabel,
+  planModels,
+  QUALITIES,
+  type Quality,
+} from "./model-plan.js";
 
 export type StageKey =
   | "digest"
@@ -35,8 +42,13 @@ export interface SessionDescription {
   alsoReady: string[];
   pinned: boolean;
   plans: Record<Quality, { bulk: string; major: string; notes: string[] }>;
-  /** False when Balanced and Best name the same models, so a choice would mean nothing. */
+  /** False when every plan would make the same calls, so a choice would mean nothing. */
   qualityChoice?: boolean;
+  /**
+   * The CLI takes a reasoning effort for each call, so every plan sets its
+   * own. False: its calls run at the CLI's own setting.
+   */
+  setsEffort?: boolean;
   /**
    * The most calls the selected CLI takes at once, when it has a limit of its
    * own. A stage runs at most this many at a time on it ("up to N at a time").
@@ -52,7 +64,13 @@ export interface RunSession {
   readonly pinned: boolean;
   readonly identityRunner: RunnerName | null;
   readonly ledgerRunner: RunnerName;
-  /** Eligible CLI choices from this discovery. Selecting one builds a pinned session locally. */
+  /** The CLIs this run may use, in the order it tries them: `--runner` reproduces it. */
+  readonly order: readonly RunnerName[];
+  /**
+   * The CLIs a person can choose between, from this discovery. Selecting one
+   * builds, locally, a session that starts on it and keeps the others, in
+   * their order, to move to if it stops working.
+   */
   readonly runnerChoices: readonly { name: RunnerName; select(): RunSession }[];
   quality: Quality;
   modelFor(stage: StageKey): string | undefined;
@@ -195,10 +213,9 @@ function prepared(runner: AgentRunner, catalog: ModelCatalog, version?: string):
     runner,
     catalog,
     version,
-    plans: {
-      balanced: planModels(runner.name, catalog, "balanced"),
-      best: planModels(runner.name, catalog, "best"),
-    },
+    plans: Object.fromEntries(
+      QUALITIES.map((quality) => [quality, planModels(runner.name, catalog, quality)]),
+    ) as Candidate["plans"],
   };
 }
 
@@ -207,6 +224,7 @@ async function prepareCandidates(
   selected: RunnerName | undefined,
   pinned: boolean,
   pinHint: string,
+  listed?: RunnerName[],
 ): Promise<Prepared[]> {
   if (o.injectedRunner) {
     const name = o.injectedRunnerName ?? selected ?? "claude";
@@ -224,11 +242,13 @@ async function prepareCandidates(
       `${makeRunner(selected, options).installHint} ${pinHint}`,
     );
   }
-  const order = orderCandidates(
-    installed,
-    o.sessionShare ?? readExportSessionShare(o.home),
-    selected,
-  );
+  // A list is the person's own order: only the CLIs it names, as it names them.
+  const order = listed
+    ? listed.filter((name) => installed.includes(name))
+    : orderCandidates(installed, o.sessionShare ?? readExportSessionShare(o.home), selected);
+  for (const name of listed ?? [])
+    if (!installed.includes(name))
+      writeAbove(o.output, `${RUNNER_INFO[name].displayName} is not installed and is left out.`);
   if (!order.length) {
     throw new AgentRunnerError(
       "missing-binary",
@@ -271,8 +291,10 @@ async function prepareCandidates(
 /** Local discovery and capability checks. Model calls start only after command consent. */
 export async function openRunSession(o: RunSessionOptions): Promise<RunSession> {
   const env = o.env ?? process.env;
-  const mode = parseRunnerMode(o.runner);
-  const selected = mode === "auto" ? undefined : mode;
+  // One name keeps the run on that CLI. Several are tried in the order given.
+  const named = parseRunnerList(o.runner);
+  const selected = named !== "auto" && named.length === 1 ? named[0] : undefined;
+  const listed = named !== "auto" && named.length > 1 ? named : undefined;
   const explicit: ExplicitModels = {};
   // What to change to allow another CLI: flags to remove, variables to unset.
   const remove: string[] = [];
@@ -316,8 +338,9 @@ export async function openRunSession(o: RunSessionOptions): Promise<RunSession> 
         ? "The supplied runner is fixed for this run."
         : "");
 
-  const candidates = await prepareCandidates(o, selected, pinned, pinHint);
-  return createSession(o, candidates, explicit, subagentModel, pinned, pinHint);
+  const candidates = await prepareCandidates(o, selected, pinned, pinHint, listed);
+  // An order the person gave is not asked for again.
+  return createSession(o, candidates, explicit, subagentModel, pinned, pinHint, !listed);
 }
 
 function createSession(
@@ -327,6 +350,7 @@ function createSession(
   subagentModel: string | undefined,
   pinned: boolean,
   pinHint: string,
+  choosable: boolean,
 ): RunSession {
   const env = o.env ?? process.env;
   const ink = palette(canColor({ output: o.output }));
@@ -438,7 +462,12 @@ function createSession(
       ? []
       : candidates.slice(start + 1).map((item) => RUNNER_INFO[item.runner.name].displayName);
     disclosed = alsoReady.length > 0;
-    const plans = { balanced: describePlan("balanced"), best: describePlan("best") };
+    const plans = Object.fromEntries(
+      QUALITIES.map((choice) => [choice, describePlan(choice)]),
+    ) as SessionDescription["plans"];
+    // A plan's effort goes with the models the plan chose, not with one the person named.
+    const setsEffort =
+      !o.injectedRunner && !explicit.model && used.runner.acceptsEffort?.() === true;
     return {
       runnerLine: used.version
         ? `${info.displayName} (${info.binary} ${used.version})`
@@ -447,7 +476,10 @@ function createSession(
       pinned,
       plans,
       qualityChoice:
-        plans.balanced.bulk !== plans.best.bulk || plans.balanced.major !== plans.best.major,
+        setsEffort ||
+        new Set(QUALITIES.map((choice) => `${plans[choice].bulk}\n${plans[choice].major}`)).size >
+          1,
+      setsEffort,
       ...(used.runner.maxConcurrency !== undefined
         ? { maxConcurrency: used.runner.maxConcurrency }
         : {}),
@@ -603,19 +635,23 @@ function createSession(
   return {
     pinned,
     identityRunner: pinned ? pool.active() : null,
+    order: candidates.map((item) => item.runner.name),
     runnerChoices:
-      pinned || candidates.length < 2
+      pinned || !choosable || candidates.length < 2
         ? []
         : candidates.map((item) => ({
             name: item.runner.name,
+            // The chosen CLI first. The others stay, in their order, so the run
+            // can move on if it stops working, and saved work is reused whichever is chosen.
             select: () =>
               createSession(
                 o,
-                [item],
+                [item, ...candidates.filter((other) => other !== item)],
                 explicit,
                 subagentModel,
-                true,
-                "Run npx human-hindsight reflect to choose another CLI.",
+                false,
+                "",
+                false,
               ),
           })),
     get ledgerRunner() {

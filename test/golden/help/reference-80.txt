@@ -1,4 +1,4 @@
-Human Hindsight 2.1.2
+Human Hindsight 2.1.3
 Understand how you work. Codify your taste.
 
 Global options
@@ -7,41 +7,46 @@ Usage
 
 Options
 
-  --quality balanced|best  Model plan for reading and writing (default:
-                           balanced)
-  --recent 25              Start with this many of your most recent sessions
-  --plain                  Use numbered prompts and static progress (env
-                           HUMAN_HINDSIGHT_PLAIN=1)
-  --follow-up              Offer next steps in a terminal (disable with
-                           --no-follow-up)
-  --runner <cli>           Coding CLI for model calls: claude, codex, kiro,
-                           opencode, or auto (default)
-  --model <name>           Model for every reflection step, in place of the
-                           --quality plan
-  --cluster-model <name>   Model for grouping sessions into tasks only (default:
-                           --model)
-  --author-model <name>    Model for writing prompts only (default: --model)
-  --project <name>         Only projects whose name contains this text, kept
-                           through every step
-  --home <dir>             Data directory (env HUMAN_HINDSIGHT_HOME; legacy
-                           CC_HINDSIGHT_HOME is also supported)
-  --claude-dir <dir>       Claude Code config directory (env CLAUDE_CONFIG_DIR;
-                           default ~/.claude)
-  --codex-dir <dir>        Codex data directory (env CODEX_HOME; default
-                           ~/.codex)
-  --kiro-dir <dir>         Kiro CLI config directory (env KIRO_CONFIG_DIR;
-                           default ~/.kiro)
-  --kirocrew-dir <dir>     Kiro Crew data directory (env
-                           HUMAN_HINDSIGHT_KIROCREW_DIR; default ~/.kiro/crew)
-  --opencode-dir <dir>     OpenCode data directory (env
-                           HUMAN_HINDSIGHT_OPENCODE_DIR; honors XDG_DATA_HOME)
-  --opencode-db <file>     OpenCode database (env OPENCODE_DB; relative to
-                           --opencode-dir)
-  --source <tool>          History to read: claude, codex, kiro, kirocrew,
-                           opencode, or auto (default)
-  -h, --help               Show examples and common options
-  --all                    Show the full reference when requesting help
-  -v, --version            Print the installed version
+  --quality fast|balanced|best  Model plan and reasoning effort: fast (low),
+                                balanced (high, the default), or best (extra
+                                high)
+  --recent 25                   Start with this many of your most recent
+                                sessions
+  --plain                       Use numbered prompts and static progress (env
+                                HUMAN_HINDSIGHT_PLAIN=1)
+  --follow-up                   Offer next steps in a terminal (disable with
+                                --no-follow-up)
+  --runner <cli>                Coding CLI for model calls: claude, codex, kiro,
+                                opencode, or auto (default)
+  --model <name>                Model for every reflection step, in place of the
+                                --quality plan
+  --cluster-model <name>        Model for grouping sessions into tasks only
+                                (default: --model)
+  --author-model <name>         Model for writing prompts only (default:
+                                --model)
+  --project <name>              Only projects whose name contains this text,
+                                kept through every step
+  --home <dir>                  Data directory (env HUMAN_HINDSIGHT_HOME; legacy
+                                CC_HINDSIGHT_HOME is also supported)
+  --claude-dir <dir>            Claude Code config directory (env
+                                CLAUDE_CONFIG_DIR; default ~/.claude)
+  --codex-dir <dir>             Codex data directory (env CODEX_HOME; default
+                                ~/.codex)
+  --kiro-dir <dir>              Kiro CLI config directory (env KIRO_CONFIG_DIR;
+                                default ~/.kiro)
+  --kirocrew-dir <dir>          Kiro Crew data directory (env
+                                HUMAN_HINDSIGHT_KIROCREW_DIR; default
+                                ~/.kiro/crew)
+  --opencode-dir <dir>          OpenCode data directory (env
+                                HUMAN_HINDSIGHT_OPENCODE_DIR; honors
+                                XDG_DATA_HOME)
+  --opencode-db <file>          OpenCode database (env OPENCODE_DB; relative to
+                                --opencode-dir)
+  --source <tool>               History to read: claude, codex, kiro, kirocrew,
+                                opencode, or auto (default)
+  -h, --help                    Show examples and common options
+  --all                         Show the full reference when requesting help
+  -v, --version                 Print the installed version
 
 npx human-hindsight (no command)
 Show your setup and a menu of next steps.
@@ -100,7 +105,9 @@ Options
 
   --runner <cli>                           Which local CLI runs the reflection:
                                            claude, codex, kiro, opencode, or
-                                           auto (default: auto)
+                                           auto (default). One name keeps the
+                                           run on that CLI; several, separated
+                                           by commas, are tried in order
   --model <name>                           Model for every step, as your CLI
                                            names it
   --cluster-model <name>                   Model for grouping sessions only
@@ -120,6 +127,14 @@ Options
   --library                                Serve the local library during an
                                            interactive reflection (skip with
                                            --no-library)
+  --prompts                                Group sessions and write reusable
+                                           prompts (use --no-prompts to read
+                                           sessions and summarize preferences
+                                           only) (Default: true)
+  --no-prompts                             Turn off --prompts
+  --subagents                              After the preference summaries,
+                                           suggest subagent roles in the same
+                                           run, on the same approval
   --generalize                             Summarize working preferences after
                                            writing prompts (skip with
                                            --no-generalize) (Default: true)
@@ -233,7 +248,9 @@ Usage
 Options
 
   --runner <cli>        Which local CLI consolidates: claude, codex, kiro,
-                        opencode, or auto (default: auto)
+                        opencode, or auto (default). One name keeps the run on
+                        that CLI; several, separated by commas, are tried in
+                        order
   --model <name>        Model for --consolidate, passed to the CLI's --model
   --project <name>      Include accepted instructions for this exact project,
                         alongside global instructions
@@ -256,7 +273,9 @@ Usage
 Options
 
   --runner <cli>               Which local CLI runs the stages: claude, codex,
-                               kiro, opencode, or auto (default: auto)
+                               kiro, opencode, or auto (default). One name keeps
+                               the run on that CLI; several, separated by
+                               commas, are tried in order
   --model <name>               Model for summarizing preferences (env
                                HUMAN_HINDSIGHT_SUBAGENT_MODEL; default: the
                                selected plan)

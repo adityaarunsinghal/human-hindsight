@@ -4,7 +4,7 @@ import { defineCommand } from "citty";
 import { DEFAULT_CONCURRENCY, resolveInputBudget, resolveTimeoutMs } from "../core/budget.js";
 import { fingerprint } from "../core/fingerprint.js";
 import { atomicWriteFilePrivate } from "../core/fsutil.js";
-import { parseQuality, type Quality } from "../core/model-plan.js";
+import { parseQuality, QUALITIES, type Quality } from "../core/model-plan.js";
 import { PREFERENCE_REVIEW_FILE, readPreferenceReviews } from "../core/preference-review.js";
 import { readObservedPreferences } from "../core/preferences.js";
 import { openRunSession, type RunSession, type StageKey } from "../core/run-session.js";
@@ -165,6 +165,11 @@ export interface SuggestSubagentsDeps {
   /** Where Ctrl-C arrives and how the process ends (tests). */
   host?: TerminalHost;
   exit?(code: number): void;
+  /**
+   * The person already approved this step: the reflection plan that leads
+   * here named it, with its calls. The plan is still printed.
+   */
+  approved?: boolean;
 }
 
 const GENERATE_ONLY = [
@@ -558,6 +563,8 @@ async function withApproval(opts: {
   run: (guard: ApprovedRun) => Promise<number>;
 }): Promise<number> {
   const { args, session, deps, out } = opts;
+  if (deps.approved && !args.yes)
+    out.write("Suggesting subagents, as approved with the plan above.\n\n");
   const decision = await (deps.confirm ?? confirmPlan)(
     {
       digests: 0,
@@ -572,7 +579,7 @@ async function withApproval(opts: {
       fullPlan: `${resumeCommand(args, session.quality, !!args["author-only"])} --dry-run`,
     },
     {
-      yes: args.yes === true,
+      yes: args.yes === true || deps.approved === true,
       dryRun: args["dry-run"] === true,
       input: deps.input,
       output: out,
@@ -1004,7 +1011,7 @@ async function runGenerate(
     // planned before the screen, so its numbers hold whichever is picked.
     const plans = {} as Record<Quality, GeneralizePlan>;
     const selectedQuality = session.quality;
-    for (const quality of ["balanced", "best"] as const) {
+    for (const quality of QUALITIES) {
       session.quality = quality;
       const plan = planGeneralize({
         home,
@@ -1049,15 +1056,12 @@ async function runGenerate(
         includeUnreviewed,
         ...(selection === "accepted" && inputs.length < candidates ? { candidates } : {}),
         ...bounds,
-        choices: {
-          balanced: planChoice(
-            session,
-            "balanced",
-            plans.balanced,
-            description.plans.balanced.notes,
-          ),
-          best: planChoice(session, "best", plans.best, description.plans.best.notes),
-        },
+        choices: Object.fromEntries(
+          QUALITIES.map((quality) => [
+            quality,
+            planChoice(session, quality, plans[quality], description.plans[quality].notes),
+          ]),
+        ) as Record<Quality, SubagentsChoice>,
       },
       preview: () => {
         write();
@@ -1135,15 +1139,16 @@ async function runGenerate(
           });
         }
         if (!lessons.some((lesson) => lesson.disposition === "generalized")) {
-          return stop(
-            "generalize",
-            {
-              error: "There are no reusable preferences to group into roles.",
-              problems: ["no generalized lesson"],
-              raw: null,
-            },
-            { lessons, set_aside: setAside },
-          );
+          // Nothing failed: every summary so far belongs to one project or one
+          // occasion, and a role is built from what holds across them.
+          write();
+          for (const line of wrapText(
+            `None of your ${counted(lessons.length, "preference summary", "preference summaries")} applies beyond one project or one occasion yet, so there is nothing general to build roles from. Reflect on more of your history, then suggest subagents again.`,
+            screenWidth(out),
+          ))
+            write(line);
+          write(hint(hintCommand("reflect", args)));
+          return 0;
         }
         if (!(await ready(["propose", "roles"]))) return 1;
         phase = "choose";
@@ -1365,10 +1370,12 @@ async function runAuthorOnly(
         selection: artifact.selection,
         minRoles: bare.length,
         maxRoles: bare.length,
-        choices: {
-          balanced: planChoice(session, "balanced", undefined, description.plans.balanced.notes),
-          best: planChoice(session, "best", undefined, description.plans.best.notes),
-        },
+        choices: Object.fromEntries(
+          QUALITIES.map((quality) => [
+            quality,
+            planChoice(session, quality, undefined, description.plans[quality].notes),
+          ]),
+        ) as Record<Quality, SubagentsChoice>,
         authorOnly: { names: bare.map((role) => role.name), roles: artifact.roles.length },
       },
       beforeCheck: checkSnapshot,
@@ -1422,7 +1429,7 @@ export default defineCommand({
     runner: {
       type: "string",
       description:
-        "Which local CLI runs the stages: claude, codex, kiro, opencode, or auto (default: auto)",
+        "Which local CLI runs the stages: claude, codex, kiro, opencode, or auto (default). One name keeps the run on that CLI; several, separated by commas, are tried in order",
     },
     model: {
       type: "string",

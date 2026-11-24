@@ -72,28 +72,50 @@ async function run(
   const out = fakeOutput();
   const fake = fakeStart(deps.busy);
   const openBrowser = deps.openBrowser ?? vi.fn(async () => true);
+  const retired: [string, number][] = [];
   const gui = await runGui(
     { home: HOME, ...args },
-    { env: {}, platform: "darwin", host, ...deps, output: out, openBrowser, start: fake.start },
+    {
+      env: {},
+      platform: "darwin",
+      host,
+      retire: async (home, port) => void retired.push([home, port]),
+      ...deps,
+      output: out,
+      openBrowser,
+      start: fake.start,
+    },
   );
   opened.push(gui);
-  return { gui, text: out.text(), openBrowser, ...fake };
+  return { gui, text: out.text(), openBrowser, retired, ...fake };
 }
 
 describe("remote detection", () => {
   it.each([
-    [{}, false],
-    [{ SSH_CONNECTION: "192.0.2.10 50000 198.51.100.7 22" }, true],
-    [{ SSH_CLIENT: "192.0.2.10 50000 22" }, true],
-    [{ SSH_TTY: "/dev/pts/0" }, true],
+    ["darwin", {}, false],
+    ["darwin", { SSH_CONNECTION: "192.0.2.10 50000 198.51.100.7 22" }, true],
+    ["darwin", { SSH_CLIENT: "192.0.2.10 50000 22" }, true],
+    ["linux", { SSH_TTY: "/dev/pts/0", DISPLAY: ":0" }, true],
     // mosh 1.4.0, observed: mosh-server sets no MOSH_* variable, and its shell
     // keeps the SSH_* variables of the ssh login that started it.
-    [{ SSH_CONNECTION: "192.0.2.10 50000 198.51.100.7 22", NCURSES_NO_UTF8_ACS: "1" }, true],
-    [{ WSL_DISTRO_NAME: "Ubuntu" }, false],
-    [{ WSL_INTEROP: "/run/WSL/1_interop" }, false],
-    [{ DISPLAY: "" }, false],
-  ])("%o is remote: %s", (env, remote) => {
-    expect(isRemoteSession(env)).toBe(remote);
+    [
+      "linux",
+      { SSH_CONNECTION: "192.0.2.10 50000 198.51.100.7 22", NCURSES_NO_UTF8_ACS: "1" },
+      true,
+    ],
+    // A Linux machine with no display has no browser to open: a session through
+    // a terminal multiplexer or a web console carries no SSH variable.
+    ["linux", {}, true],
+    ["linux", { DISPLAY: "" }, true],
+    ["linux", { DISPLAY: ":0" }, false],
+    ["linux", { WAYLAND_DISPLAY: "wayland-0" }, false],
+    // WSL hands the address to the Windows browser.
+    ["linux", { WSL_DISTRO_NAME: "Ubuntu" }, false],
+    ["linux", { WSL_INTEROP: "/run/WSL/1_interop" }, false],
+    // A Mac without SSH variables has its own browser.
+    ["darwin", { DISPLAY: "" }, false],
+  ] as const)("on %s, %o is remote: %s", (platform, env, remote) => {
+    expect(isRemoteSession(env, platform)).toBe(remote);
   });
 
   it.each([
@@ -141,7 +163,7 @@ afterEach(() => {
 describe("opening the browser keeps the session key off every command line", () => {
   it.each([
     ["darwin", {}],
-    ["linux", {}],
+    ["linux", { DISPLAY: ":0" }],
     ["linux", { WSL_DISTRO_NAME: "Ubuntu" }],
   ] as const)("on %s %o the opener gets an owner-only file in the data home", async (platform, env) => {
     const home = tmpHome();
@@ -213,8 +235,14 @@ describe("opening the browser keeps the session key off every command line", () 
 describe("gui command", () => {
   it("over SSH uses the fixed port, prints the exact forwarding command and laptop address, and opens nothing", async () => {
     const env = { ...SSH, SSH_CONNECTION: "192.0.2.10 50000 198.51.100.7 2222" };
-    const { text, openBrowser, ports, gui } = await run({}, { env });
+    const { text, openBrowser, ports, gui, retired } = await run({}, { env });
     expect(ports).toEqual([REMOTE_PORT]);
+    // A view an earlier reflection left on the port is asked to stop first.
+    expect(retired).toEqual([[HOME, REMOTE_PORT]]);
+    // The one line that makes every later address open with no command.
+    expect(text).toContain(
+      `   To skip this from now on, add this line under the host in ~/.ssh/config on your laptop:\n     LocalForward ${REMOTE_PORT} 127.0.0.1:${REMOTE_PORT}\n`,
+    );
     expect(openBrowser).not.toHaveBeenCalled();
     const address = `http://127.0.0.1:${REMOTE_PORT}/#token=${TOKEN}`;
     expect(gui.address).toBe(address);
@@ -232,9 +260,21 @@ describe("gui command", () => {
       `Port ${REMOTE_PORT} is already in use, so the library uses port 50123 instead.`,
     );
     expect(text).toContain("-L 127.0.0.1:50123:127.0.0.1:50123 --");
+    // The configuration line is only for the fixed port.
+    expect(text).not.toContain("LocalForward");
     expect(text).toContain(`http://127.0.0.1:50123/#token=${TOKEN}`);
     expect(text).not.toContain(`127.0.0.1:${REMOTE_PORT}:`);
     expect(openBrowser).not.toHaveBeenCalled();
+  });
+
+  it("a Linux machine with no display gets the same help as an SSH session", async () => {
+    const { text, openBrowser, ports } = await run({}, { env: {}, platform: "linux" });
+    expect(ports).toEqual([REMOTE_PORT]);
+    expect(openBrowser).not.toHaveBeenCalled();
+    expect(text).toContain("This is a remote machine, so open the library on your laptop.");
+    expect(text).toContain(
+      `   ssh -N -L 127.0.0.1:${REMOTE_PORT}:127.0.0.1:${REMOTE_PORT} -- fallback-user@synthetic-host\n`,
+    );
   });
 
   it("an explicit port that is taken is an error, not a silent change", async () => {

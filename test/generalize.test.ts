@@ -385,6 +385,8 @@ describe("working agreements stage, many calls in flight", () => {
     const fetchView = async () =>
       JSON.parse((await request(server, "/api/preferences/generalized")).text);
     const untouched = await fetchView();
+    // The view says a reflection is still adding to the library until it ends.
+    expect(untouched.running).toBe(true);
     const pending = deferred();
     liveBatches.update({ kind: "begin", total: plan.windows.length });
     const running = runGeneralizeStage({
@@ -417,9 +419,17 @@ describe("working agreements stage, many calls in flight", () => {
     liveBatches.update({ kind: "interrupted" });
     expect((await fetchView()).live.status).toBe("interrupted");
     expect(fs.readFileSync(path.join(home, GENERALIZED_PATH))).toEqual(oldSet);
-    expect((await request(guiHarness(home), "/api/preferences/generalized")).text).not.toContain(
-      '"live":',
-    );
+    const before = liveBatches.revision;
+    liveBatches.update({ kind: "finished" });
+    expect((await fetchView()).running).toBe(false);
+    // The page learns of it through the revision, once.
+    expect(liveBatches.revision).toBe(before + 1);
+    liveBatches.update({ kind: "finished" });
+    expect(liveBatches.revision).toBe(before + 1);
+    // The plain browser view has no reflection behind it and says nothing of one.
+    const plain = (await request(guiHarness(home), "/api/preferences/generalized")).text;
+    expect(plain).not.toContain('"live":');
+    expect(plain).not.toContain('"running":');
   });
 
   it("a failed window never replaces a complete saved set; a run with no window finished saves nothing", async () => {

@@ -35,6 +35,8 @@ import { countLabel, roleKey } from "./subagents-view.js";
  */
 export interface GuiAgreements {
   live?: LiveAgreements;
+  /** A reflection is still running and adding to this library. */
+  running?: boolean;
   state: "none" | "ready" | "damaged";
   generatedAt: string | null;
   stale: boolean;

@@ -205,6 +205,21 @@ describe("runClaude: success path", () => {
     expect(calls[0]?.args).toContain("opus");
   });
 
+  it("passes --effort only when this CLI's help lists the flag", async () => {
+    const run = async (capabilities: Capabilities, effort?: "low" | "high" | "xhigh") => {
+      const { io, calls } = mockIo([envelope(VALID_DIGEST)]);
+      await runClaude({ prompt: "p", schema: DigestSchema, effort, capabilities }, io);
+      const args = calls[0]?.args ?? [];
+      const at = args.indexOf("--effort");
+      return at < 0 ? undefined : args[at + 1];
+    };
+    expect(await run({ ...CAPS_MODERN, effort: true }, "xhigh")).toBe("xhigh");
+    expect(await run({ ...CAPS_MODERN, effort: true }, "low")).toBe("low");
+    // A CLI whose help does not list the flag, or a call without an effort: no flag.
+    expect(await run(CAPS_MODERN, "xhigh")).toBeUndefined();
+    expect(await run({ ...CAPS_MODERN, effort: true })).toBeUndefined();
+  });
+
   it("recovers JSON wrapped in a Markdown code fence", async () => {
     const fenced = `\`\`\`json\n${JSON.stringify(VALID_DIGEST)}\n\`\`\``;
     const { io } = mockIo([envelope(fenced)]);
@@ -605,6 +620,17 @@ describe("probeCapabilities", () => {
     const io: RunnerIo = { which: () => "/x/claude", spawn: async () => help };
     const caps = await probeCapabilities("/x/claude", io);
     expect(caps).toEqual({ jsonSchema: true, disableTools: "tools-empty" });
+  });
+
+  it("detects --effort only when the help lists it", async () => {
+    const probe = async (stdout: string) => {
+      resetCapabilityCache();
+      const help: SpawnResult = { code: 0, signal: null, stdout, stderr: "", timedOut: false };
+      const io: RunnerIo = { which: () => "/x/claude", spawn: async () => help };
+      return (await probeCapabilities("/x/claude", io)).effort;
+    };
+    expect(await probe("--output-format <f>\n--effort <level>  Effort level")).toBe(true);
+    expect(await probe("--output-format <f>\n--model <m>")).toBeUndefined();
   });
 
   it("falls back when --json-schema is absent", async () => {

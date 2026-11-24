@@ -1,9 +1,12 @@
 import {
+  EFFORT_WORDS,
   isPlanLabel,
   type ModelRole,
+  PLAN_EFFORT,
   type PlanLabel,
   planLabel,
   type Quality,
+  qualityOf,
   type ResolvedRole,
   type RunnerModelPlan,
   stepDown,
@@ -18,7 +21,8 @@ type RunnerFn = AgentRunner["run"];
 type Usage = { runner: RunnerName; calls: number; models: string[] };
 
 export interface PoolEvent {
-  kind: "switch" | "step-down" | "exhausted";
+  /** `effort`: a model's calls go on at the CLI's own reasoning setting. */
+  kind: "switch" | "step-down" | "exhausted" | "effort";
   runner: RunnerName;
   to?: RunnerName;
   reason: FailureClass;
@@ -118,6 +122,12 @@ interface CandidateState {
   streak: number;
   /** Attempt number current when the last success landed. */
   lastSuccess: number;
+  /** Models whose calls go without the plan's effort: the CLI or model did not take it. */
+  noEffort: Set<string>;
+  /** Models being asked once without the effort, to learn whether it was the cause. */
+  effortTrial: Set<string>;
+  /** Models that failed with and without the effort, so the effort stays on. */
+  effortKept: Set<string>;
   /** Calls in flight on this CLI, never above its `maxConcurrency`. */
   running: number;
   /** Calls waiting for a free slot, first come first served. */
@@ -177,11 +187,18 @@ const ENDS_RUN: ReadonlySet<FailureClass> = new Set(["sign-in", "missing-binary"
 const COUNTED: ReadonlySet<FailureClass> = new Set(["cli-error", "transient"]);
 const SWITCH_STREAK = 2;
 const TRANSIENT_RETRIES = 3;
+/**
+ * Failures that can mean a CLI or model did not take the effort level: the
+ * CLI refused its arguments, or the provider refused the request. No message
+ * is matched: the call is asked once more at the CLI's own setting, and only
+ * a success there shows the effort was the cause. An answer that fails its
+ * checks is not one of them: the CLI ran, so the effort was taken.
+ */
+const EFFORT_SUSPECT: ReadonlySet<FailureClass> = new Set(["cli-error", "model-unavailable"]);
 
 function selectedRole(state: CandidateState, label: PlanLabel): ResolvedRole {
-  const quality = label.startsWith("best/") ? "best" : "balanced";
   const key = label.endsWith("/major") ? "major" : "bulk";
-  return state.changes.get(label) ?? state.candidate.plans[quality].roles[key];
+  return state.changes.get(label) ?? state.candidate.plans[qualityOf(label)].roles[key];
 }
 
 function catalogFromPlans(candidate: Candidate): ModelCatalog {
@@ -230,6 +247,9 @@ export function createRunnerPool(o: {
       models: new Set(),
       streak: 0,
       lastSuccess: 0,
+      noEffort: new Set(),
+      effortTrial: new Set(),
+      effortKept: new Set(),
       running: 0,
       waiting: [],
     });
@@ -312,6 +332,11 @@ export function createRunnerPool(o: {
       const role = label ? selectedRole(state, label) : undefined;
       const model = label ? role?.model : opts.model;
       if (isPlanLabel(model)) throw new Error("A model plan must resolve to a CLI model first.");
+      // A plan sets the reasoning effort of its own calls, on a CLI that takes
+      // one. A model the person named runs at the CLI's own setting.
+      const effortKey = model ?? "";
+      const planned = label && runner.acceptsEffort?.() ? PLAN_EFFORT[qualityOf(label)] : undefined;
+      const effort = planned && !state.noEffort.has(effortKey) ? planned : undefined;
       if (state !== previous || role !== previousRole) retries = 0;
       previous = state;
       previousRole = role;
@@ -322,6 +347,7 @@ export function createRunnerPool(o: {
         .run({
           ...opts,
           model,
+          effort,
           signal: aborted.signal,
           onResolved: (result) => {
             reported = result.model;
@@ -345,6 +371,22 @@ export function createRunnerPool(o: {
           retries++;
           await sleep(Math.round(delay));
           continue;
+        }
+        if (planned && EFFORT_SUSPECT.has(reason)) {
+          if (effort && !state.effortKept.has(effortKey)) {
+            // Ask once more at the CLI's own setting. Siblings that failed the
+            // same way join that attempt and are not counted against the CLI.
+            if (!state.noEffort.has(effortKey)) {
+              state.noEffort.add(effortKey);
+              state.effortTrial.add(effortKey);
+            }
+            continue;
+          }
+          if (!effort && state.effortTrial.delete(effortKey)) {
+            // It fails either way, so the effort was not the cause: it stays on.
+            state.noEffort.delete(effortKey);
+            state.effortKept.add(effortKey);
+          }
         }
         if (reason === "model-unavailable" && role && label && role.tier !== "default") {
           const catalog = candidate.catalog ?? catalogFromPlans(candidate);
@@ -379,6 +421,15 @@ export function createRunnerPool(o: {
       // A success is kept whichever CLI is active now.
       state.streak = 0;
       state.lastSuccess = attempts;
+      if (planned && !effort && state.effortTrial.delete(effortKey)) {
+        const named = role?.display && role.display !== "CLI default" ? ` for ${role.display}` : "";
+        o.onEvent({
+          kind: "effort",
+          runner: runner.name,
+          reason: "cli-error",
+          line: `${SOURCE_PRODUCT_NAMES[runner.name]} did not take ${EFFORT_WORDS[planned]} reasoning effort${named}. Those calls use its own setting.`,
+        });
+      }
       const configured = candidate.catalog?.defaultModel;
       const defaultModel =
         configured && !/^(auto|default)$/i.test(configured)
@@ -438,6 +489,7 @@ export function createRunnerPool(o: {
     get maxConcurrency() {
       return current().candidate.runner.maxConcurrency;
     },
+    acceptsEffort: () => current().candidate.runner.acceptsEffort?.() === true,
     run,
     costSummary,
     finalize,

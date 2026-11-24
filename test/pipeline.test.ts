@@ -558,7 +558,47 @@ describe("runDigestStage", () => {
     );
   });
 
-  it("rejects uncorrected evidence without saving an invented preference", async () => {
+  it("keeps the read and leaves out a preference whose evidence stays unverified after the correction", async () => {
+    const home = tmpHome();
+    writeExport(home, "a.md", "Always diagnose before making edits.");
+    let calls = 0;
+    const result = await runDigestStage({
+      home,
+      entries: [entry("a.md")],
+      output: sink(),
+      runner: (async () => {
+        calls++;
+        return {
+          ...DIGEST,
+          preferences: [
+            {
+              text: "Diagnose first.",
+              evidence: "The human asked for diagnosis before edits.",
+              scope: "global",
+              basis: "explicit",
+              citations: [{ message_id: "a.md#m0", quote: "Always diagnose before making edits." }],
+            },
+            {
+              text: "Invented preference.",
+              evidence: "Unsupported.",
+              scope: "global",
+              basis: "explicit",
+              citations: [{ message_id: "a.md#m0", quote: "Invented evidence." }],
+            },
+          ],
+        };
+      }) as RunnerFn,
+    });
+    // One correction is asked for, as before; then the session is not lost over one quote.
+    expect(calls).toBe(2);
+    expect(result.failed).toEqual([]);
+    expect(result.completed).toBe(1);
+    const saved = loadDigests(home)?.digests["a.md"];
+    expect(saved?.goal).toBe(DIGEST.goal);
+    expect(saved?.preferences?.map((preference) => preference.text)).toEqual(["Diagnose first."]);
+  });
+
+  it("never saves an invented preference: a read whose every preference is unverified keeps none", async () => {
     const home = tmpHome();
     writeExport(home, "a.md", "The real human text.");
     let calls = 0;
@@ -583,8 +623,9 @@ describe("runDigestStage", () => {
       }) as RunnerFn,
     });
     expect(calls).toBe(2);
-    expect(result.failed[0]?.error).toContain("preference evidence did not match the session");
-    expect(loadDigests(home)?.digests["a.md"]).toBeUndefined();
+    expect(result.failed).toEqual([]);
+    expect(result.completed).toBe(1);
+    expect(loadDigests(home)?.digests["a.md"]?.preferences).toEqual([]);
   });
 
   it("maps truncated-message citations back to their original source IDs", async () => {

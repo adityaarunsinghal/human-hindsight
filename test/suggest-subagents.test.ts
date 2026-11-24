@@ -631,7 +631,7 @@ describe("helpers", () => {
 /** Plan screens are compared as golden text; the assertions beside each name what it must say. */
 const golden = (name: string) => `golden/suggest-subagents/${name}.txt`;
 /** Plan labels are internal; the person always sees concrete model names. */
-const PLAN_LABEL = /\b(balanced|best)\/(bulk|major)\b/;
+const PLAN_LABEL = /\b(fast|balanced|best)\/(bulk|major)\b/;
 
 describe("suggest-subagents plan and consent screens", () => {
   it.each([
@@ -717,6 +717,74 @@ describe("suggest-subagents plan and consent screens", () => {
     const out = goldenText(text, { roots: { [home]: "<HOME>" } });
     await expect(out).toMatchFileSnapshot(golden("consent-declined"));
     expect(out).toMatch(/Declined\. Nothing was sent\./);
+  });
+
+  it("a run approved by the reflection plan that led here prints its plan and asks nothing", async () => {
+    const home = libraryHome();
+    const fake = fakeRunner();
+    const cap = capture();
+    // No input stream and no --yes: only the approval carried over starts it.
+    const code = await runSuggestSubagents(
+      { home, concurrency: "1" },
+      {
+        runner: fake.runner,
+        runnerName: "kiro",
+        output: cap.out,
+        now: () => NOW,
+        userHome: tmpDir(),
+        approved: true,
+      },
+    );
+    expect(code).toBe(0);
+    const text = strip(cap.text());
+    expect(text).toContain("Suggesting subagents, as approved with the plan above.");
+    expect(text.indexOf("Suggesting subagents, as approved")).toBeLessThan(
+      text.indexOf("Subagent plan"),
+    );
+    expect(text).not.toContain("Choose [");
+    expect(fake.count("propose")).toBe(1);
+    expect(readSuggestion(home)?.artifact.roles.length).toBeGreaterThan(0);
+  });
+
+  it("says plainly, and without a failure, when no preference summary applies beyond one project", async () => {
+    const home = libraryHome();
+    const fake = fakeRunner();
+    // Every summary comes back as belonging to one project.
+    const contextualOnly = (async (opts: Parameters<RunnerFn>[0]) => {
+      const value = (await fake.runner(opts)) as {
+        lessons?: { disposition: string }[];
+      };
+      for (const lesson of value.lessons ?? []) lesson.disposition = "contextual";
+      return value;
+    }) as RunnerFn;
+    const { code, text } = await run(
+      home,
+      { yes: true, concurrency: "1" },
+      { runner: contextualOnly },
+    );
+    expect(code).toBe(0);
+    const flat = strip(text).replace(/\s+/g, " ");
+    expect(flat).toMatch(
+      /None of your \d+ preference summar(y|ies) applies beyond one project or one occasion yet, so there is nothing general to build roles from\. Reflect on more of your history, then suggest subagents again\./,
+    );
+    expect(flat).toContain("next: npx human-hindsight reflect");
+    expect(flat).not.toMatch(/failed|✗/);
+    // No role is asked for, and nothing half-made is saved.
+    expect(fake.count("propose")).toBe(0);
+    expect(readSuggestion(home)).toBeNull();
+  });
+
+  it("without that approval, the same call with no terminal sends nothing", async () => {
+    const home = libraryHome();
+    const fake = fakeRunner();
+    const { code, text } = await run(
+      home,
+      { concurrency: "1" },
+      { runner: fake.runner, input: "" },
+    );
+    expect(code).toBe(2);
+    expect(strip(text)).not.toContain("as approved with the plan above");
+    expect(fake.calls).toEqual([]);
   });
 
   it("--author-only --dry-run prints the author-only plan and calls nothing", async () => {

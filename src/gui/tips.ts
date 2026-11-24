@@ -2,6 +2,13 @@ import { PRIVACY_REMINDER, PUBLIC_REPOSITORY_URL } from "../core/privacy.js";
 import type { GuiSnapshot } from "./server.js";
 import { commandRow } from "./subagents-panel.js";
 
+/** Said while the reflection that opened the page is still running. */
+export const STILL_ARRIVING = {
+  prompts: "Your prompts appear here as each one is written. This page updates on its own.",
+  preferences:
+    "These are the preferences found in the sessions read so far. Summaries arrive here as each batch finishes.",
+};
+
 export const guidance = {
   prompts: "Copy a prompt, paste it into a new session, and adjust it to the task at hand.",
   preferences:

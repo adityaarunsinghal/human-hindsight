@@ -206,6 +206,8 @@ try:
     )
     fake.chmod(0o755)
     environment = dict(os.environ)
+    # A desktop terminal: on Linux a machine with no display counts as remote.
+    environment["DISPLAY"] = ":0"
     # The child PTYs simulate a person's terminal, including when this test runs in CI.
     for key in [
         "CI",

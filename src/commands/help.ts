@@ -12,7 +12,7 @@ import { parseQuality } from "../core/model-plan.js";
 import { type ValueRule, valueProblem } from "../core/value-rule.js";
 import { WINDOW_SIZE_RULE } from "../distill/generalize.js";
 import { RUNNER_INFO } from "../runners/capabilities.js";
-import { parseRunnerMode } from "../runners/registry.js";
+import { parseRunnerList } from "../runners/registry.js";
 import { SOURCE_PRODUCT_NAMES } from "../sources/labels.js";
 import { parseSourceMode } from "../sources/registry.js";
 import {
@@ -73,7 +73,7 @@ export const helpTopics: HelpTopic[] = [
     examples: [
       example("reflect --dry-run", "Preview the plan before sending any session text."),
       example("reflect --recent 10", "Start with your ten most recent eligible sessions."),
-      example("reflect --quality best", "Review the plan using the most capable available models."),
+      example("reflect --quality fast", "Use the lighter model and low reasoning effort."),
     ],
     common: ["dry-run", "recent", "quality", "project"],
   },
@@ -344,10 +344,13 @@ const VALUE_RULES: Record<string, ValueRule> = {
     says: choiceList([...Object.keys(SOURCE_PRODUCT_NAMES), "auto"]),
   },
   runner: {
-    accepts: (value) => passes(() => parseRunnerMode(value)),
-    says: choiceList([...Object.keys(RUNNER_INFO), "auto"]),
+    accepts: (value) => passes(() => parseRunnerList(value)),
+    says: `${choiceList([...Object.keys(RUNNER_INFO), "auto"])}, or several CLIs separated by commas`,
   },
-  quality: { accepts: (value) => passes(() => parseQuality(value)), says: "balanced or best" },
+  quality: {
+    accepts: (value) => passes(() => parseQuality(value)),
+    says: "fast, balanced, or best",
+  },
   recent: RECENT_RULE,
 };
 

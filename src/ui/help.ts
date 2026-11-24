@@ -142,7 +142,7 @@ const PLACEHOLDERS: Readonly<Record<string, string>> = {
 
 /**
  * What help prints after a flag that takes a value. A real value (`25`) or a
- * list of choices (`balanced|best`) is shown as typed; a kind of value is
+ * list of choices (`fast|balanced|best`) is shown as typed; a kind of value is
  * bracketed (`<seconds>`). Never the flag's own name.
  */
 export function valuePlaceholder(name: string, arg: ArgDef): string {

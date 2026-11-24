@@ -4,6 +4,30 @@ All notable changes to Human Hindsight (formerly cc-hindsight) are documented he
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project aims
 to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.1.3] - 2026-11-24
+
+- Codex reads one historical session per request in a fresh, ephemeral process. Human Hindsight discovers enabled MCP servers once per runner and disables them for tool-free calls, which saves startup time on machines with configured servers.
+- **Fast, Balanced, Best.** Fast is a new plan that uses the lighter model for every step. Each plan now sets the reasoning effort of its own calls: low for Fast, high for Balanced, extra high for Best, on Claude Code, Codex and Kiro CLI where the installed version takes one. Until now every call inherited the reasoning setting you keep for your own sessions. OpenCode names its effort levels per model, so its calls run at the model's own setting, and a model you name with `--model` runs at your CLI's own setting. At the plan, `1`, `2` and `3` select Fast, Balanced and Best.
+- **Subagents from the first screen.** **Suggest subagents** is offered on a machine with no saved reads. It exports your messages if needed, then one plan covers reading the sessions, summarizing preferences, and choosing and writing the roles. No prompts are written. From a script: `npx human-hindsight reflect --no-prompts --subagents --quality fast --yes`.
+- **Your reflections open sooner.** The link appears once the sessions are read, with your preferences already there. Preference summaries run beside grouping and writing, and the page says when more is still arriving.
+- **A run keeps going.**
+  - A session over the size limit is left out and named on the plan, where it used to stop the whole run. The closing lines give the command that includes it.
+  - A group too long to write in one call is written from the whole sessions that fit, and the prompt records the ones left out.
+  - A read is kept when one quoted preference cannot be verified. Only that preference is left out.
+  - The CLI you choose at the plan is where the run starts. If it is not signed in, is out of quota, or keeps failing, the run moves to another ready CLI and says so in one line. The plan names every CLI it can move to.
+- **`--runner` takes an order.** One name keeps a run on that CLI. Several names separated by commas are tried in that order, for example `--runner=codex,claude`.
+- **Saved work is reused across CLIs.** A run that may use any CLI reuses the reads, groups and prompts saved for the same plan, whichever CLI produced them.
+- **Remote machines.** A Linux machine with no display gets the same forwarding help as an SSH session. The view a reflection opens uses port 4317 there, so one line in your laptop's SSH configuration (`LocalForward 4317 127.0.0.1:4317`) makes every later link open with no extra step.
+- The first screen says that no session text leaves the machine until you approve a plan.
+- [GUIDE.md](https://github.com/adityaarunsinghal/human-hindsight/blob/main/GUIDE.md) covers the plans, choosing a CLI, remote machines, long sessions, and troubleshooting.
+
+### Upgrading
+
+- At the plan, Balanced moved from `1` to `2` and Best from `2` to `3`.
+- A choice at the plan no longer keeps the run on that CLI. To keep a run on one CLI, pass `--runner=<cli>`.
+- Runs ask each CLI for a set reasoning effort. If your own setting was lower than the plan's, a run takes longer than before. Choose Fast for the quickest result.
+- Preference summaries are rebuilt once if your last reflection ran on a CLI chosen at the plan in 2.1.0 to 2.1.2. Reads, groups and prompts are reused.
+
 ## [2.1.2] - 2026-11-24
 
 - The runner and quality choices sit directly beneath their headings, with a blank row between the two groups. Home and history menu choices stay on consecutive rows.
@@ -851,6 +875,7 @@ author), library browsing and curation (`list`, `show`, `copy`, `edit`, `rate`,
 `prune`, `status`), the `preferences` CLAUDE.md aggregator, input budgets, and
 hardened packaging.
 
+[2.1.3]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.1.2...v2.1.3
 [2.1.2]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.1.1...v2.1.2
 [2.1.1]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.1.0...v2.1.1
 [2.1.0]: https://github.com/adityaarunsinghal/human-hindsight/compare/v2.0.0...v2.1.0

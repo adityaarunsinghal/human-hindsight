@@ -41,7 +41,7 @@ import { fakeInput, fakeOutput } from "./support/tty.js";
 
 // --- fakes -------------------------------------------------------------------
 
-const PLAN_LABEL = /\b(balanced|best)\/(bulk|major)\b/;
+const PLAN_LABEL = /\b(fast|balanced|best)\/(bulk|major)\b/;
 const ALIASES: ModelCatalog = { ids: ["sonnet", "opus", "fable"], source: "aliases" };
 const CODEX: ModelCatalog = {
   ids: ["gpt-5.6-terra", "gpt-5.6-sol", "gpt-5.6-astra"],
@@ -342,10 +342,11 @@ describe("the plan screen", () => {
     expect(code).toBe(0);
     await expect(text).toMatchFileSnapshot(golden("distill-fresh"));
     expect(flat(text)).toContain("5 sessions, about 2 prompts, plus your working preferences");
+    expect(flat(text)).toContain("1 Fast: sonnet for every step");
     expect(flat(text)).toContain(
-      "1 Balanced (selected): sonnet for session reads, opus for grouping and writing",
+      "2 Balanced (selected): sonnet for session reads, opus for grouping and writing",
     );
-    expect(flat(text)).toContain("2 Best: opus for session reads, fable for grouping and writing");
+    expect(flat(text)).toContain("3 Best: opus for session reads, fable for grouping and writing");
     expect(flat(text)).not.toContain("Also ready");
     expect(flat(text)).not.toContain("Library");
     // One line says what happens before the CLIs are asked, and it makes no
@@ -505,18 +506,24 @@ describe("consent", () => {
     expect(modelCalls(codex, "digest")).toBe(1);
   });
 
-  it("switches the displayed models and cache identity with the CLI, then runs only the pinned Best plan", async () => {
+  it("a chosen CLI is where the run starts: its models show, the others stay as a fallback, and saved reads are reused whichever is chosen", async () => {
     const home = tmpHome(sessions(2));
     const claude = fakeCli("claude", ALIASES);
     const codex = fakeCli("codex", CODEX);
-    const input = PassThrough.from(["s\nc\n2\nx\n\ns\n"]);
+    const input = PassThrough.from(["s\nc\n3\nx\n\ns\n"]);
     const result = await run({ home, generalize: false }, { runners: [claude, codex], input });
     expect(result.code).toBe(0);
     expect(result.text).toContain("Which coding CLI should run this reflection?");
     expect(result.text).toContain("Choose a coding CLI before pressing s to start.");
     expect(flat(result.text)).toContain("fable for grouping and writing");
     expect(flat(result.text)).toContain("gpt-5.6-astra for grouping and writing");
-    expect(flat(result.text)).toContain("This run stays on this CLI.");
+    // Every CLI that may receive text is named before approval, with the way to keep it to one.
+    expect(flat(result.text)).toContain(
+      "If Codex stops working, the run moves to Claude Code and says so. To keep it on Codex only, run with --runner=codex.",
+    );
+    expect(flat(result.text)).toContain("through Codex (or the CLI the run moves to)");
+    expect(flat(result.text)).not.toContain("This run stays on this CLI.");
+    // Nothing went wrong, so only the chosen CLI was called.
     expect(claude.calls).toEqual([]);
     expect(
       codex.calls
@@ -527,12 +534,74 @@ describe("consent", () => {
     expect(codex.calls.filter((call) => call.stage === "digest").map((call) => call.model)).toEqual(
       ["gpt-5.6-sol", "gpt-5.6-sol"],
     );
-    const resume = await run(
-      { home, runner: "codex", quality: "best", "dry-run": true },
-      { runners: [claude, codex] },
+    // The reads are saved for the Best plan, not for one CLI: starting on either reuses them.
+    for (const runner of ["codex,claude", "claude,codex", "auto"]) {
+      const again = await run(
+        { home, runner, quality: "best", "dry-run": true },
+        { runners: [claude, codex] },
+      );
+      expect(flat(again.text), runner).toContain("no new session reads (2 reused from saved work)");
+      expect(again.text).not.toContain("Which coding CLI");
+    }
+  });
+
+  it("a run free to use any CLI reuses what one CLI saved for the same plan, at every step", async () => {
+    const home = tmpHome(sessions(3));
+    const first = fakeCli("codex", CODEX);
+    // Saved by a run kept on Codex, as a choice at the plan was in 2.1.0 to 2.1.2.
+    expect(
+      (await run({ home, yes: true, runner: "codex", generalize: false }, { runners: [first] }))
+        .code,
+    ).toBe(0);
+    expect(modelCalls(first, "digest")).toBe(3);
+    const claude = fakeCli("claude", ALIASES);
+    const codex = fakeCli("codex", CODEX);
+    const again = await run({ home, yes: true, generalize: false }, { runners: [claude, codex] });
+    expect(again.code).toBe(0);
+    // Nothing is read, grouped, or written again, and no CLI is even checked.
+    expect(claude.calls).toEqual([]);
+    expect(codex.calls).toEqual([]);
+    expect(again.text.match(/Everything was already up to date/g)).toHaveLength(1);
+    // Another plan is another result: Best reads again.
+    const best = fakeCli("claude", ALIASES);
+    const other = await run(
+      { home, quality: "best", "dry-run": true, generalize: false },
+      { runners: [best, fakeCli("codex", CODEX)] },
     );
-    expect(flat(resume.text)).toContain("no new session reads (2 reused from saved work)");
-    expect(resume.text).not.toContain("Which coding CLI");
+    expect(flat(other.text)).toContain("3 session reads");
+    // And a run kept on another CLI still reads for itself, as before.
+    const kept = await run(
+      { home, runner: "claude", "dry-run": true, generalize: false },
+      { runners: [fakeCli("claude", ALIASES)] },
+    );
+    expect(flat(kept.text)).toContain("3 session reads");
+  });
+
+  it("the chosen CLI failing partway moves the run to the next one, in one line, and the run finishes", async () => {
+    const home = tmpHome(sessions(3));
+    const claude = fakeCli("claude", ALIASES);
+    let reads = 0;
+    const codex = fakeCli("codex", CODEX, (opts) => {
+      // Ready at the check, then out of quota after its first read.
+      if (stageOf(opts) === "digest" && ++reads > 1)
+        throw Object.assign(new Error("usage limit reached"), { kind: "quota" });
+      return answer(opts);
+    });
+    const input = PassThrough.from(["x\ns\n"]);
+    const { code, text } = await run(
+      { home, generalize: false, concurrency: "1" },
+      { runners: [claude, codex], input },
+    );
+    expect(code).toBe(0);
+    expect(
+      text.match(/Codex has reached its usage limit\. Continuing with Claude Code\./g),
+    ).toHaveLength(1);
+    expect(modelCalls(claude, "digest")).toBe(2);
+    expect(modelCalls(claude, "author")).toBeGreaterThan(0);
+    expect(flat(text)).toContain("Read 3 of 3 sessions.");
+    expect(flat(text)).toContain("Switched from Codex to Claude Code (usage limit reached).");
+    // What to run next names the order the person chose, so a resume starts the same way.
+    expect(fs.readdirSync(path.join(home, "library"))).toContain("task-s00");
   });
 
   it.each([
@@ -760,13 +829,59 @@ describe("consent", () => {
     expect(flat(text)).toContain("Sessions that would be read:");
   });
 
+  it("leaves a session over the size limit out, says so on the plan, and reads the rest", async () => {
+    const home = tmpHome(sessions(3));
+    fs.writeFileSync(path.join(home, "exports", "s01"), "z".repeat(50_000));
+    const claude = fakeCli("claude", ALIASES);
+    const { code, text } = await run(
+      { home, "input-budget": "20000", yes: true, generalize: false },
+      { runners: [claude] },
+    );
+    expect(code).toBe(0);
+    // Said before anything is sent, with the session's name and length.
+    const plan = flat(text.slice(0, text.indexOf("Preparing reflection")));
+    expect(plan).toContain(
+      "1 session is longer than the size limit per call of 20,000 characters and is left out of this run: s01 (50,000 characters).",
+    );
+    expect(plan).toContain("2 session reads");
+    // The other two are read, grouped, and written; the long one is never sent.
+    expect(modelCalls(claude, "digest")).toBe(2);
+    expect(flat(text)).toContain("Reflection complete");
+    expect(flat(text)).not.toContain("finished with failures");
+    // The closing lines give the command that includes it.
+    const closing = text.slice(text.indexOf("Reflection complete"));
+    expect(flat(closing)).toContain(
+      "1 session was left out for being longer than the size limit per call of 20,000 characters:",
+    );
+    expect(closing).toMatch(
+      /To include it, shortened to fit, run:\n {2}npx human-hindsight reflect --home=<HOME> .*--input-budget=20000 --truncate=extreme/,
+    );
+  });
+
+  it("previews the same plan with --dry-run: the long session is named and not listed to read", async () => {
+    const home = tmpHome(sessions(3));
+    fs.writeFileSync(path.join(home, "exports", "s01"), "z".repeat(50_000));
+    const claude = fakeCli("claude", ALIASES);
+    const { code, text } = await run(
+      { home, "input-budget": "20000", "dry-run": true },
+      { runners: [claude] },
+    );
+    expect(code).toBe(0);
+    expect(flat(text)).toContain("is left out of this run: s01 (50,000 characters).");
+    const listed = text.slice(text.indexOf("Sessions that would be read:"));
+    expect(listed).toContain("s00");
+    expect(listed).toContain("s02");
+    expect(listed).not.toContain("s01");
+    expect(modelCalls(claude)).toBe(0);
+  });
+
   it.each([
     {
-      name: "refuses a session over the budget before consent",
+      name: "when every selected session is over the size limit, sends nothing and gives the command that shortens them",
       args: { "input-budget": "1000" },
       big: true,
       code: 1,
-      says: "longer than the size limit per call",
+      says: "The selected session is longer than the size limit per call of 1,000 characters, so nothing was sent:",
     },
     {
       name: "exits 0 when nothing meets the substance threshold",
@@ -783,6 +898,10 @@ describe("consent", () => {
     const result = await run({ home, ...args }, { confirm, runners: [claude] });
     expect(result.code).toBe(code);
     expect(flat(result.text)).toContain(says);
+    if (big)
+      expect(result.text).toMatch(
+        /To shorten it to fit and reflect on it, run:\n {2}npx human-hindsight reflect --home=<HOME> --input-budget=1000 --truncate=extreme/,
+      );
     expect(confirm).not.toHaveBeenCalled();
     expect(modelCalls(claude)).toBe(0);
   });
@@ -1047,7 +1166,7 @@ describe("the run", () => {
     "failed",
     "disabled",
     "plain",
-  ] as const)("serves saved prompts before preference summaries in the %s library case", async (mode) => {
+  ] as const)("opens the library once the reads are saved, before grouping, in the %s library case", async (mode) => {
     vi.stubEnv("TERM", "xterm");
     vi.stubEnv("FORCE_COLOR", undefined);
     vi.stubEnv("NO_COLOR", mode === "no-color" ? "1" : undefined);
@@ -1061,11 +1180,13 @@ describe("the run", () => {
     });
     const startLibrary = vi.fn(async () => {
       calls.push("library");
+      // The reads are saved and nothing is written yet: the page fills in from here.
+      expect(fs.existsSync(path.join(home, "distill", "digests.json"))).toBe(true);
       expect(fs.existsSync(path.join(home, "library", "task-s00", "task-s00.oneshot.md"))).toBe(
-        true,
+        false,
       );
       if (mode === "failed") throw new Error("could not bind");
-      return { address: "http://127.0.0.1:1111/#prompts&token=test", update: vi.fn() };
+      return { address: "http://127.0.0.1:1111/#preferences&token=test", update: vi.fn() };
     });
     const { code, text } = await run(
       { home, yes: true, library: mode !== "disabled" },
@@ -1079,14 +1200,195 @@ describe("the run", () => {
     expect(code).toBe(0);
     if (mode === "available" || mode === "no-color" || mode === "failed") {
       if (mode === "no-color") expect(output.raw()).not.toContain("\x1b]8;;http://127.0.0.1");
-      expect(calls.indexOf("library")).toBeGreaterThan(calls.indexOf("author"));
+      expect(calls.indexOf("library")).toBeGreaterThan(calls.lastIndexOf("digest"));
+      expect(calls.indexOf("library")).toBeLessThan(calls.indexOf("window"));
+      // The summaries start right after, beside grouping and writing.
       expect(calls.indexOf("generalize")).toBeGreaterThan(calls.indexOf("library"));
+      expect(calls.indexOf("generalize")).toBeLessThan(calls.indexOf("author"));
       expect(text).toContain(
         mode === "failed" ? "To browse your saved library" : "http://127.0.0.1:1111/",
       );
+      if (mode !== "failed") {
+        expect(text).toContain("Your reflections are open while this runs:");
+        expect(flat(text)).toContain(
+          "Your preferences are there now. Summaries and prompts arrive as they finish. The link works for 30 minutes after this run.",
+        );
+        expect(text.indexOf("Your reflections are open")).toBeLessThan(
+          text.indexOf("Grouping sessions"),
+        );
+      }
     } else {
       expect(startLibrary).not.toHaveBeenCalled();
     }
+  });
+
+  it("--no-prompts reads and summarizes, and groups and writes nothing", async () => {
+    const home = tmpHome(sessions(3));
+    const claude = fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }));
+    const { code, text } = await run({ home, yes: true, prompts: false }, { runners: [claude] });
+    expect(code).toBe(0);
+    expect(modelCalls(claude, "digest")).toBe(3);
+    expect(modelCalls(claude, "window")).toBe(0);
+    expect(modelCalls(claude, "author")).toBe(0);
+    expect(modelCalls(claude, "generalize")).toBeGreaterThan(0);
+    // Only the models of the steps that run are checked: reads and summaries share one.
+    expect(modelCalls(claude, "check")).toBe(1);
+    const plan = flat(text.slice(0, text.indexOf("Preparing reflection")));
+    expect(plan).toContain(
+      "Reads 3 sessions and your working preferences. No prompts are written in this run.",
+    );
+    expect(plan).toContain("Calls 3 session reads. Then, summarize preferences");
+    expect(plan).toContain("sonnet for every step");
+    expect(plan).not.toMatch(/grouping|writing call/i);
+    expect(plan).toContain("one tiny request checks that Claude Code is ready");
+    expect(flat(text)).not.toMatch(/Grouping sessions|Writing prompts/);
+    expect(fs.existsSync(path.join(home, "library"))).toBe(false);
+    expect(fs.existsSync(path.join(home, "distill", "digests.json"))).toBe(true);
+  });
+
+  it("--subagents says so on the plan and goes on to the roles on that approval", async () => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }));
+    const suggestSubagents = vi.fn(async () => 0);
+    const { code, text } = await run(
+      { home, yes: true, prompts: false, subagents: true, quality: "fast" },
+      { runners: [claude], suggestSubagents },
+    );
+    expect(code).toBe(0);
+    const plan = flat(text.slice(0, text.indexOf("Preparing reflection")));
+    expect(plan).toContain(
+      "Then choose and write subagent roles from those preferences: 1 call to choose roles, then one call for each role (2 to 15 roles). This approval covers them.",
+    );
+    // The reads are done before the roles are asked for, with the same CLI and plan.
+    expect(suggestSubagents).toHaveBeenCalledTimes(1);
+    expect(modelCalls(claude, "digest")).toBe(2);
+    const [args, deps] = suggestSubagents.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(args).toMatchObject({ home, quality: "fast", yes: true });
+    // Roles come from the preferences this run summarized, so its summaries are reused as they are.
+    expect(args["include-unreviewed"]).toBe(true);
+    expect(deps.approved).toBe(true);
+    // The closing menu belongs to the subagent step, so reflect prints no next step of its own.
+    expect(text).not.toContain("next:");
+  });
+
+  it("--subagents runs with the models, limits, and CLI the reflection plan showed", async () => {
+    const home = tmpHome(sessions(2));
+    const codex = fakeCli("codex", CODEX, (opts) => answer(opts, { preferences: true }));
+    const suggestSubagents = vi.fn(async () => 0);
+    const { code, text } = await run(
+      {
+        home,
+        yes: true,
+        prompts: false,
+        subagents: true,
+        runner: "codex",
+        model: "gpt-5.6-sol",
+        "author-model": "gpt-5.6-astra",
+        "input-budget": "200000",
+        timeout: "900",
+        concurrency: "4",
+      },
+      { runners: [fakeCli("claude", ALIASES), codex], suggestSubagents },
+    );
+    expect(code).toBe(0);
+    // The plan names the role model the person chose.
+    expect(flat(text)).toContain("gpt-5.6-astra for choosing and writing roles");
+    const [args] = suggestSubagents.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(args).toMatchObject({
+      runner: "codex",
+      model: "gpt-5.6-sol",
+      "author-model": "gpt-5.6-astra",
+      "input-budget": "200000",
+      timeout: "900",
+      concurrency: "4",
+    });
+    // Nothing the person did not give is invented.
+    const plain = await run(
+      { home: tmpHome(sessions(2)), yes: true, prompts: false, subagents: true },
+      {
+        runners: [fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }))],
+        suggestSubagents,
+      },
+    );
+    expect(plain.code).toBe(0);
+    const [bare] = suggestSubagents.mock.calls.at(-1) as unknown as [Record<string, unknown>];
+    for (const key of ["model", "author-model", "input-budget", "timeout", "concurrency"])
+      expect(bare, key).not.toHaveProperty(key);
+  });
+
+  it.each([
+    { name: "a declined plan", args: {}, input: "q\n", code: 2 },
+    { name: "--dry-run", args: { "dry-run": true }, input: undefined, code: 0 },
+  ])("--subagents after $name asks for no roles", async ({ args, input, code }) => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }));
+    const suggestSubagents = vi.fn(async () => 0);
+    const result = await run(
+      { home, subagents: true, ...args },
+      {
+        runners: [claude],
+        suggestSubagents,
+        ...(input !== undefined && { input: PassThrough.from([input]) }),
+      },
+    );
+    expect(result.code).toBe(code);
+    expect(suggestSubagents).not.toHaveBeenCalled();
+    expect(modelCalls(claude)).toBe(0);
+  });
+
+  it("--subagents with no preference in the sessions says so and asks for no roles", async () => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES);
+    const suggestSubagents = vi.fn(async () => 0);
+    const { code, text } = await run(
+      { home, yes: true, subagents: true },
+      { runners: [claude], suggestSubagents },
+    );
+    expect(code).toBe(0);
+    expect(flat(text)).toContain(
+      "No preferences were found in these sessions, so there are no subagents to suggest.",
+    );
+    expect(suggestSubagents).not.toHaveBeenCalled();
+  });
+
+  it("--subagents needs the preference summaries", async () => {
+    const home = tmpHome(sessions(2));
+    const { code, text } = await run({ home, subagents: true, generalize: false });
+    expect(code).toBe(1);
+    expect(text).toBe(
+      "error: --subagents needs the preference summaries; remove --no-generalize.\n",
+    );
+  });
+
+  it("summaries still running when the prompts are written show their progress from then on", async () => {
+    const home = tmpHome(sessions(2));
+    let written!: () => void;
+    const promptsWritten = new Promise<void>((resolve) => {
+      written = resolve;
+    });
+    const order: string[] = [];
+    const claude = fakeCli("claude", ALIASES, async (opts) => {
+      const stage = stageOf(opts);
+      order.push(stage);
+      // The summary call outlasts grouping and writing.
+      if (stage === "generalize") await promptsWritten;
+      const value = answer(opts, { preferences: true });
+      if (stage === "author") setImmediate(written);
+      return value;
+    });
+    const { code, text } = await run({ home, yes: true }, { runners: [claude] });
+    expect(code).toBe(0);
+    // It started beside the other steps, and nothing of it was printed until they were done.
+    expect(order.indexOf("generalize")).toBeLessThan(order.indexOf("author"));
+    const summarizing = text.indexOf("Summarizing working preferences (");
+    expect(summarizing).toBeGreaterThan(text.indexOf("Library: 1 prompt written."));
+    expect(text.indexOf("Working preferences could not be summarized")).toBeGreaterThan(
+      summarizing,
+    );
+    expect(fs.readdirSync(path.join(home, "library"))).toContain("task-s00");
   });
 
   it("runs every stage without a terminal: plain progress lines and a summary (golden)", async () => {
@@ -1520,8 +1822,8 @@ describe("the run", () => {
       .split("\n")
       .filter((line) => line.includes("Working preferences could not be summarized"));
     expect(notices).toHaveLength(1);
-    // The progress display's own failure line, then the one notice; nothing else repeats the error.
-    expect(flat(text).split("synthetic summary failure").length - 1).toBe(2);
+    // The summaries ran beside the other steps, so the one notice names the failure once.
+    expect(flat(text).split("synthetic summary failure").length - 1).toBe(1);
   });
 
   it("Ctrl-C during the session reads: ends promptly with 130, aborts the call in flight, says what is saved, and a rerun reuses finished reads", async () => {
@@ -1707,6 +2009,57 @@ describe("after the run", () => {
     expect(printed).not.toMatch(/--no-follow-up|--yes|--kirocrew-dir|--opencode-dir/);
   });
 
+  it("Ctrl-C while groups are made and the summaries run beside them: one line, both calls told to stop, nothing after it", async () => {
+    const home = tmpHome(sessions(2));
+    const host = fakeHost();
+    let exitCode: number | undefined;
+    const stopped: AbortSignal[] = [];
+    const inFlight = new Set<string>();
+    const exited = new Promise<void>((resolve) => {
+      const claude = fakeCli("claude", ALIASES, (opts) => {
+        const stage = stageOf(opts);
+        if (stage === "window" || stage === "generalize") {
+          if (opts.signal) stopped.push(opts.signal);
+          inFlight.add(stage);
+          // Both steps have a call in flight: now the person presses Ctrl-C.
+          if (inFlight.size === 2) host.emit("SIGINT");
+          return new Promise(() => {});
+        }
+        return answer(opts, { preferences: true });
+      });
+      const output = capture();
+      void runDistill(
+        { home, yes: true, concurrency: "1" },
+        {
+          runners: [claude],
+          host,
+          output,
+          now: FIXED_NOW,
+          sleep: (ms) => (ms < 3_000 ? Promise.resolve() : new Promise(() => {})),
+          exit: (code) => {
+            exitCode = code;
+            outputs.push(goldenText(output.text(), { roots: { [home]: "<HOME>" } }));
+            resolve();
+          },
+        },
+      );
+    });
+    await exited;
+    expect(exitCode).toBe(130);
+    expect([...inFlight].sort()).toEqual(["generalize", "window"]);
+    expect(stopped).toHaveLength(2);
+    expect(stopped.every((signal) => signal.aborted)).toBe(true);
+    const text = outputs.at(-1) ?? "";
+    expect(text.match(/Interrupted\./g)).toHaveLength(1);
+    expect(flat(text)).toContain(
+      "Interrupted. The session reads are saved; grouping starts again next time. To continue, run:",
+    );
+    // The stopping run says nothing about the summaries it gave up, and holds no lock.
+    const after = text.slice(text.indexOf("Interrupted."));
+    expect(after).not.toMatch(/Working preferences|could not be summarized|failed/);
+    expect(fs.existsSync(path.join(home, "distill", "writer.lock"))).toBe(false);
+  });
+
   it("Ctrl-C at the closing menu after a successful run exits 130", async () => {
     vi.stubEnv("HUMAN_HINDSIGHT_PLAIN", "1");
     const home = tmpHome(sessions(1));
@@ -1715,7 +2068,7 @@ describe("after the run", () => {
     const io = scripted(
       [
         // s starts the selected plan.
-        ["Choose [1/2/s/q]", "s\n"],
+        ["Choose [1/2/3/s/q]", "s\n"],
         ["What next?", "SIGINT"],
       ],
       host,

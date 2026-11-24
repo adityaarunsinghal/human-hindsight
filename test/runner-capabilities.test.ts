@@ -371,6 +371,39 @@ describe("preflight runs only local commands", () => {
     expect(io.calls.map((call) => call.options.timeoutMs)).toEqual([15_000, 15_000]);
   });
 
+  it("a CLI takes a reasoning effort only when its own help lists the flag", async () => {
+    const kiro = async (help: string | undefined) => {
+      resetCapabilityCache();
+      const io = fakeRunnerIo().script(
+        "kiro-cli",
+        { args: ["--version"] },
+        help === undefined ? { timedOut: true } : { stdout: "kiro-cli 3.5.0\n" },
+      );
+      if (help !== undefined) io.script("kiro-cli", { args: ["chat", "--help"] }, { stdout: help });
+      const runner = makeKiroRunner(kiroEnv(io));
+      expect(runner.acceptsEffort?.()).toBe(false);
+      await runner.preflight?.();
+      return runner.acceptsEffort?.();
+    };
+    const captured = fixture("kiro-runner/chat-help-3.5.0.txt");
+    expect(await kiro(captured)).toBe(true);
+    expect(await kiro(captured.replaceAll("--effort", "--x"))).toBe(false);
+    // An unknown version is not probed, so nothing is assumed.
+    expect(await kiro(undefined)).toBe(false);
+
+    const claude = async (help: string) => {
+      resetCapabilityCache();
+      const io = fakeRunnerIo().script("claude", { args: ["--help"] }, { stdout: help });
+      const runner = makeRunner("claude", { io });
+      expect(runner.acceptsEffort?.()).toBe(false);
+      await runner.preflight?.();
+      return runner.acceptsEffort?.();
+    };
+    expect(await claude(`${CLAUDE_HELP} --effort`)).toBe(true);
+    expect(await claude(CLAUDE_HELP)).toBe(false);
+    expect(makeRunner("codex", { io: fakeRunnerIo() }).acceptsEffort?.()).toBe(true);
+  });
+
   it("Kiro 3.x without a flag its model call needs is blocked before consent", async () => {
     const help = fixture("kiro-runner/chat-help-3.5.0.txt").replaceAll("--agent-engine", "--x");
     const io = fakeRunnerIo()

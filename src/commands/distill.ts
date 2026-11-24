@@ -12,7 +12,7 @@ import {
 import { runnerSessionShare } from "../core/environment.js";
 import { generalizedGap } from "../core/generalized.js";
 import { OUTCOME_NOT_VERIFIED, readLibrary } from "../core/library.js";
-import { parseQuality, type Quality } from "../core/model-plan.js";
+import { parseQuality, QUALITIES, type Quality } from "../core/model-plan.js";
 import { damagedFile } from "../core/plain-failure.js";
 import { preferenceReview, readPreferenceReviews } from "../core/preference-review.js";
 import { preferenceId, readObservedPreferences } from "../core/preferences.js";
@@ -23,6 +23,7 @@ import {
   type RunSession,
   type StageKey,
 } from "../core/run-session.js";
+import { MAX_ROLES, MIN_ROLES } from "../core/subagents.js";
 import { checkedValue, valueProblem, wholeOption } from "../core/value-rule.js";
 import {
   askYesNoAnswer,
@@ -50,7 +51,7 @@ import {
 } from "../distill/pipeline.js";
 import { guardRun, mutableOutput } from "../distill/run-guard.js";
 import type { Digest } from "../distill/schemas.js";
-import { startStageProgress } from "../distill/stage-events.js";
+import { heldProgress, startStageProgress } from "../distill/stage-events.js";
 import type { LiveLibrary } from "../gui/live-library.js";
 import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerIo } from "../runners/shared.js";
@@ -118,6 +119,10 @@ export interface DistillArgs {
   quality?: string;
   recent?: string;
   generalize?: boolean;
+  /** citty maps `--no-prompts` to `prompts: false`: read and summarize, group and write nothing. */
+  prompts?: boolean;
+  /** After the preference summaries, suggest subagent roles in the same run. */
+  subagents?: boolean;
   library?: boolean;
   "follow-up"?: boolean;
   project?: string;
@@ -223,6 +228,47 @@ export function computePlan(
   };
 }
 
+/**
+ * The lines that hand over the library link. They are printed as soon as the
+ * library holds something, so they say what is there and what is still to come.
+ */
+export function libraryLinkLines(o: {
+  address: string;
+  /** The reads found preferences, so that view has something to show. */
+  preferences: boolean;
+  /** What this run still adds, in the order it arrives: "summaries", "prompts". */
+  arriving: string[];
+  width: number;
+  color: boolean;
+  /** On a remote machine: what to do on the laptop so the address opens there. */
+  forward?: string[];
+}): string[] {
+  const s = palette(o.color);
+  const link = o.color ? `\u001b]8;;${o.address}\u001b\\${o.address}\u001b]8;;\u001b\\` : o.address;
+  const more = o.arriving.join(" and ");
+  const note = [
+    o.preferences ? "Your preferences are there now." : "Your prompts are there now.",
+    ...(more ? [`${more.charAt(0).toUpperCase()}${more.slice(1)} arrive as they finish.`] : []),
+    "The link works for 30 minutes after this run.",
+  ].join(" ");
+  const lines = [
+    s.bold(more ? "Your reflections are open while this runs:" : "Your reflections are open:"),
+    `  ${link}`,
+    ...wrapText(note, o.width, { indent: "  " }).map(s.dim),
+  ];
+  if (o.forward)
+    lines.push(
+      "  This is a remote machine. On your laptop, forward the port first:",
+      ...o.forward.map((line) => `    ${line}`),
+    );
+  return lines;
+}
+
+/** A session left out for its size: its export name and its length. */
+function leftOutName(entry: { export: string; chars: number }): string {
+  return `${cyan(entry.export)} ${dim(`(${entry.chars.toLocaleString("en-US")} characters)`)}`;
+}
+
 /** Apply the same UTF-16 character count as the digest stage before spending anything. */
 function computeOversized(
   home: string,
@@ -265,7 +311,9 @@ export interface DistillDeps {
    * returns at once.
    */
   sleep?(ms: number): Promise<void>;
-  startLibrary?: (home: string) => Promise<LiveLibrary>;
+  startLibrary?: (home: string, o?: { port?: number }) => Promise<LiveLibrary>;
+  /** Runs the subagent step that `--subagents` goes on to (default: the real command). */
+  suggestSubagents?: typeof import("./suggest-subagents.js").runSuggestSubagents;
   /** Legacy test seam; distill no longer performs clipboard writes. */
   clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
@@ -273,6 +321,8 @@ export interface DistillDeps {
 /** Large histories are offered this many of their newest sessions first. */
 const QUICK_START = 25;
 const NOTHING_SENT = "Nothing was sent.";
+/** How many sessions left out for their size are named in the closing lines. */
+const LEFT_OUT_SHOWN = 5;
 
 /**
  * Where each setting that can pin the CLI came from, read from the arguments
@@ -318,6 +368,9 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       );
       if (args.group !== false) clusterBatchSize = size;
     }
+    // The roles are chosen from the preference summaries.
+    if (args.subagents && args.generalize === false)
+      throw new Error("--subagents needs the preference summaries; remove --no-generalize.");
   } catch (error) {
     (deps.output ?? process.stdout).write(`error: ${(error as Error).message}\n`);
     return 1;
@@ -552,7 +605,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       session,
       selectRunner: (chosen) => {
         session = chosen;
-        args = { ...args, runner: chosen.ledgerRunner };
+        // The chosen CLI and the ones it may move to, as `--runner` takes them.
+        args = { ...args, runner: chosen.order.join(",") };
       },
       plan,
       eligible: everything.digests,
@@ -565,6 +619,38 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
     });
   } finally {
     await session.finalize();
+  }
+  if (code === 0 && args.subagents && !args["dry-run"]) {
+    // The plan named this step and its calls, so it runs on that approval.
+    // It ends with its own closing menu.
+    if (!readObservedPreferences(home).length) {
+      write("No preferences were found in these sessions, so there are no subagents to suggest.");
+      return 0;
+    }
+    const { runSuggestSubagents } = await import("./suggest-subagents.js");
+    // It runs with what the plan showed: the same CLIs in the same order, the
+    // same models, and the same limits, and it builds roles from the
+    // preferences this run summarized, so the summaries are reused as they
+    // are and its only calls are the ones the plan named.
+    const carried = (key: "model" | "author-model" | "input-budget" | "timeout" | "concurrency") =>
+      args[key] === undefined ? {} : { [key]: args[key] };
+    return (deps.suggestSubagents ?? runSuggestSubagents)(
+      {
+        home,
+        runner: args.runner,
+        quality: session.quality,
+        "include-unreviewed": true,
+        ...carried("model"),
+        ...carried("author-model"),
+        ...carried("input-budget"),
+        ...carried("timeout"),
+        ...carried("concurrency"),
+        ...(args.yes && { yes: true }),
+        ...(args["follow-up"] === false && { "follow-up": false }),
+        ...(args.verbose && { verbose: true }),
+      },
+      { approved: true, input: deps.input, output: out, host: deps.host, runners: deps.runners },
+    );
   }
   if (
     code === 0 &&
@@ -605,6 +691,23 @@ const SAVED_AT = {
   writing: "Prompts written so far are saved; the rest are written next time.",
   preferences: "Your prompts are saved, and so are the preference batches that finished.",
 } as const;
+
+/**
+ * Prompts written from part of their group: the whole group did not fit one
+ * call, so the whole sessions that fit were used. The command that follows
+ * the sentence uses every session, each shortened to fit.
+ */
+export function fittedLine(
+  fitted: { slug: string; used: number; sessions: number }[],
+): string | undefined {
+  if (!fitted.length) return undefined;
+  const one = fitted.length === 1;
+  const named = fitted
+    .slice(0, 3)
+    .map((task) => `${task.slug} (${task.used} of ${counted(task.sessions, "session")})`);
+  const more = fitted.length > named.length ? `, and ${fitted.length - named.length} more` : "";
+  return `${counted(fitted.length, "prompt was", "prompts were")} written from the whole sessions that fit the size limit per call, and the other sessions of ${one ? "its group" : "their groups"} were left out: ${named.join(", ")}${more}. To use every session, each shortened to fit, run:`;
+}
 
 /**
  * Prompts the person edited, which this run kept as they are: one plain line,
@@ -673,14 +776,19 @@ export function unverifiedLine(n: number): string | undefined {
  * The working preferences line after a run: how many were summarized, or how
  * far a run that stopped part way got, or that none could be summarized.
  */
-export function preferencesLine(result: GeneralizeResult, inputs: number): string {
+export function preferencesLine(
+  result: GeneralizeResult,
+  inputs: number,
+  /** False for a run that wrote no prompts (`--no-prompts`). */
+  prompts = true,
+): string {
   if (result.status === "done")
     return `Working preferences: ${counted(result.lessons, "preference")} summarized from ${counted(inputs, "observation")}${result.reused ? ` (${counted(result.reused, "batch", "batches")} reused)` : ""}.`;
   const gap = result.artifact ? generalizedGap(result.artifact) : undefined;
   if (gap)
     return `Working preferences: ${gap.summarized.toLocaleString("en-US")} of ${counted(gap.total, "preference")} summarized; run npx human-hindsight reflect to finish (finished work is reused).`;
   const first = result.errors[0] ? ` (${result.errors[0]})` : "";
-  return `Working preferences could not be summarized this time${first}. Your prompts are saved; run npx human-hindsight reflect to finish them.`;
+  return `Working preferences could not be summarized this time${first}. ${prompts ? "Your prompts are saved" : "Your session reads are saved"}; run npx human-hindsight reflect to finish them.`;
 }
 
 /**
@@ -733,7 +841,7 @@ async function distillSelectedSessions(opts: {
   /** Silence this run's output after Ctrl-C has printed its line. */
   mute?: () => void;
 }): Promise<number> {
-  const { home, explicitArgs, deps, plan, clusterBatchSize, budget, truncate, timeoutMs } = opts;
+  const { home, explicitArgs, deps, clusterBatchSize, budget, truncate, timeoutMs } = opts;
   let { session, args } = opts;
   const out = deps.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
@@ -755,16 +863,59 @@ async function distillSelectedSessions(opts: {
   const bullet = dim(glyph("•", "-"));
   const noGroup = args.group === false;
   const concurrency = parseConcurrency(args.concurrency);
+
+  // Sessions longer than the size limit per call. Text is shortened only when
+  // asked for (--truncate=extreme), so by default they are left out of this
+  // run and everything else goes on: the plan names them before anything is
+  // sent, and the closing lines give the command that includes them.
+  // Known limit: a session read once with --truncate=extreme is left out
+  // again by a later default run, and the grouping follows.
+  const oversized = await withSpinner(
+    out,
+    "Checking session sizes",
+    async () => computeOversized(home, opts.plan.eligible, budget),
+    { plainLine: false },
+  );
+  const leftOut = truncate === "never" ? oversized : [];
+  const tooLong = new Set(leftOut.map((entry) => entry.export));
+  const plan = leftOut.length
+    ? computePlan(
+        opts.plan.eligible.filter((entry) => !tooLong.has(entry.export)),
+        { minSubstance: 0, noGroup, clusterBatchSize },
+      )
+    : opts.plan;
+  /** The command that includes them. After a run it keeps the quality that run used. */
+  const includeLeftOut = (ran: boolean) =>
+    nextCommandText("reflect", {
+      ...args,
+      home,
+      ...(ran && { quality: session.quality }),
+      truncate: "extreme",
+    });
+  if (leftOut.length && plan.digests === 0) {
+    // Nothing fits as it is, so there is no run to go on with.
+    say(
+      `${leftOut.length === 1 ? "The selected session is" : `All ${counted(leftOut.length, "selected session")} are`} longer than the size limit per call of ${budget.toLocaleString("en-US")} characters, so nothing was sent:`,
+    );
+    for (const entry of leftOut) write(`  ${skip(leftOutName(entry))}`);
+    command(
+      `To shorten ${leftOut.length === 1 ? "it" : "them"} to fit and reflect on ${leftOut.length === 1 ? "it" : "them"}, run:`,
+      includeLeftOut(false),
+    );
+    return 1;
+  }
   // The readiness check runs before the first real model call of the run and
   // never when nothing needs one. Every stage call goes through this gate.
   // A failed check prints its line once; the calls it stops fail with its
   // first sentence ("Claude Code is not signed in.").
   const gate: { result?: Promise<{ ok: true; line?: string } | { ok: false; line: string }> } = {};
   // Exactly the stages this run can call, so no model is checked that is never used.
+  // Without prompts the run reads and summarizes: nothing is grouped or written.
+  const prompts = args.prompts !== false;
   const stages: StageKey[] = [
     "digest",
-    ...(noGroup ? [] : (["cluster"] as const)),
-    "author",
+    ...(prompts && !noGroup ? (["cluster"] as const) : []),
+    ...(prompts ? (["author"] as const) : []),
     ...(args.generalize === false ? [] : (["generalize"] as const)),
   ];
   const ink = palette(canColor({ output: out }));
@@ -772,7 +923,7 @@ async function distillSelectedSessions(opts: {
   const projects = new Set(projectNames.filter(Boolean));
   const ready = () => {
     if (!gate.result) {
-      const quality = session.quality === "balanced" ? "Balanced" : "Best";
+      const quality = { fast: "Fast", balanced: "Balanced", best: "Best" }[session.quality];
       const runner = RUNNER_INFO[session.ledgerRunner].displayName;
       write(
         `${ink.bold("Preparing reflection")} ${glyph("·", "-")} ${ink[RUNNER_INK[session.ledgerRunner]](runner)} ${glyph("·", "-")} ${ink.yellow(quality)}`,
@@ -809,33 +960,6 @@ async function distillSelectedSessions(opts: {
     timeoutMs,
   };
 
-  // Consent-time (pre-spend) overflow estimate.
-  const oversized = await withSpinner(
-    out,
-    "Checking session sizes",
-    async () => computeOversized(home, plan.eligible, budget),
-    { plainLine: false },
-  );
-
-  // Default (--truncate=never): refuse BEFORE spending anything if any session
-  // exceeds the budget. Nothing is ever cut silently. the user chooses a flag.
-  // (Dry-run still previews the plan below and notes the would-be block.)
-  if (!args["dry-run"] && truncate === "never" && oversized.length > 0) {
-    write();
-    say(
-      `${counted(oversized.length, "session is", "sessions are")} longer than the size limit per call of ${budget.toLocaleString("en-US")} characters, so nothing was sent:`,
-    );
-    for (const o of oversized) {
-      write(
-        `  ${skip(`${cyan(o.export)} ${dim(`(${o.chars.toLocaleString("en-US")} characters)`)}`)}`,
-      );
-    }
-    say(
-      "To include them, run again with --truncate=extreme to shorten them to fit, raise --input-budget, or narrow the scope with --project or --min-substance.",
-    );
-    return 1;
-  }
-
   // --fresh intent is confirmed up front, but the checkpoints are NOT deleted
   // until the MAIN consent gate and the readiness check also pass: declining
   // after confirming --fresh must not have already destroyed paid progress
@@ -864,12 +988,12 @@ async function distillSelectedSessions(opts: {
 
   // Both reuse counts are computed before the screen is shown, so the numbers
   // on screen are right whichever plan is picked.
-  function preview(session: RunSession, chosenRunner?: RunnerName) {
+  function preview(session: RunSession, chosenRunner?: string) {
     const description = session.describe();
     const selectedQuality = session.quality;
     const choices = {} as NonNullable<DistillPlan["choices"]>;
     const reusedBy = {} as Record<Quality, Set<string>>;
-    for (const quality of ["balanced", "best"] as const) {
+    for (const quality of QUALITIES) {
       session.quality = quality;
       const { reused, ...reuse } = planDigestReuse({
         home,
@@ -888,6 +1012,7 @@ async function distillSelectedSessions(opts: {
         cluster: session.displayModelFor("cluster"),
         author: session.displayModelFor("author"),
         generalize: session.displayModelFor("generalize"),
+        ...(args.subagents && { roles: session.displayModelFor("roles") }),
         notes: description.plans[quality].notes,
       };
     }
@@ -901,16 +1026,18 @@ async function distillSelectedSessions(opts: {
       library: readLibrary(home).length,
       qualityFixed: Boolean(args.quality),
       digests: plan.digests - choices[selectedQuality].reusable,
-      cluster: plan.cluster,
-      clusterWindowsEstimate: plan.clusterWindowsEstimate,
-      clusterMergeEstimate: plan.clusterMergeEstimate,
-      authorEstimate: plan.authorEstimate,
+      prompts,
+      ...(args.subagents && { roles: { min: MIN_ROLES, max: MAX_ROLES } }),
+      cluster: prompts ? plan.cluster : 0,
+      clusterWindowsEstimate: prompts ? plan.clusterWindowsEstimate : undefined,
+      clusterMergeEstimate: prompts ? plan.clusterMergeEstimate : undefined,
+      authorEstimate: prompts ? plan.authorEstimate : 0,
       runnerName: session.ledgerRunner,
       session: description,
       quality: selectedQuality,
       choices,
       generalize: args.generalize !== false,
-      grouping: !noGroup,
+      grouping: prompts && !noGroup,
       concurrency,
       force: args.force,
       model: session.displayModelFor("digest"),
@@ -934,13 +1061,13 @@ async function distillSelectedSessions(opts: {
     select() {
       let candidate = cached.get(choice.name);
       if (!candidate) {
-        const pinned = choice.select();
-        candidate = { session: pinned, preview: preview(pinned, choice.name) };
+        const chosen = choice.select();
+        candidate = { session: chosen, preview: preview(chosen, chosen.order.join(",")) };
         cached.set(choice.name, candidate);
       }
       session = candidate.session;
       selected = candidate.preview;
-      args = { ...args, runner: choice.name };
+      args = { ...args, runner: session.order.join(",") };
       opts.selectRunner(session);
       return selected.plan;
     },
@@ -1122,134 +1249,8 @@ async function distillSelectedSessions(opts: {
     // completing the reachable work. Blocked-by-budget sessions count too.
     let hadFailure = digestResult.failed.length > 0 || digestResult.blocked.length > 0;
 
-    write();
-    let stage: "cluster" | "author" = "cluster";
-    phase = "grouping";
-    try {
-      // Backend per export (absent means claude): names the corpus in the
-      // grouping prompt (named single-source, neutral for merged corpora).
-      const clusterOrigins: Record<string, SourceName> = {};
-      for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
-      const clusterProgress = startStageProgress(
-        out,
-        noGroup ? "Preparing one task per session" : "Grouping sessions",
-        progressOptions,
-      );
-      const clusterResult = await runClusterStage({
-        ...common,
-        digests: digestsForCluster,
-        origins: clusterOrigins,
-        generation: digestResult.generation,
-        noGroup,
-        model: session.modelFor("cluster"),
-        batchSize: clusterBatchSize,
-        progress: clusterProgress,
-      }).finally(() => clusterProgress.end());
-      write();
-      write(
-        groupingLine({
-          sessions: Object.keys(digestsForCluster).length,
-          groups: clusterResult.tasks.length,
-          misc: clusterResult.misc.length,
-          noGroup,
-          reused: clusterResult.resumed,
-        }),
-      );
-      if (args.verbose)
-        for (const t of clusterResult.tasks)
-          write(`  ${bullet} ${t.slug} (${counted(t.members.length, "session")})`);
-
-      stage = "author";
-      phase = "writing";
-      // The library checkpoints each successfully written prompt.
-      write();
-      const authorProgress = startStageProgress(out, "Writing prompts", progressOptions);
-      const authorResult = await runAuthorStage({
-        ...common,
-        tasks: clusterResult.tasks,
-        digests: digestsForCluster,
-        entries: plan.eligible,
-        generation: digestResult.generation,
-        toolVersion: pkg.version,
-        model: session.modelFor("author"),
-        progress: authorProgress,
-        breaker: args.breaker !== false,
-        truncate,
-        force: args.force === true,
-        concurrency,
-      }).finally(() => authorProgress.end());
-
-      write();
-      // Wrapped like every sentence around it; each line keeps the color.
-      for (const line of wrapText(librarySentence(authorResult), width))
-        write(authorResult.authored.length > 0 ? green(line) : line);
-      if (authorResult.skipped.length) {
-        say(
-          "A prompt is not written for work that was abandoned. Preferences from those sessions are still kept.",
-        );
-        if (args.verbose)
-          for (const s of authorResult.skipped)
-            say(`${glyph("·", "-")} ${s.slug}: ${s.reason}`, "  ");
-      }
-      const unverified = unverifiedLine(authorResult.unverified.length);
-      if (unverified) say(unverified);
-      const keptNames = authorResult.kept.map((task) => task.slug);
-      const kept = keptLine(keptNames, args.verbose === true);
-      if (kept) say(kept);
-
-      if (authorResult.failed.length > 0) {
-        write();
-        write("Prompts that could not be written (the others are saved):");
-        for (const f of authorResult.failed) failure(`${f.export}: ${f.error}`);
-        command(
-          "To try only these again, run:",
-          retryCommandText("author", { ...explicitArgs, home }),
-        );
-        hadFailure = true;
-      }
-
-      if (authorResult.notAttempted.length) {
-        hadFailure = true;
-        say(
-          `${counted(authorResult.notAttempted.length, "remaining prompt was", "remaining prompts were")} not attempted. Run npx human-hindsight reflect to continue.`,
-        );
-      }
-    } catch (err) {
-      failure((err as Error).message);
-      command(
-        `Saved progress is kept. To try the ${stage === "cluster" ? "grouping" : "prompt writing"} again, run:`,
-        retryCommandText(stage, { ...explicitArgs, home }),
-      );
-      hadFailure = true;
-    }
-
     const reviews = readPreferenceReviews(home);
     const observed = readObservedPreferences(home);
-    let liveLibrary: LiveLibrary | undefined;
-    if (
-      args.library !== false &&
-      isInteractive({ input: deps.input, output: out }) &&
-      (readLibrary(home).length || observed.length)
-    ) {
-      try {
-        const { startLiveLibrary } = await import("../gui/live-library.js");
-        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(home);
-        const { address } = liveLibrary;
-        write("Browse your library now or within 30 minutes after this command exits:");
-        write(
-          canColor({ output: out })
-            ? `\u001b]8;;${address}\u001b\\${address}\u001b]8;;\u001b\\`
-            : address,
-        );
-        const { isRemoteSession, forwardCommand } = await import("./gui.js");
-        if (isRemoteSession(process.env)) {
-          write("On your laptop, forward the port first:");
-          write(forwardCommand(Number(new URL(address).port), process.env));
-        }
-      } catch {
-        command("To browse your saved library, run:", nextCommandText("gui", { ...args, home }));
-      }
-    }
     const batch = new Set(Object.keys(digestsForCluster));
     const highlight = reviews.invalid
       ? undefined
@@ -1261,15 +1262,61 @@ async function distillSelectedSessions(opts: {
             ) &&
             preferenceReview(home, pref, reviews.reviews).status !== "dismissed",
         );
-    let instruction: string | undefined;
-    let preferenceSummariesIncomplete = false;
-    // Working preferences come last. A failure here never fails the library.
-    if (args.generalize !== false) {
-      phase = "preferences";
-      let progress: ReturnType<typeof startStageProgress> | undefined;
+
+    // The library opens as soon as it holds something: the preferences found
+    // by the reads now, the summaries and the prompts as each one finishes.
+    let liveLibrary: LiveLibrary | undefined;
+    const summarizing = args.generalize !== false;
+    const openLibrary = async (arriving: string[]) => {
+      if (liveLibrary || args.library === false) return;
+      if (!isInteractive({ input: deps.input, output: out })) return;
+      const preferences = observed.length > 0;
+      if (!preferences && !readLibrary(home).length) return;
       try {
-        const model = session.modelFor("generalize");
-        const preferences = planGeneralize({
+        const { startLiveLibrary } = await import("../gui/live-library.js");
+        const { isRemoteSession, forwardingLines, REMOTE_PORT } = await import("./gui.js");
+        const remote = isRemoteSession(process.env);
+        // A remote machine keeps one port, so a port forwarded once keeps working.
+        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(
+          home,
+          remote ? { port: REMOTE_PORT } : {},
+        );
+        const { address } = liveLibrary;
+        write();
+        for (const line of libraryLinkLines({
+          address,
+          preferences,
+          arriving,
+          width,
+          color: canColor({ output: out }),
+          forward: remote ? forwardingLines(Number(new URL(address).port), process.env) : undefined,
+        }))
+          write(line);
+      } catch {
+        command("To browse your saved library, run:", nextCommandText("gui", { ...args, home }));
+      }
+    };
+    await openLibrary([...(summarizing ? ["summaries"] : []), ...(prompts ? ["prompts"] : [])]);
+
+    // The preference summaries need only the reads, so they start here and
+    // run beside grouping and writing. A failure never fails the library.
+    type SummaryOutcome = {
+      line: string;
+      incomplete: boolean;
+      /** The stage ran, so its result line stands apart from the lines above. */
+      ran?: boolean;
+      lessons?: GeneralizeResult["lessonList"];
+    };
+    const startSummaries = async (): Promise<{ finish(): Promise<SummaryOutcome> }> => {
+      const failed = (error: unknown): SummaryOutcome => ({
+        incomplete: true,
+        ran: true,
+        line: `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). ${prompts ? "Your prompts are saved" : "Your session reads are saved"}; run npx human-hindsight reflect to finish them.`,
+      });
+      const model = session.modelFor("generalize");
+      let preferences: ReturnType<typeof planGeneralize>;
+      try {
+        preferences = planGeneralize({
           home,
           budget,
           model,
@@ -1277,51 +1324,210 @@ async function distillSelectedSessions(opts: {
           selection: "all-candidates",
           current: reviews.invalid ? undefined : { prefs: observed, reviews: reviews.reviews },
         });
-        if (preferences?.damaged)
-          say("Your saved preference summaries could not be read and will be rebuilt.");
-        if (preferences) {
-          progress = startStageProgress(
-            out,
-            `Summarizing working preferences (${counted(preferences.inputs.length, "signal")}, ${counted(preferences.windows.length, "batch", "batches")})`,
-            progressOptions,
-          );
-          liveLibrary?.update({ kind: "begin", total: preferences.windows.length });
-          const result = await runGeneralizeStage({
-            onBatch: (index, lessons) => liveLibrary?.update({ kind: "batch", index, lessons }),
-            home,
-            plan: preferences,
-            runner: gatedRun,
-            model,
-            concurrency,
-            timeoutMs,
-            output: out,
-            progress,
-          });
-          progress.end();
-          write();
-          preferenceSummariesIncomplete = result.status !== "done";
-          liveLibrary?.update({ kind: preferenceSummariesIncomplete ? "interrupted" : "complete" });
-          say(preferencesLine(result, preferences.inputs.length));
-          if (highlight)
-            instruction = result.lessonList.find(
-              (lesson) =>
-                lesson.disposition === "generalized" &&
-                lesson.source_ids.includes(preferenceId(highlight)),
-            )?.instruction;
-        } else {
-          write("No working preferences to summarize yet.");
-        }
       } catch (error) {
-        preferenceSummariesIncomplete = true;
-        liveLibrary?.update({ kind: "interrupted" });
-        progress?.end();
-        say(
-          `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run npx human-hindsight reflect to finish them.`,
-        );
-      } finally {
-        progress?.end();
+        return { finish: async () => failed(error) };
       }
+      if (!preferences)
+        return {
+          finish: async () => ({
+            line: "No working preferences to summarize yet.",
+            incomplete: false,
+          }),
+        };
+      if (preferences.damaged)
+        say("Your saved preference summaries could not be read and will be rebuilt.");
+      const inputs = preferences.inputs.length;
+      const label = `Summarizing working preferences (${counted(inputs, "signal")}, ${counted(preferences.windows.length, "batch", "batches")})`;
+      // A stage with calls to make checks the CLI first, here in the open, so
+      // the check's lines never land inside another step's progress display.
+      if (preferences.reusable < preferences.windows.length) await ready();
+      // Only one step owns the progress display, so this one reports into a
+      // held sink until the other steps are done.
+      const held = heldProgress();
+      let settled = false;
+      liveLibrary?.update({ kind: "begin", total: preferences.windows.length });
+      const running = runGeneralizeStage({
+        onBatch: (index, lessons) => liveLibrary?.update({ kind: "batch", index, lessons }),
+        home,
+        plan: preferences,
+        runner: gatedRun,
+        model,
+        concurrency,
+        timeoutMs,
+        output: out,
+        progress: held,
+      })
+        .then(
+          (result): SummaryOutcome => {
+            const incomplete = result.status !== "done";
+            liveLibrary?.update({ kind: incomplete ? "interrupted" : "complete" });
+            return {
+              line: preferencesLine(result, inputs, prompts),
+              incomplete,
+              ran: true,
+              lessons: result.lessonList,
+            };
+          },
+          (error: unknown): SummaryOutcome => {
+            liveLibrary?.update({ kind: "interrupted" });
+            return failed(error);
+          },
+        )
+        .finally(() => {
+          settled = true;
+        });
+      return {
+        async finish() {
+          // Still going once the other steps are done: its progress shows from here.
+          const display = settled ? undefined : startStageProgress(out, label, progressOptions);
+          if (display) held.show(display);
+          try {
+            return await running;
+          } finally {
+            display?.end();
+            if (!display) for (const line of held.unseen()) write(line);
+          }
+        },
+      };
+    };
+    const summaries = summarizing ? await startSummaries() : undefined;
+
+    // Grouping and writing, unless this run is for the preferences alone.
+    const groupAndWrite = async () => {
+      write();
+      let stage: "cluster" | "author" = "cluster";
+      phase = "grouping";
+      try {
+        // Backend per export (absent means claude): names the corpus in the
+        // grouping prompt (named single-source, neutral for merged corpora).
+        const clusterOrigins: Record<string, SourceName> = {};
+        for (const e of plan.eligible) clusterOrigins[e.export] = e.origin ?? "claude";
+        const clusterProgress = startStageProgress(
+          out,
+          noGroup ? "Preparing one task per session" : "Grouping sessions",
+          progressOptions,
+        );
+        const clusterResult = await runClusterStage({
+          ...common,
+          digests: digestsForCluster,
+          origins: clusterOrigins,
+          generation: digestResult.generation,
+          noGroup,
+          model: session.modelFor("cluster"),
+          batchSize: clusterBatchSize,
+          progress: clusterProgress,
+        }).finally(() => clusterProgress.end());
+        write();
+        write(
+          groupingLine({
+            sessions: Object.keys(digestsForCluster).length,
+            groups: clusterResult.tasks.length,
+            misc: clusterResult.misc.length,
+            noGroup,
+            reused: clusterResult.resumed,
+          }),
+        );
+        if (args.verbose)
+          for (const t of clusterResult.tasks)
+            write(`  ${bullet} ${t.slug} (${counted(t.members.length, "session")})`);
+
+        stage = "author";
+        phase = "writing";
+        // The library checkpoints each successfully written prompt.
+        write();
+        const authorProgress = startStageProgress(out, "Writing prompts", progressOptions);
+        const authorResult = await runAuthorStage({
+          ...common,
+          tasks: clusterResult.tasks,
+          digests: digestsForCluster,
+          entries: plan.eligible,
+          generation: digestResult.generation,
+          toolVersion: pkg.version,
+          model: session.modelFor("author"),
+          progress: authorProgress,
+          breaker: args.breaker !== false,
+          truncate,
+          force: args.force === true,
+          concurrency,
+        }).finally(() => authorProgress.end());
+
+        write();
+        // Wrapped like every sentence around it; each line keeps the color.
+        for (const line of wrapText(librarySentence(authorResult), width))
+          write(authorResult.authored.length > 0 ? green(line) : line);
+        if (authorResult.skipped.length) {
+          say(
+            "A prompt is not written for work that was abandoned. Preferences from those sessions are still kept.",
+          );
+          if (args.verbose)
+            for (const s of authorResult.skipped)
+              say(`${glyph("·", "-")} ${s.slug}: ${s.reason}`, "  ");
+        }
+        const unverified = unverifiedLine(authorResult.unverified.length);
+        if (unverified) say(unverified);
+        const keptNames = authorResult.kept.map((task) => task.slug);
+        const kept = keptLine(keptNames, args.verbose === true);
+        if (kept) say(kept);
+        const fitted = fittedLine(authorResult.fitted);
+        if (fitted)
+          command(
+            fitted,
+            nextCommandText("reflect", {
+              ...args,
+              home,
+              quality: session.quality,
+              truncate: "extreme",
+            }),
+          );
+
+        if (authorResult.failed.length > 0) {
+          write();
+          write("Prompts that could not be written (the others are saved):");
+          for (const f of authorResult.failed) failure(`${f.export}: ${f.error}`);
+          command(
+            "To try only these again, run:",
+            retryCommandText("author", { ...explicitArgs, home }),
+          );
+          hadFailure = true;
+        }
+
+        if (authorResult.notAttempted.length) {
+          hadFailure = true;
+          say(
+            `${counted(authorResult.notAttempted.length, "remaining prompt was", "remaining prompts were")} not attempted. Run npx human-hindsight reflect to continue.`,
+          );
+        }
+      } catch (err) {
+        failure((err as Error).message);
+        command(
+          `Saved progress is kept. To try the ${stage === "cluster" ? "grouping" : "prompt writing"} again, run:`,
+          retryCommandText(stage, { ...explicitArgs, home }),
+        );
+        hadFailure = true;
+      }
+    };
+    if (prompts) await groupAndWrite();
+
+    // Nothing to open after the reads (no preference in them): the prompts are there now.
+    await openLibrary(summarizing ? ["summaries"] : []);
+
+    let instruction: string | undefined;
+    let preferenceSummariesIncomplete = false;
+    if (summaries) {
+      phase = "preferences";
+      const outcome = await summaries.finish();
+      preferenceSummariesIncomplete = outcome.incomplete;
+      if (outcome.ran) write();
+      say(outcome.line);
+      if (highlight && outcome.lessons)
+        instruction = outcome.lessons.find(
+          (lesson) =>
+            lesson.disposition === "generalized" &&
+            lesson.source_ids.includes(preferenceId(highlight)),
+        )?.instruction;
     }
+    // Nothing more arrives from here on, so the page stops saying so.
+    liveLibrary?.update({ kind: "finished" });
     // One story about the preferences, the same sentence `status` and
     // `preferences` print, with the review command alone on its own line.
     for (const line of fitLines(preferenceStoryLines(home, { ...args, home }), width)) write(line);
@@ -1352,6 +1558,16 @@ async function distillSelectedSessions(opts: {
     say(
       `${counted(doneTotal, "session read")} ${glyph("·", "-")} ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`,
     );
+    if (leftOut.length) {
+      const one = leftOut.length === 1;
+      say(
+        `${counted(leftOut.length, "session was", "sessions were")} left out for being longer than the size limit per call of ${budget.toLocaleString("en-US")} characters:`,
+      );
+      for (const entry of leftOut.slice(0, LEFT_OUT_SHOWN)) write(`  ${skip(leftOutName(entry))}`);
+      if (leftOut.length > LEFT_OUT_SHOWN)
+        write(`  ${dim(`and ${(leftOut.length - LEFT_OUT_SHOWN).toLocaleString("en-US")} more`)}`);
+      command(`To include ${one ? "it" : "them"}, shortened to fit, run:`, includeLeftOut(true));
+    }
     if (highlight) {
       write(ink.bold(ink.magenta("What you care about")));
       say(terminalExcerpt(preferenceReview(home, highlight, reviews.reviews).text, 190));
@@ -1396,6 +1612,17 @@ export default defineCommand({
       description:
         "Serve the local library during an interactive reflection (skip with --no-library)",
     },
+    prompts: {
+      type: "boolean",
+      default: true,
+      description:
+        "Group sessions and write reusable prompts (use --no-prompts to read sessions and summarize preferences only)",
+    },
+    subagents: {
+      type: "boolean",
+      description:
+        "After the preference summaries, suggest subagent roles in the same run, on the same approval",
+    },
     generalize: {
       type: "boolean",
       default: true,
@@ -1431,7 +1658,7 @@ export default defineCommand({
       type: "string",
       valueHint: "cli",
       description:
-        "Which local CLI runs the reflection: claude, codex, kiro, opencode, or auto (default: auto)",
+        "Which local CLI runs the reflection: claude, codex, kiro, opencode, or auto (default). One name keeps the run on that CLI; several, separated by commas, are tried in order",
     },
     fresh: {
       type: "boolean",

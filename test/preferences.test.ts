@@ -444,7 +444,7 @@ describe("runPreferences", () => {
     );
     expect(code).toBe(expected);
     expect(called).toBe(sent);
-    expect(cap.text()).toContain("Choose [1/2/s/q]");
+    expect(cap.text()).toContain("Choose [1/2/3/s/q]");
   });
 
   it("--consolidate with --yes runs one call and prints the merged block", async () => {

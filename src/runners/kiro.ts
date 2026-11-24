@@ -31,7 +31,7 @@ import {
   stripFence,
   TOOL_BAN_LINE,
 } from "./shared.js";
-import type { AgentRunner, RunOptions } from "./types.js";
+import type { AgentRunner, Effort, RunOptions } from "./types.js";
 
 /**
  * runners/kiro.ts: the kiro-cli runner.
@@ -329,13 +329,17 @@ function kiroMajor(env: KiroEnv): Promise<number | null> {
   return cached;
 }
 
+/** Per-environment: whether this CLI's own `chat --help` lists `--effort`. */
+const effortFlag = new WeakMap<KiroEnv, boolean>();
+
 /** The `chat` args for one stage call on the detected CLI generation. */
-export function kiroChatArgs(major: number | null, model?: string): string[] {
+export function kiroChatArgs(major: number | null, model?: string, effort?: Effort): string[] {
   const args = ["chat", "--no-interactive", "--agent", KIRO_NO_TOOLS_AGENT];
   if (major !== null && major >= 3) {
     args.push("--agent-engine", "v2", "--output-format", "stream-json");
   }
   if (model) args.push("--model", model);
+  if (effort) args.push("--effort", effort);
   return args;
 }
 
@@ -523,7 +527,8 @@ export async function runKiro<T>(
   env.writeAgent(scratchCwd, KIRO_NO_TOOLS_AGENT);
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const major = await kiroMajor(env);
-  const args = kiroChatArgs(major, opts.model);
+  // The effort is passed only when preflight found the flag in this CLI's help.
+  const args = kiroChatArgs(major, opts.model, effortFlag.get(env) ? opts.effort : undefined);
   const stream = major !== null && major >= 3;
 
   let model = opts.model;
@@ -670,12 +675,16 @@ export function makeKiroRunner(
     version: () => readVersion(env.io, "kiro"),
     signInHint: () => readSignInHint(env.io, "kiro", {}, hasOutsideCredentials("kiro", processEnv)),
     listModels: () => readCatalog(env.io, "kiro"),
+    acceptsEffort: () => effortFlag.get(env) === true,
     async preflight() {
       const bin = await requireBinary("kiro", env.io);
       const version = await readVersion(env.io, "kiro", PROBE_TIMEOUT_MS.help);
       const major = version ? parseKiroMajor(version) : null;
       const flags = major === null ? undefined : KIRO_CHAT_FLAGS[major];
-      if (flags) await requireFlags(env.io, bin, "kiro", flags);
+      if (flags) {
+        const advertised = await requireFlags(env.io, bin, "kiro", flags);
+        effortFlag.set(env, advertised.has("--effort"));
+      }
       // An unknown version is not cached, so the first call probes it again.
       if (major !== null) majorCache.set(env, Promise.resolve(major));
     },

@@ -9,15 +9,17 @@ Examples
   npx human-hindsight reflect --recent 10
     Start with your ten most recent eligible sessions.
 
-  npx human-hindsight reflect --quality best
-    Review the plan using the most capable available models.
+  npx human-hindsight reflect --quality fast
+    Use the lighter model and low reasoning effort.
 
 Common options
-  --dry-run                Print the plan and exit; nothing is sent
-  --recent 25              Start with this many of your most recent sessions
-  --quality balanced|best  Model plan for reading and writing (default:
-                           balanced)
-  --project <name>         Only reflect on sessions from this project
+  --dry-run                     Print the plan and exit; nothing is sent
+  --recent 25                   Start with this many of your most recent
+                                sessions
+  --quality fast|balanced|best  Model plan and reasoning effort: fast (low),
+                                balanced (high, the default), or best (extra
+                                high)
+  --project <name>              Only reflect on sessions from this project
 
 More help
   npx human-hindsight reflect --help --all  Every option for this command

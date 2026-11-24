@@ -71,7 +71,7 @@ const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 const strip = (s: string) => stripVTControlCharacters(s);
 const golden = (name: string) => `golden/flow/${name}.txt`;
 /** Plan labels are internal; the person always sees concrete model names. */
-const PLAN_LABEL = /\b(balanced|best)\/(bulk|major)\b/;
+const PLAN_LABEL = /\b(fast|balanced|best)\/(bulk|major)\b/;
 
 beforeEach(() => {
   // Bullets depend on the locale; pin a UTF-8 one so the golden files are stable.
@@ -268,6 +268,7 @@ function subagentsPlan(
     minRoles: 2,
     maxRoles: 15,
     choices: {
+      fast: { summarize: "fast-model", choose: "fast-model", write: "fast-model", batches, reused },
       balanced: {
         summarize: "fast-model",
         choose: "strong-model",
@@ -297,6 +298,7 @@ function sessionPlan(over: Partial<DistillPlan> = {}): DistillPlan {
       pinned: false,
       qualityChoice: true,
       plans: {
+        fast: { bulk: "fast-model", major: "fast-model", notes: [] },
         balanced: { bulk: "fast-model", major: "strong-model", notes: [] },
         best: { bulk: "strong-model", major: "top-model", notes: [] },
       },
@@ -305,6 +307,14 @@ function sessionPlan(over: Partial<DistillPlan> = {}): DistillPlan {
     concurrency: 10,
     generalize: true,
     choices: {
+      fast: {
+        digest: "fast-model",
+        cluster: "fast-model",
+        author: "fast-model",
+        generalize: "fast-model",
+        reusable: 0,
+        regenerating: 0,
+      },
       balanced: {
         digest: "fast-model",
         cluster: "strong-model",
@@ -344,11 +354,12 @@ describe("the distill plan screen", () => {
     expect([...positions].sort((a, b) => a - b)).toEqual(positions);
     expect(out).not.toMatch(PLAN_LABEL);
     expect(out).not.toMatch(/\b(minutes?|hours?|seconds?)\b|readiness call|harness|oneshot/i);
+    expect(out).toContain("1 Fast: fast-model for every step");
     expect(out).toContain(
-      "1 Balanced (selected): fast-model for session reads, strong-model for grouping and writing",
+      "2 Balanced (selected): fast-model for session reads, strong-model for grouping and writing",
     );
     expect(out).toContain(
-      "2 Best: strong-model for session reads, top-model for grouping and writing",
+      "3 Best: strong-model for session reads, top-model for grouping and writing",
     );
   });
 
@@ -391,6 +402,7 @@ describe("the distill plan screen", () => {
     const plan = sessionPlan({ library: 4 });
     if (!plan.choices) throw new Error("choices expected");
     plan.choices.balanced = { ...plan.choices.balanced, reusable: 3, regenerating: 0 };
+    plan.choices.fast = { ...plan.choices.balanced };
     plan.choices.best = { ...plan.choices.best, reusable: 0, regenerating: 3 };
     const out = strip(renderPlan(plan)).replace(/\s+/g, " ");
     expect(out).toContain(
@@ -429,6 +441,7 @@ describe("the distill plan screen", () => {
     const plan = sessionPlan();
     if (!plan.choices) throw new Error("choices expected");
     plan.choices.balanced = { ...plan.choices.balanced, ...balanced };
+    plan.choices.fast = { ...plan.choices.balanced };
     plan.choices.best = { ...plan.choices.best, ...best };
     const out = strip(renderPlan(plan)).replace(/\s+/g, " ");
     for (const phrase of has) expect(out).toContain(phrase);
@@ -495,6 +508,7 @@ describe("the distill plan screen", () => {
     const plan = sessionPlan((rest as { over?: Partial<DistillPlan> }).over);
     if (!plan.choices) throw new Error("choices expected");
     plan.choices.balanced = { ...plan.choices.balanced, ...balanced };
+    plan.choices.fast = { ...plan.choices.balanced };
     plan.choices.best = { ...plan.choices.best, ...best };
     expect(strip(renderPlan(plan)).replace(/\s+/g, " ")).toContain(says);
   });
@@ -508,7 +522,10 @@ describe("the distill plan screen", () => {
       reusable: 0,
       regenerating: 0,
     };
-    const plan = sessionPlan({ qualityFixed: true, choices: { balanced: one, best: one } });
+    const plan = sessionPlan({
+      qualityFixed: true,
+      choices: { fast: one, balanced: one, best: one },
+    });
     expect(strip(renderPlan(plan)).replace(/\s+/g, " ")).toContain(
       "one tiny request checks that Claude Code is ready",
     );
@@ -522,10 +539,10 @@ describe("the distill plan screen", () => {
       session: {
         ...(base.session as NonNullable<DistillPlan["session"]>),
         qualityChoice: false,
-        plans: { balanced: same, best: same },
+        plans: { fast: same, balanced: same, best: same },
       },
       choices: Object.fromEntries(
-        (["balanced", "best"] as const).map((q) => [
+        (["fast", "balanced", "best"] as const).map((q) => [
           q,
           {
             digest: "CLI default",
@@ -601,13 +618,12 @@ describe("the subagent plan screen", () => {
   it("names the models of both plans by their real names, as the distill screen does", () => {
     const flat = strip(renderPlan(subagentScreen())).replace(/\s+/g, " ");
     expect(flat).toContain(
-      "1 Balanced (selected): fast-model for preference summaries, strong-model for choosing and writing roles",
+      "2 Balanced (selected): fast-model for preference summaries, strong-model for choosing and writing roles",
     );
-    expect(flat).toContain("2 Best: strong-model for preference summaries, top-model for choosing");
-    // Two models are checked, so the check is two tiny requests.
-    expect(flat).toContain(
-      "two tiny requests, one for each model, check that Claude Code is ready",
-    );
+    expect(flat).toContain("3 Best: strong-model for preference summaries, top-model for choosing");
+    expect(flat).toContain("1 Fast: fast-model for every step");
+    // Fast calls one model and the others two, so the check is said per model.
+    expect(flat).toContain("one tiny request for each model checks that Claude Code is ready");
   });
 
   it.each([
@@ -632,7 +648,7 @@ describe("the subagent plan screen", () => {
   ])("a subagent plan counts the models it will call (%s)", (_name, models, extra, says) => {
     const base = subagentsPlan();
     const choice = { ...base.choices.balanced, ...models };
-    const sub = { ...base, ...extra, choices: { balanced: choice, best: choice } };
+    const sub = { ...base, ...extra, choices: { fast: choice, balanced: choice, best: choice } };
     const flat = strip(renderPlan(subagentScreen(sub, { qualityFixed: true }))).replace(
       /\s+/g,
       " ",
@@ -721,8 +737,9 @@ describe("the Start question on a terminal", () => {
 
   it.each([
     { keys: ["s"], answer: "proceed", chosen: ["balanced"] },
-    { keys: ["2", "s"], answer: "proceed", chosen: ["best"] },
-    { keys: ["2", "1", "s"], answer: "proceed", chosen: ["balanced"] },
+    { keys: ["1", "s"], answer: "proceed", chosen: ["fast"] },
+    { keys: ["3", "s"], answer: "proceed", chosen: ["best"] },
+    { keys: ["3", "2", "s"], answer: "proceed", chosen: ["balanced"] },
     { keys: ["q"], answer: "declined", chosen: [] },
     { keys: ["\u001b"], answer: "declined", chosen: [] },
     { keys: ["\u0004"], answer: "declined", chosen: [] },
@@ -735,10 +752,13 @@ describe("the Start question on a terminal", () => {
     expect(result.chosen).toEqual(chosen);
     // The plans, the selected one marked, and the start line naming it.
     const text = strip(result.text);
-    expect(text).toContain("1 Balanced (selected)");
+    expect(text).toContain("1 Fast");
+    expect(text).toContain("2 Balanced (selected)");
+    expect(text).toContain("3 Best");
     expect(text).toContain("s  Start with Balanced");
     expect(text).toContain("q  Not now");
-    if (keys[0] === "2") expect(text).toContain("s  Start with Best");
+    if (keys[0] === "1") expect(text).toContain("s  Start with Fast");
+    if (keys[0] === "3") expect(text).toContain("s  Start with Best");
     // Ctrl-C: one line, and nothing else.
     if (answer === "interrupted") expect(text.split("Interrupted.").length - 1).toBe(1);
   });
@@ -747,7 +767,7 @@ describe("the Start question on a terminal", () => {
     ["Enter", ["\r"]],
     ["space", [" "]],
     ["an arrow, then Enter", ["\u001b[B", "\r"]],
-    ["1 or 2 alone", ["1", "2"]],
+    ["a plan's number alone", ["1", "3"]],
     ["y", ["y"]],
   ])("%s never starts; another key says once how to start", async (_name, keys) => {
     const result = await answerWith(keys);
@@ -755,11 +775,11 @@ describe("the Start question on a terminal", () => {
     expect(result.answer).toBe("declined");
     expect(result.chosen).toEqual([]);
     const said = strip(result.text).split("Press s to start, or q to leave.").length - 1;
-    expect(said).toBe(keys.every((key) => /^[12]$/.test(key)) ? 0 : 1);
+    expect(said).toBe(keys.every((key) => /^[123]$/.test(key)) ? 0 : 1);
   });
 
   it("the subagent screen asks the same question", async () => {
-    const result = await answerWith(["2", "s"], subagentScreen());
+    const result = await answerWith(["3", "s"], subagentScreen());
     expect(result.answer).toBe("proceed");
     expect(result.chosen).toEqual(["best"]);
     expect(strip(result.text)).toContain("s  Start with Best");
@@ -771,7 +791,7 @@ describe("the Start question on a terminal", () => {
     expect(result.chosen).toEqual([]);
     const text = strip(result.text);
     expect(text).toContain("s  Start");
-    expect(text).not.toMatch(/Start with|2 {2}Best/);
+    expect(text).not.toMatch(/Start with|\d {2}Best/);
   });
 });
 
@@ -809,13 +829,14 @@ describe("the approval question", () => {
       expect(cap.text()).toContain("Press s to start, or q to leave.");
   });
 
-  // With a choice offered: 1 and 2 select a plan and ask again; s starts the
+  // With a choice offered: a plan's number selects it and asks again; s starts the
   // selected one; an empty line or the end of input declines.
   it.each([
     { input: "s\n", result: "proceed", picked: "balanced" },
-    { input: "1\ns\n", result: "proceed", picked: "balanced" },
-    { input: "2\ns\n", result: "proceed", picked: "best" },
-    { input: "2\n", result: "declined", picked: undefined },
+    { input: "1\ns\n", result: "proceed", picked: "fast" },
+    { input: "2\ns\n", result: "proceed", picked: "balanced" },
+    { input: "3\ns\n", result: "proceed", picked: "best" },
+    { input: "3\n", result: "declined", picked: undefined },
     { input: "best\n", result: "declined", picked: undefined },
     { input: "y\n", result: "declined", picked: undefined },
     { input: "\n", result: "declined", picked: undefined },
@@ -830,8 +851,8 @@ describe("the approval question", () => {
     });
     expect(answer).toBe(result);
     expect(chosen).toEqual(picked ? [picked] : []);
-    expect(cap.text()).toContain("Choose [1/2/s/q]");
-    if (input.startsWith("2"))
+    expect(cap.text()).toContain("Choose [1/2/3/s/q]");
+    if (input.startsWith("3"))
       expect(cap.text()).toContain("Best is selected. Press s to start with Best, or q to leave.");
   });
 
@@ -839,14 +860,14 @@ describe("the approval question", () => {
     const cap = captureOutput();
     const chosen: string[] = [];
     const answer = await confirmPlan(sessionPlan({ qualityFixed: true }), {
-      input: inputWith("2\n"),
+      input: inputWith("3\n"),
       output: cap.out,
       onQuality: (q) => chosen.push(q),
     });
     expect(answer).toBe("declined");
     expect(chosen).toEqual([]);
     expect(cap.text()).toContain("Choose [s/q]");
-    expect(cap.text()).not.toContain("2 Best");
+    expect(cap.text()).not.toContain("3 Best");
   });
 
   it("declines at once with no terminal and no input stream", async () => {

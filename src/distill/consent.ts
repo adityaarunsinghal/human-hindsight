@@ -1,7 +1,7 @@
 import { createInterface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { DEFAULT_CONCURRENCY } from "../core/budget.js";
-import type { Quality } from "../core/model-plan.js";
+import { EFFORT_WORDS, PLAN_EFFORT, QUALITIES, type Quality } from "../core/model-plan.js";
 import type { SessionDescription } from "../core/run-session.js";
 import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerName } from "../runners/types.js";
@@ -47,6 +47,10 @@ export interface DistillPlan {
   concurrency?: number;
   sessions?: number;
   projects?: number;
+  /** False when this run groups nothing and writes no prompt (`--no-prompts`). */
+  prompts?: boolean;
+  /** Set when the run goes on to suggest subagent roles (`--subagents`). */
+  roles?: { min: number; max: number };
   /** Eligible sessions before `--recent` narrowed them. */
   eligible?: number;
   /** The `--recent` count in effect, if any. */
@@ -68,6 +72,8 @@ export interface DistillPlan {
       cluster: string;
       author: string;
       generalize: string;
+      /** The model that chooses and writes subagent roles, when the run goes on to them. */
+      roles?: string;
       reusable: number;
       regenerating: number;
       /** Notes about this plan's models, when they need one. */
@@ -154,6 +160,15 @@ export interface SubagentsPlan {
 /** A count with thousands separators, as everywhere else on screen. */
 const count = (n: number): string => n.toLocaleString("en-US");
 
+/** Up to three of the sessions left out for their size, by export name. */
+function leftOutNames(sessions: { export: string; chars: number }[]): string {
+  const shown = sessions
+    .slice(0, 3)
+    .map((entry) => `${entry.export} (${count(entry.chars)} characters)`);
+  const more = sessions.length - shown.length;
+  return more > 0 ? `${shown.join(", ")}, and ${count(more)} more` : shown.join(", ");
+}
+
 /** Human-facing CLI name + the cost noun, per runner (for consent copy). */
 function runnerCopy(name: DistillPlan["runnerName"]): { cli: string; cost: string } {
   return name === "kiro"
@@ -191,7 +206,28 @@ function renderRunnerDisclosure(session: SessionDescription): string[] {
   return lines;
 }
 
-const qualityName = (value: Quality) => (value === "balanced" ? "Balanced" : "Best");
+const QUALITY_NAMES: Record<Quality, string> = { fast: "Fast", balanced: "Balanced", best: "Best" };
+const qualityName = (value: Quality) => QUALITY_NAMES[value];
+/** The key that selects a plan at the Start question: its place in the list. */
+const qualityKey = (value: Quality) => String(QUALITIES.indexOf(value) + 1);
+/** The color of each plan's pill, as red;green;blue. */
+export const QUALITY_INK: Record<Quality, string> = {
+  fast: "163;230;146",
+  balanced: "141;227;228",
+  best: "246;161;199",
+};
+/** One value for each plan. */
+const forEachQuality = <T, R>(values: Record<Quality, T>, read: (value: T) => R) =>
+  Object.fromEntries(QUALITIES.map((quality) => [quality, read(values[quality])])) as Record<
+    Quality,
+    R
+  >;
+/** Whether every plan gives the same value. */
+const sameForAll = <T>(values: Record<Quality, T>, read: (value: T) => unknown) =>
+  new Set(QUALITIES.map((quality) => read(values[quality]))).size === 1;
+/** ", at high reasoning effort": said when the CLI takes the plan's effort. */
+const effortPhrase = (session: SessionDescription | undefined, quality: Quality) =>
+  session?.setsEffort ? `, at ${EFFORT_WORDS[PLAN_EFFORT[quality]]} reasoning effort` : "";
 
 /** The left column of the distill plan screen. */
 const LABEL_WIDTH = 9;
@@ -221,9 +257,15 @@ type Choice = NonNullable<DistillPlan["choices"]>[Quality];
 /** "sonnet for session reads, opus for grouping and writing", or one model named once. */
 function stageModels(plan: DistillPlan, choice: Choice): string {
   const name = (model: string) => (model === "CLI default" ? "the CLI's default model" : model);
-  const grouping = plan.cluster > 0;
-  const used = [choice.digest, choice.author, ...(grouping ? [choice.cluster] : [])];
+  const prompts = plan.prompts !== false;
+  const grouping = prompts && plan.cluster > 0;
+  const used = [
+    choice.digest,
+    ...(prompts ? [choice.author] : []),
+    ...(grouping ? [choice.cluster] : []),
+  ];
   if (plan.generalize) used.push(choice.generalize);
+  if (plan.roles && choice.roles) used.push(choice.roles);
   if (used.every((model) => model === choice.digest))
     return `${name(choice.digest)} for every step`;
   const parts = [`${name(choice.digest)} for session reads`];
@@ -231,14 +273,16 @@ function stageModels(plan: DistillPlan, choice: Choice): string {
     parts.push(`${name(choice.author)} for grouping and writing`);
   else {
     if (grouping) parts.push(`${name(choice.cluster)} for grouping`);
-    parts.push(`${name(choice.author)} for writing`);
+    if (prompts) parts.push(`${name(choice.author)} for writing`);
   }
   if (plan.generalize && choice.generalize !== choice.digest)
     parts.push(`${name(choice.generalize)} for preference summaries`);
+  if (plan.roles && choice.roles)
+    parts.push(`${name(choice.roles)} for choosing and writing roles`);
   return parts.join(", ");
 }
 
-/** Balanced and Best are offered only when they differ and the person did not fix one. */
+/** The plans are offered only when they differ and the person did not fix one. */
 function offersChoice(plan: DistillPlan): boolean {
   return Boolean(
     (plan.choices || plan.subagents) && plan.session?.qualityChoice !== false && !plan.qualityFixed,
@@ -326,21 +370,22 @@ function modelRows(o: {
   allDefault: boolean;
   named: boolean;
   cli: string;
+  session?: SessionDescription;
 }): Row[] {
   const rows: Row[] = [];
   if (o.offer) {
-    for (const tier of ["balanced", "best"] as const) {
+    for (const tier of QUALITIES) {
       const line = o.tiers[tier];
       rows.push({
         label: rows.length ? "" : "Models",
-        text: `${tier === "balanced" ? 1 : 2}  ${qualityName(tier)}${tier === o.quality ? " (selected)" : ""}: ${line.models}${line.extra.length ? `. ${sentence(line.extra.join(", "))}.` : ""}`,
+        text: `${qualityKey(tier)}  ${qualityName(tier)}${tier === o.quality ? " (selected)" : ""}: ${line.models}${effortPhrase(o.session, tier)}${line.extra.length ? `. ${sentence(line.extra.join(", "))}.` : ""}`,
       });
       for (const note of line.notes) rows.push({ label: "", text: note, indent: 3 });
     }
     return rows;
   }
   const selected = o.tiers[o.quality];
-  const notes = [...new Set([...o.tiers.balanced.notes, ...o.tiers.best.notes])];
+  const notes = [...new Set(QUALITIES.flatMap((tier) => o.tiers[tier].notes))];
   if (o.allDefault) {
     rows.push({
       label: "Models",
@@ -351,7 +396,7 @@ function modelRows(o: {
   }
   rows.push({
     label: "Models",
-    text: `${o.named ? `${qualityName(o.quality)}: ` : ""}${selected.models}.`,
+    text: `${o.named ? `${qualityName(o.quality)}: ` : ""}${selected.models}${effortPhrase(o.session, o.quality)}.`,
   });
   for (const note of selected.notes) rows.push({ label: "", text: note });
   return rows;
@@ -387,10 +432,10 @@ function sendingRow(session: SessionDescription, what: string, check: string, af
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** "a, b, and c". */
-function listed(parts: string[]): string {
+function listed(parts: string[], joiner = "and"): string {
   if (parts.length <= 1) return parts.join("");
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
+  if (parts.length === 2) return `${parts[0]} ${joiner} ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, ${joiner} ${parts.at(-1)}`;
 }
 
 /** A model name as the plan screen says it. */
@@ -416,9 +461,12 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
     plan.recent !== undefined && plan.eligible !== undefined && plan.eligible > sessions
       ? `your ${counted(sessions, "most recent session", "most recent sessions")} (of ${count(plan.eligible)} eligible)`
       : counted(sessions, "session");
+  const prompts = plan.prompts !== false;
   row(
     "Reads",
-    `${scope}, about ${counted(plan.authorEstimate, "prompt")}${plan.generalize ? ", plus your working preferences" : ""}.`,
+    prompts
+      ? `${scope}, about ${counted(plan.authorEstimate, "prompt")}${plan.generalize ? ", plus your working preferences" : ""}.`
+      : `${scope}${plan.generalize ? " and your working preferences" : ""}. No prompts are written in this run.`,
   );
   if (plan.recent !== undefined && plan.eligible !== undefined && plan.eligible > sessions)
     row("", "The rest can follow in a later run, which reuses this saved work.");
@@ -432,7 +480,7 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
 
   // How many calls. Reads differ per plan when only one plan has saved reads.
   const newReads = (choice: Choice | undefined) => sessions - (choice?.reusable ?? 0);
-  const sameReads = !offer || !choices || choices.balanced.reusable === choices.best.reusable;
+  const sameReads = !offer || !choices || sameForAll(choices, (choice) => choice.reusable);
   // A count is printed only when it is not zero.
   const readsFor = (fresh: number, reused: number) =>
     fresh > 0
@@ -452,20 +500,30 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
             ? ""
             : ` (estimated ${counted(windows, "batch", "batches")}${plan.clusterMergeEstimate ? ` and ${count(plan.clusterMergeEstimate)} merge` : ""})`
         }`;
-  row("Calls", `${reads}, ${grouping}, and about ${counted(plan.authorEstimate, "writing call")}.`);
+  row(
+    "Calls",
+    prompts
+      ? `${reads}, ${grouping}, and about ${counted(plan.authorEstimate, "writing call")}.`
+      : `${sentence(reads)}.`,
+  );
   if (plan.generalize)
     row(
       "",
-      `Then summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
+      `${prompts ? "Meanwhile" : "Then"}, summarize preferences across your saved library, up to ${DEFAULT_WINDOW_SIZE} observations per call. Finished batches are reused.`,
+    );
+  if (plan.roles)
+    row(
+      "",
+      `Then choose and write subagent roles from those preferences: 1 call to choose roles, then one call for each role (${count(plan.roles.min)} to ${count(plan.roles.max)} roles). This approval covers them.`,
     );
   row(
     "",
-    `${pace(plan.concurrency ?? DEFAULT_CONCURRENCY, session)}. Grouping runs one call at a time.`,
+    `${pace(plan.concurrency ?? DEFAULT_CONCURRENCY, session)}.${prompts && plan.cluster > 0 ? " Grouping runs one call at a time." : ""}`,
   );
 
   // Models, by real name.
   const regenDiffers = Boolean(
-    offer && choices && choices.balanced.regenerating !== choices.best.regenerating,
+    offer && choices && !sameForAll(choices, (choice) => choice.regenerating),
   );
   if (choices) {
     const tierLine = (choice: Choice): TierLine => {
@@ -486,7 +544,8 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
       ...modelRows({
         offer,
         quality,
-        tiers: { balanced: tierLine(choices.balanced), best: tierLine(choices.best) },
+        tiers: forEachQuality(choices, tierLine),
+        session,
         allDefault: [
           choices[quality].digest,
           choices[quality].cluster,
@@ -512,7 +571,8 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
     row("Library", parts.join(" "));
   }
 
-  // Sessions longer than the size limit per call.
+  // Sessions longer than the size limit per call: shortened when asked for,
+  // otherwise left out of this run, which goes on with the rest.
   if (plan.oversized?.length && plan.budget !== undefined) {
     const n = plan.oversized.length;
     const what = `${counted(n, "session is", "sessions are")} longer than the size limit per call of ${count(plan.budget)} characters`;
@@ -520,20 +580,20 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
       "Size",
       plan.truncate === "extreme"
         ? `${what} and will be shortened to fit.`
-        : `${what}. A real run stops before sending anything; add --truncate=extreme to shorten them, or raise --input-budget.`,
+        : `${what} and ${n === 1 ? "is" : "are"} left out of this run: ${leftOutNames(plan.oversized)}. To include ${n === 1 ? "it" : "them"}, shortened to fit, add --truncate=extreme.`,
     );
   }
 
   // Where the text goes. The check sends one tiny request per distinct model
   // of the stages this run calls: grouping only with grouping on, the
   // preference summary only when it runs.
-  const requests = (offer && choices ? [choices.balanced, choices.best] : [selected]).map(
+  const requests = (offer && choices ? QUALITIES.map((tier) => choices[tier]) : [selected]).map(
     (choice) =>
       choice
         ? [
             choice.digest,
-            ...(plan.grouping === false ? [] : [choice.cluster]),
-            choice.author,
+            ...(plan.grouping === false || !prompts ? [] : [choice.cluster]),
+            ...(prompts ? [choice.author] : []),
             ...(plan.generalize ? [choice.generalize] : []),
           ]
         : [],
@@ -611,8 +671,7 @@ function subagentRows(plan: DistillPlan, sub: SubagentsPlan, session: SessionDes
   const fresh = (choice: SubagentsChoice) => choice.batches - choice.reused;
   const sameBatches =
     !offer ||
-    (fresh(sub.choices.balanced) === fresh(sub.choices.best) &&
-      sub.choices.balanced.reused === sub.choices.best.reused);
+    (sameForAll(sub.choices, fresh) && sameForAll(sub.choices, (choice) => choice.reused));
   const writes =
     sub.minRoles === sub.maxRoles
       ? `${counted(sub.maxRoles, "call")} to write ${sub.maxRoles === 1 ? "a role prompt" : "role prompts"}`
@@ -657,7 +716,8 @@ function subagentRows(plan: DistillPlan, sub: SubagentsPlan, session: SessionDes
     ...modelRows({
       offer,
       quality,
-      tiers: { balanced: tierLine(sub.choices.balanced), best: tierLine(sub.choices.best) },
+      tiers: forEachQuality(sub.choices, tierLine),
+      session,
       allDefault: [selected.summarize, selected.choose, selected.write].every(
         (model) => model === "CLI default",
       ),
@@ -669,10 +729,11 @@ function subagentRows(plan: DistillPlan, sub: SubagentsPlan, session: SessionDes
   // Where the text goes. The check sends one tiny request per distinct model
   // of the stages this run calls: summaries only when some are not reused,
   // and only role writing with --author-only.
-  const requests = (offer ? [sub.choices.balanced, sub.choices.best] : [selected]).map((choice) =>
-    authorOnly
-      ? [choice.write]
-      : [...(fresh(choice) > 0 ? [choice.summarize] : []), choice.choose, choice.write],
+  const requests = (offer ? QUALITIES.map((tier) => sub.choices[tier]) : [selected]).map(
+    (choice) =>
+      authorOnly
+        ? [choice.write]
+        : [...(fresh(choice) > 0 ? [choice.summarize] : []), choice.choose, choice.write],
   );
   rows.push(
     sendingRow(
@@ -686,8 +747,8 @@ function subagentRows(plan: DistillPlan, sub: SubagentsPlan, session: SessionDes
   return rows;
 }
 
-/** Lines the Start question needs below the plan: a blank line, the title, two choices, start, quit, one note. */
-const QUESTION_LINES = 7;
+/** Lines the Start question needs below the plan: a blank line, the title, one per plan, start, quit, one note. */
+const QUESTION_LINES = 5 + QUALITIES.length;
 
 /**
  * The plan in four lines, for a terminal too short to show the whole plan and
@@ -701,9 +762,9 @@ function shortScreen(plan: DistillPlan, session: SessionDescription, width: numb
   const lines: string[] = [];
   // With a choice, both plans' models in one line: "sonnet and opus (Balanced), ...".
   const both = (models: (tier: Quality) => string[]) =>
-    (["balanced", "best"] as const)
-      .map((tier) => `${listed([...new Set(models(tier))].map(modelName))} (${qualityName(tier)})`)
-      .join(", ");
+    QUALITIES.map(
+      (tier) => `${listed([...new Set(models(tier))].map(modelName))} (${qualityName(tier)})`,
+    ).join(", ");
   if (plan.subagents) {
     const sub = plan.subagents;
     const choice = sub.choices[quality];
@@ -766,8 +827,10 @@ export function renderPlan(plan: DistillPlan, options: RenderOptions = {}): stri
       bold("  Consolidate working preferences"),
       ...renderRunnerDisclosure(plan.session),
       `  ${counted(plan.consolidation.inputs, "preference")}, one consolidation call, plus bounded validation retries.`,
-      `  1  Balanced  ${plan.consolidation.models.balanced}`,
-      `  2  Best      ${plan.consolidation.models.best}`,
+      ...QUALITIES.map(
+        (tier) =>
+          `  ${qualityKey(tier)}  ${qualityName(tier).padEnd(8)}  ${plan.consolidation?.models[tier]}${effortPhrase(plan.session, tier)}`,
+      ),
       `  Selected plan: ${qualityName(plan.quality ?? "balanced")}.`,
       "  Approval includes a small readiness check. The selected preferences go to your provider through the listed CLIs.",
     ].join("\n");
@@ -881,14 +944,16 @@ function renderBarePlan(plan: DistillPlan, bullet: string): string {
       }.`,
     );
   }
-  // Never-mode overflow is refused before consent, so only extreme mode reaches here oversized.
   if (plan.budget !== undefined) {
     const oversized = plan.oversized ?? [];
-    if (oversized.length > 0 && plan.truncate === "extreme") {
-      lines.push(
-        `  ${yellow(`${glyph("⚠", "!")} ${counted(oversized.length, "session is", "sessions are")} longer than the ${count(plan.budget)}-character budget and will be shortened to fit.`)}`,
-      );
-    } else if (oversized.length === 0) {
+    if (oversized.length > 0) {
+      const what = `${counted(oversized.length, "session is", "sessions are")} longer than the ${count(plan.budget)}-character budget`;
+      const then =
+        plan.truncate === "extreme"
+          ? "will be shortened to fit."
+          : `${oversized.length === 1 ? "is" : "are"} left out of this run: ${leftOutNames(oversized)}.`;
+      lines.push(`  ${yellow(`${glyph("⚠", "!")} ${what} and ${then}`)}`);
+    } else {
       lines.push(
         `  ${dim(`Every eligible session fits the ${count(plan.budget)}-character budget.`)}`,
       );
@@ -1018,7 +1083,7 @@ async function confirmReflection(
     hint: () => (ready ? START_HINT : "Choose a coding CLI before pressing s to start."),
     keys: () => [
       ...runners.map((runner) => RUNNER_KEY[runner.name]),
-      ...(offerQuality() ? ["1", "2"] : []),
+      ...(offerQuality() ? QUALITIES.map(qualityKey) : []),
     ],
     choose(key) {
       const runner = runners.find((item) => RUNNER_KEY[item.name] === key);
@@ -1027,8 +1092,11 @@ async function confirmReflection(
         ready = true;
         return true;
       }
-      if (offerQuality() && (key === "1" || key === "2")) {
-        quality = key === "1" ? "balanced" : "best";
+      const chosen = offerQuality()
+        ? QUALITIES.find((tier) => qualityKey(tier) === key)
+        : undefined;
+      if (chosen) {
+        quality = chosen;
         return true;
       }
       return false;
@@ -1047,6 +1115,10 @@ async function confirmReflection(
       const lines = [
         s.bold("Reflect on your history"),
         ...wrapText(`${scope}${projects}${eligible}`, width),
+        // A run for the preferences alone says so before the choices.
+        ...(plan.prompts === false
+          ? wrapText("No prompts are written in this run.", width).map(s.dim)
+          : []),
         "",
       ];
       const runnerInk = {
@@ -1071,12 +1143,21 @@ async function confirmReflection(
             width,
           ),
         );
+        // The choice is where the run starts. Every CLI that may receive text is named here.
+        if (ready && plan.runnerName && plan.session?.alsoReady.length)
+          lines.push(
+            ...wrapText(
+              `If ${cliName(plan.session)} stops working, the run moves to ${listed(plan.session.alsoReady, "or")} and says so. To keep it on ${cliName(plan.session)} only, run with --runner=${plan.runnerName}.`,
+              width,
+              { indent: "  " },
+            ).map(s.dim),
+          );
       } else if (plan.runnerName && plan.session) {
         lines.push(`Runs on  ${s[RUNNER_INK[plan.runnerName]](plan.session.runnerLine)}`);
         if (plan.session.alsoReady.length)
           lines.push(
             ...wrapText(
-              `If this CLI stops working, the run can move to ${listed(plan.session.alsoReady)}.`,
+              `If this CLI stops working, the run can move to ${listed(plan.session.alsoReady, "or")}.`,
               width,
               { indent: "  " },
             ),
@@ -1087,10 +1168,15 @@ async function confirmReflection(
         lines.push(
           s.bold("Quality"),
           ...optionRows(
-            [
-              choicePill(quality === "balanced", "1", "Balanced", "141;227;228", color),
-              choicePill(quality === "best", "2", "Best", "246;161;199", color),
-            ],
+            QUALITIES.map((tier) =>
+              choicePill(
+                quality === tier,
+                qualityKey(tier),
+                qualityName(tier),
+                QUALITY_INK[tier],
+                color,
+              ),
+            ),
             width,
           ),
         );
@@ -1098,7 +1184,13 @@ async function confirmReflection(
       const cli = ready && plan.session ? cliName(plan.session) : "the CLI you choose";
       const selected = ready ? plan.choices?.[quality] : undefined;
       if (selected) {
-        lines.push(...wrapText(stageModels(plan, selected), width, { indent: "  " }).map(s.yellow));
+        lines.push(
+          ...wrapText(
+            `${stageModels(plan, selected)}${effortPhrase(plan.session, quality)}`,
+            width,
+            { indent: "  " },
+          ).map(s.yellow),
+        );
         for (const note of selected.notes ?? [])
           lines.push(...wrapText(note, width, { indent: "  " }));
       } else
@@ -1152,15 +1244,15 @@ async function confirmReflection(
  * Print the plan, then ask the Start question (`askStart`). `--dry-run` and
  * `--yes` never read input.
  *
- * Only `s` starts. When the plan offers a choice of quality, `1` and `2`
- * select Balanced or Best first and never start. `q`, Escape, and the end of
+ * Only `s` starts. When the plan offers a choice of quality, `1`, `2`, and
+ * `3` select Fast, Balanced, or Best first and never start. `q`, Escape, and the end of
  * input decline; Ctrl-C prints one line and is an interrupt. On a terminal
  * too short for a distill or subagent plan and the question together, the
  * plan's short form is printed instead.
  *
  * A supplied stream that is not a terminal (scripts and tests) answers in
- * lines with the same letters: `s` starts, `1` or `2` selects, `q` or the end
- * of input declines.
+ * lines with the same letters: `s` starts, a plan's number selects it, `q` or
+ * the end of input declines.
  */
 export async function confirmPlan(
   plan: DistillPlan,
@@ -1186,10 +1278,11 @@ export async function confirmPlan(
     {
       title: "Start?",
       ...(choose && {
-        options: (["balanced", "best"] as const).map((tier) => ({
+        options: QUALITIES.map((tier) => ({
           key: tier,
           label: qualityName(tier),
           detail: startDetail(plan, tier),
+          ink: QUALITY_INK[tier],
         })),
         selected: quality,
       }),

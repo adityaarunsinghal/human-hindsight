@@ -404,7 +404,9 @@ async function until(fn, label, timeout = 10000) {
  * `xdg-open` placed first on PATH that record their arguments in that file.
  */
 async function startGui(dir, { port, opener } = {}) {
-  let env = { ...process.env, SSH_CONNECTION: "", SSH_CLIENT: "", SSH_TTY: "" };
+  // A desktop session: no SSH variables, and a display (on Linux a machine
+  // without one counts as remote and gets forwarding help instead of a browser).
+  let env = { ...process.env, SSH_CONNECTION: "", SSH_CLIENT: "", SSH_TTY: "", DISPLAY: ":0" };
   if (opener) {
     const bin = fs.mkdtempSync(path.join(scratch, "opener-"));
     for (const name of ["open", "xdg-open"]) {

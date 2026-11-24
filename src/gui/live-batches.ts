@@ -10,17 +10,24 @@ export interface LiveAgreements {
 export type BatchUpdate =
   | { kind: "begin"; total: number }
   | { kind: "batch"; index: number; lessons: Omit<Lesson, "id">[] }
-  | { kind: "interrupted" | "complete" };
+  | { kind: "interrupted" | "complete" }
+  /** The reflection that opened this view has ended: nothing more will arrive. */
+  | { kind: "finished" };
 
 /** One worker has one parent reflection. Its private IPC stream is the only input. */
 export class LiveBatches {
   revision = 0;
+  /** The reflection is still running, so the page says more is on its way. */
+  private running = true;
   private total = 0;
   private status: LiveAgreements["status"] = "running";
   private batches = new Map<number, Omit<Lesson, "id">[]>();
 
   update(event: BatchUpdate): void {
-    if (event.kind === "begin") {
+    if (event.kind === "finished") {
+      if (!this.running) return;
+      this.running = false;
+    } else if (event.kind === "begin") {
       this.total = event.total;
       this.status = "running";
       this.batches.clear();
@@ -31,6 +38,10 @@ export class LiveBatches {
       this.batches.clear();
     } else this.status = "interrupted";
     this.revision++;
+  }
+
+  isRunning(): boolean {
+    return this.running;
   }
 
   snapshot(): LiveAgreements | undefined {

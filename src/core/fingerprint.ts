@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { ResolvedCall, RunnerName } from "../runners/types.js";
 import type { SourceName } from "../sources/types.js";
+import { isPlanLabel } from "./model-plan.js";
 
 /** Inputs that identify one generated artifact, independent of JSON key order. */
 export interface StageLineage {
@@ -90,4 +91,23 @@ export function sameLineage(value: unknown, current: StageLineage): boolean {
     previous.model === current.model &&
     previous.runner === current.runner
   );
+}
+
+/**
+ * Whether a saved result can stand in for this request. A run that is free to
+ * use any CLI asks for a plan (a label such as `balanced/bulk`), not for a
+ * CLI, so it also accepts what one CLI produced for the same plan from the
+ * same inputs: `withRunner` rebuilds the request's lineage as that CLI's own
+ * run recorded it. A run kept on one CLI accepts only its own results, as
+ * before, and so does a model the person named.
+ */
+export function reusableLineage(
+  saved: unknown,
+  current: StageLineage,
+  withRunner: (runner: RunnerName) => StageLineage,
+): boolean {
+  if (sameLineage(saved, current)) return true;
+  if (current.runner !== null || !isPlanLabel(current.model ?? undefined)) return false;
+  const runner = (saved as Partial<StageLineage> | null)?.runner;
+  return typeof runner === "string" && sameLineage(saved, withRunner(runner));
 }

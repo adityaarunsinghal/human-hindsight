@@ -120,6 +120,7 @@ function parseCapabilities(text: string): Capabilities {
     jsonSchema: flags.has("--json-schema"),
     disableTools,
     ...(flags.has("--no-session-persistence") ? { noSessionPersistence: true } : {}),
+    ...(flags.has("--effort") ? { effort: true } : {}),
     ...(ISOLATION_FLAGS.every((flag) => flags.has(flag))
       ? { isolation: "safe-mode" as const }
       : {}),
@@ -381,6 +382,10 @@ function buildArgs(caps: Capabilities, opts: RunClaudeOptions<unknown>): string[
   if (opts.model) {
     args.push("--model", opts.model);
   }
+  // Passed only when this CLI's own help lists the flag.
+  if (opts.effort && caps.effort) {
+    args.push("--effort", opts.effort);
+  }
   return args;
 }
 
@@ -395,9 +400,11 @@ function buildPrompt(caps: Capabilities, opts: RunClaudeOptions<unknown>): strin
 }
 
 /** No model request: suitable for checking compatibility before spending consent. */
-export async function preflightClaude(io: RunnerIo = defaultIo): Promise<void> {
+export async function preflightClaude(io: RunnerIo = defaultIo): Promise<Capabilities> {
   const bin = await requireBinary("claude", io);
-  requireIsolation(await probeCapabilities(bin, io));
+  const caps = await probeCapabilities(bin, io);
+  requireIsolation(caps);
+  return caps;
 }
 
 /**
@@ -466,13 +473,17 @@ export async function runClaude<T>(
 /** The Claude Code backend as an {@link AgentRunner}. */
 export function makeClaudeRunner(io: RunnerIo = defaultIo, deps: RunnerEnv = {}): AgentRunner {
   const env = deps.env ?? process.env;
+  let effort = false;
   return {
     name: "claude",
     displayName: RUNNER_INFO.claude.displayName,
     binary: RUNNER_INFO.claude.binary,
     installHint: CLAUDE_INSTALL_HINT,
     // The version is shown, not required: capabilities come from --help.
-    preflight: () => preflightClaude(io),
+    preflight: async () => {
+      effort = (await preflightClaude(io)).effort === true;
+    },
+    acceptsEffort: () => effort,
     version: () => readVersion(io, "claude"),
     signInHint: () => readSignInHint(io, "claude", {}, hasOutsideCredentials("claude", env)),
     listModels: () => readCatalog(io, "claude"),

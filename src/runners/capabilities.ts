@@ -225,13 +225,16 @@ function advertisedFlags(text: string): Set<string> {
   return new Set(stripVTControlCharacters(text).match(/--[\w-]+/g) ?? []);
 }
 
-/** Fail before consent when the installed CLI lacks a flag the model call passes. */
+/**
+ * Fail before consent when the installed CLI lacks a flag the model call
+ * passes. Returns every flag its help lists, for flags that are optional.
+ */
 export async function requireFlags(
   io: RunnerIo,
   bin: string,
   name: RunnerName,
   flags: readonly string[],
-): Promise<void> {
+): Promise<Set<string>> {
   const { args, timeoutMs } = spec(name, "help");
   const help = await io.spawn(bin, [...args], { ...LOCAL_PROBE, timeoutMs });
   if (help.code !== 0 || help.signal || help.timedOut) {
@@ -248,6 +251,7 @@ export async function requireFlags(
       `Update ${RUNNER_INFO[name].displayName}. The installed ${args[0]} command lacks ${missing.join(", ")}.`,
     );
   }
+  return advertised;
 }
 
 // --- sign-in hints -------------------------------------------------------------

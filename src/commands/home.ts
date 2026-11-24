@@ -9,6 +9,7 @@ import {
   readExportSessionShare,
   startEnvironment,
 } from "../core/environment.js";
+import { readObservedPreferences } from "../core/preferences.js";
 import { suggestionPath } from "../core/subagents.js";
 import { type OperationRecord, OperationStore, writerBusyReason } from "../distill/operations.js";
 import type { RunnerIo } from "../runners/shared.js";
@@ -172,12 +173,16 @@ function noHistory(snapshot: EnvironmentSnapshot): boolean {
   );
 }
 
+/** Whether `--runner` lets this CLI run: no choice, `auto`, its name, or a list holding it. */
+function runnerAllows(runner: string | undefined, name: string): boolean {
+  if (!runner) return true;
+  const named = runner.split(",").map((part) => part.trim().toLowerCase());
+  return named.includes("auto") || named.includes(name);
+}
+
 function canReflect(snapshot: EnvironmentSnapshot, args: HomeArgs): boolean {
   return snapshot.rows.some(
-    (row) =>
-      row.name !== "kirocrew" &&
-      row.installed &&
-      (!args.runner || args.runner === "auto" || args.runner === row.name),
+    (row) => row.name !== "kirocrew" && row.installed && runnerAllows(args.runner, row.name),
   );
 }
 
@@ -229,11 +234,14 @@ function candidateChoices(
       detail: refreshDetail(snapshot),
     });
   }
-  if (ready && saved.library) {
+  // Offered from the first run: without saved reads it makes them first.
+  if (ready && (saved.library || history)) {
     choices.push({
       key: "suggest",
       label: "Suggest subagents",
-      detail: "roles from my preferences",
+      detail: saved.library
+        ? "roles from my preferences"
+        : "reads my sessions, then proposes roles",
     });
   }
   if (!ready && saved.exported && !saved.library) choices.push(doctor);
@@ -285,6 +293,7 @@ function updatedChoices(
 }
 
 const TAGLINE = "Understand how you work. Codify your taste.";
+export const PRIVACY_LINE = "No session text leaves this machine until you approve a plan.";
 const toolNames = Object.values(SOURCE_PRODUCT_NAMES);
 const toolList = `${toolNames.slice(0, -1).join(", ")}, or ${toolNames.at(-1)}`;
 
@@ -316,21 +325,28 @@ export function homeFix(snapshot: EnvironmentSnapshot, args: HomeArgs): HomeFix 
   if (noHistory(snapshot)) return undefined;
   const runners = snapshot.rows.filter((row) => row.name !== "kirocrew");
   if (!canReflect(snapshot, args)) {
-    const named = runners.find((row) => row.name === args.runner);
+    const named = runners.find((row) => args.runner && runnerAllows(args.runner, row.name));
     if (named?.fix) return { says: `To reflect through ${named.tool}, run:`, run: named.fix };
     const row = busiestRow(included(snapshot).filter((item) => item.fix && !item.installed));
     const run = row?.fix ?? runners.find((item) => item.fix)?.fix;
     return { says: "Export works now. To reflect on your history, install a coding CLI:", run };
   }
-  const installed = runners.filter(
-    (row) => row.installed && (!args.runner || args.runner === "auto" || args.runner === row.name),
-  );
+  const installed = runners.filter((row) => row.installed && runnerAllows(args.runner, row.name));
   const signedOut = installed.filter((row) => row.signIn?.state === "needs-sign-in");
   if (signedOut.length && signedOut.length === installed.length) {
     const row = busiestRow(signedOut.filter((item) => item.included)) ?? signedOut[0];
     if (row?.fix) return { says: "Sign in before reflecting:", run: row.fix };
   }
   return undefined;
+}
+
+/** Whether a session read has left a preference to suggest roles from. */
+function hasSavedPreferences(home: string): boolean {
+  try {
+    return readObservedPreferences(home).length > 0;
+  } catch {
+    return false;
+  }
 }
 
 /** One line of the frame above the menu. `drop` lines leave first, lowest first, when rows run short. */
@@ -423,6 +439,9 @@ function homeLines(
   } else if (rows.some((row) => row.history?.exact === false)) {
     prose("Checking Kiro Crew runs in Kiro CLI history.", s.dim);
   }
+  // The one promise this screen makes. Session text is sent only by a model
+  // step, and every model step shows its plan and waits for approval first.
+  prose(PRIVACY_LINE);
   const fix = homeFix(snapshot, args);
   if (fix) {
     prose(fix.says);
@@ -547,21 +566,45 @@ export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<nu
   if (answer === "interrupt") return 130;
   if (answer === "quit") return 0;
   if (io.dispatch) return io.dispatch(answer, args);
-  return runAction(answer, args, { output, runnerAvailable });
+  return runAction(answer, args, { output, runnerAvailable, home: paths.home });
 }
 
-async function runAction(
+/** The commands an action runs, injected so tests start nothing real. */
+export interface ActionCommands {
+  scan: typeof runScan;
+  exportSessions: typeof runExport;
+  run: typeof runNextCommand;
+  subagents: typeof generateSubagents;
+}
+
+/** Run the action chosen on the first screen. Only the path that needs an export makes one. */
+export async function runAction(
   action: HomeAction,
   args: HomeArgs,
-  o: { output: Writable; runnerAvailable: boolean },
+  o: { output: Writable; runnerAvailable: boolean; home: string },
+  commands: Partial<ActionCommands> = {},
 ): Promise<number> {
+  const scan = commands.scan ?? runScan;
+  const exportSessions = commands.exportSessions ?? runExport;
+  const run = commands.run ?? runNextCommand;
+  const subagents = commands.subagents ?? generateSubagents;
   if (action === "scan") {
-    runScan(args);
+    scan(args);
     return 0;
   }
-  if (action === "suggest") return generateSubagents(args);
-  if (action === "export" || action === "build" || action === "refresh") {
-    const stats = runExport({ ...args, guided: true, output: o.output });
+  // Subagents come from the preferences in the session reads. With some
+  // saved, the command plans from them. Without any, one run makes them
+  // first and writes no prompts: export if needed, read, summarize, then roles.
+  const fromScratch = action === "suggest" && !hasSavedPreferences(o.home);
+  if (action === "suggest" && !fromScratch) return subagents(args);
+  const exported = fs.existsSync(path.join(o.home, "exports", "manifest.json"));
+  if (
+    action === "export" ||
+    action === "build" ||
+    action === "refresh" ||
+    (fromScratch && !exported)
+  ) {
+    const stats = exportSessions({ ...args, guided: true, output: o.output });
     if (stats.busy) return 1;
     if (stats.exportedSessions === 0) {
       o.output.write(`${hint(nextCommandText("scan", args))}\n`);
@@ -571,8 +614,9 @@ async function runAction(
       o.output.write(`${hint(nextCommandText(o.runnerAvailable ? "reflect" : "doctor", args))}\n`);
       return 0;
     }
-    return runNextCommand("reflect", args);
   }
+  if (fromScratch) return run("reflect", { ...args, prompts: false, subagents: true });
+  if (action === "build" || action === "refresh") return run("reflect", args);
   const { command, tab } = actionCommand(action);
-  return runNextCommand(command, tab ? { ...args, tab } : args);
+  return run(command, tab ? { ...args, tab } : args);
 }

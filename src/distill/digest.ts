@@ -6,7 +6,7 @@ import {
   contentFingerprint,
   digestSourceFingerprint,
   fingerprint,
-  sameLineage,
+  reusableLineage,
   stageLineage,
 } from "../core/fingerprint.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
@@ -172,6 +172,35 @@ function validateDigestEvidence(
   return { digest: { ...digest, preferences }, problems };
 }
 
+/**
+ * The read with only the preferences whose evidence checks out. A quote the
+ * model cannot ground after its one correction is its mistake about one
+ * suggestion, so that suggestion is left out and the rest of the read is kept:
+ * the goal, how the session ended, and every preference that does check out.
+ * No preference is ever saved on evidence that was not verified.
+ */
+function keepVerifiedPreferences(
+  digest: Digest,
+  exportName: string,
+  content: string,
+  originalContent: string,
+): { digest: Digest; dropped: number } {
+  const kept: PreferenceCandidate[] = [];
+  for (const candidate of digest.preferences ?? []) {
+    const checked = validateDigestEvidence(
+      { ...digest, preferences: [candidate] },
+      exportName,
+      content,
+      originalContent,
+    );
+    if (!checked.problems.length) kept.push(...(checked.digest.preferences ?? []));
+  }
+  return {
+    digest: { ...digest, preferences: kept },
+    dropped: (digest.preferences ?? []).length - kept.length,
+  };
+}
+
 /** One implementation serves both the read-only plan and the paid stage. */
 function prepareDigest(
   entry: ManifestEntry,
@@ -226,6 +255,8 @@ interface DigestInput {
 interface DigestResult {
   digest: Digest;
   lineage: DigestLineage;
+  /** Preferences left out of this read: their quoted words were not in the session. */
+  droppedPreferences?: number;
 }
 
 function readSummary(
@@ -293,7 +324,12 @@ export function planDigestReuse(opts: ReuseOptions): {
         contentHash: contentFingerprint(original),
       };
       const request = prepareDigestRequest(logical, original, settings);
-      if (!opts.fresh && sameLineage(checkpoint.lineage?.[entry.export], request.lineage)) {
+      const asRunner = (runner: RunnerName) =>
+        prepareDigestRequest(logical, original, { ...settings, automatic: false, runner }).lineage;
+      if (
+        !opts.fresh &&
+        reusableLineage(checkpoint.lineage?.[entry.export], request.lineage, asRunner)
+      ) {
         counts.reusable++;
         counts.reused.push(entry.export);
       } else counts.regenerating++;
@@ -351,10 +387,21 @@ export function digestHandler(home: string, active?: DigestsCheckpoint): RetryHa
         );
         if (!problems.length)
           return { digest, lineage: { ...(request.lineage as DigestLineage), resolved } };
-        if (attempt === 1)
-          throw new Error(
-            `the preference evidence did not match the session after one retry: ${problems.join("; ")}`,
+        if (attempt === 1) {
+          // The correction did not fix it. The read is kept without the
+          // preferences that could not be verified.
+          const verified = keepVerifiedPreferences(
+            response,
+            logical.entry.export,
+            request.content as string,
+            request.originalContent as string,
           );
+          return {
+            digest: verified.digest,
+            lineage: { ...(request.lineage as DigestLineage), resolved },
+            droppedPreferences: verified.dropped,
+          };
+        }
         // The corrective retry is not printed: a person needs only the outcome.
         prompt = `${request.prompt}\n\nYour previous preference evidence had these problems:\n${problems.map((problem) => `- ${problem}`).join("\n")}\nCorrect every citation using the supplied human messages. Omit any unsupported suggestion.`;
       }
@@ -490,7 +537,10 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
         }
         const request = prepareDigestRequest(logical, original, settings);
         const cached = state.digests[id];
-        if (cached && sameLineage(state.lineage?.[id], request.lineage)) {
+        const asRunner = (runner: RunnerName) =>
+          prepareDigestRequest(logical, original, { ...settings, automatic: false, runner })
+            .lineage;
+        if (cached && reusableLineage(state.lineage?.[id], request.lineage, asRunner)) {
           result.skipped++;
           reporter.read(
             id,
@@ -524,6 +574,10 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
         if (saved) result.skipped++;
         else result.completed++;
         breaker.success();
+        if (value.droppedPreferences)
+          reporter.detail(
+            `  ${exportLabel}: left out ${counted(value.droppedPreferences, "preference")} whose quoted words were not found in the session`,
+          );
         const read = readSummary(project, value.digest);
         reporter.read(
           id,

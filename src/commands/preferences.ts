@@ -8,7 +8,7 @@ import {
 } from "../core/consolidated-preferences.js";
 import { readExportSessionShare } from "../core/environment.js";
 import { readLibrary } from "../core/library.js";
-import { parseQuality } from "../core/model-plan.js";
+import { parseQuality, QUALITIES, type Quality } from "../core/model-plan.js";
 import { HISTORICAL_DATA_INSTRUCTION } from "../core/preference-evidence.js";
 import {
   preferenceReview,
@@ -325,10 +325,9 @@ export async function runPreferences(
         quality: session.quality,
         consolidation: {
           inputs: prefs.length,
-          models: {
-            balanced: session.displayModelFor("consolidate", "balanced"),
-            best: session.displayModelFor("consolidate", "best"),
-          },
+          models: Object.fromEntries(
+            QUALITIES.map((quality) => [quality, session.displayModelFor("consolidate", quality)]),
+          ) as Record<Quality, string>,
         },
       },
       {
@@ -699,7 +698,7 @@ export default defineCommand({
     runner: {
       type: "string",
       description:
-        "Which local CLI consolidates: claude, codex, kiro, opencode, or auto (default: auto)",
+        "Which local CLI consolidates: claude, codex, kiro, opencode, or auto (default). One name keeps the run on that CLI; several, separated by commas, are tried in order",
     },
     model: {
       type: "string",

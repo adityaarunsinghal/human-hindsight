@@ -1,6 +1,6 @@
 import type { Writable } from "node:stream";
 import { nextCommandText } from "../commands/next.js";
-import { fingerprint, sameLineage, stageLineage } from "../core/fingerprint.js";
+import { fingerprint, reusableLineage, stageLineage } from "../core/fingerprint.js";
 import type { ResolvedCall, RunnerName } from "../runners/types.js";
 import type { SourceName } from "../sources/types.js";
 import { glyph } from "../ui/mode.js";
@@ -337,32 +337,36 @@ async function groupDigests(
   const inputIds = Object.keys(opts.digests).sort();
   const sortedDigests = Object.fromEntries(inputIds.map((id) => [id, opts.digests[id] as Digest]));
   const upstream = loadDigests(opts.home)?.lineage;
-  const lineage = stageLineage({
-    stage: "cluster",
-    promptVersion: CLUSTER_PROMPT_VERSION,
-    schema: {
-      cluster: toJsonSchema(ClusterSchema),
-      merge: toJsonSchema(ClusterMergeSchema),
-    },
-    inputs: {
-      digests: sortedDigests,
-      origins: Object.fromEntries(inputIds.map((id) => [id, opts.origins?.[id] ?? "claude"])),
-      upstream: Object.fromEntries(inputIds.map((id) => [id, upstream?.[id]?.fingerprint ?? null])),
-      mode: opts.noGroup ? "one-session-per-task" : "grouped",
-      windows,
-      prompt: buildClusterPrompt(sortedDigests, opts.origins),
-      mergePrompt: buildMergePrompt([]),
-    },
-    model: opts.model,
-    runnerName: settings.automatic ? null : settings.runner,
-  });
+  const lineageFor = (runnerName: RunnerName | null) =>
+    stageLineage({
+      stage: "cluster",
+      promptVersion: CLUSTER_PROMPT_VERSION,
+      schema: {
+        cluster: toJsonSchema(ClusterSchema),
+        merge: toJsonSchema(ClusterMergeSchema),
+      },
+      inputs: {
+        digests: sortedDigests,
+        origins: Object.fromEntries(inputIds.map((id) => [id, opts.origins?.[id] ?? "claude"])),
+        upstream: Object.fromEntries(
+          inputIds.map((id) => [id, upstream?.[id]?.fingerprint ?? null]),
+        ),
+        mode: opts.noGroup ? "one-session-per-task" : "grouped",
+        windows,
+        prompt: buildClusterPrompt(sortedDigests, opts.origins),
+        mergePrompt: buildMergePrompt([]),
+      },
+      model: opts.model,
+      runnerName,
+    });
+  const lineage = lineageFor(settings.automatic ? null : settings.runner);
 
   // Matching names alone cannot prove freshness: content, grouping mode,
   // instructions, or the selected runner can all have changed.
   const existing = loadTasks(opts.home);
   if (existing && existing.generation === opts.generation) {
     if (
-      sameLineage(existing.lineage, lineage) &&
+      reusableLineage(existing.lineage, lineage, lineageFor) &&
       validateCluster(existing, inputIds).length === 0
     ) {
       if (existing.operation_ids)
