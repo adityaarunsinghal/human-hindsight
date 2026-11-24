@@ -153,6 +153,8 @@ else answer();
         "NO_COLOR": "1",
         "TERM": "dumb",
         "LANG": "en_US.UTF-8",
+        # A desktop terminal: on Linux a machine with no display counts as remote.
+        "DISPLAY": ":0",
     })
     # The child PTYs simulate a person's terminal, including when this test runs in CI.
     for key in ["CI", "LC_ALL", "LC_CTYPE", "HUMAN_HINDSIGHT_PLAIN", "HUMAN_HINDSIGHT_FOLLOW_UP", "HUMAN_HINDSIGHT_PROJECT", "HUMAN_HINDSIGHT_RUNNER", "HUMAN_HINDSIGHT_MODEL"]:
@@ -299,7 +301,7 @@ else answer();
     keys_env = dict(env, TERM="xterm-256color", HINDSIGHT_SLOW_PROBE="1")
     key_args = [a if a != str(root / "library") else str(root / "keys-home") for a in args]
     started = time.monotonic()
-    code, output = drive(key_args, [("Enter to choose", b"3")], keys_env)
+    code, output = drive(key_args, [("Enter to choose", b"4")], keys_env)
     elapsed = time.monotonic() - started
     assert code == 0, output
     assert "counting" in output, output
@@ -319,7 +321,7 @@ else answer();
         ("Choose [1]:", b"1\n"),
         # The Start question's own prompt, after the plan and its choices:
         # a y or an empty line does not start; q leaves.
-        ("Choose [1/2/s/q]:", b"y\n"),
+        ("Choose [1/2/3/s/q]:", b"y\n"),
         ("Press s to start, or q to leave.", b"\n"),
         ("Press s to start, or q to leave.", b"q\n"),
     ])
@@ -499,12 +501,12 @@ else if (args[0] === "exec") {
     question = "Which coding CLI should run this reflection?"
     code, output = drive(picker, [
         (question, b"s"), ("Choose a coding CLI before pressing s", b"x"),
-        ("gpt-5.6-terra for session reads", b"2"), ("gpt-5.6-astra for grouping and writing", b"\r"),
+        ("gpt-5.6-terra for session reads", b"3"), ("gpt-5.6-astra for grouping and writing", b"\r"),
         ("Press s to start, or q to leave.", b"q"),
     ], picker_env)
     assert code == 2 and "This run stays on this CLI" in output, output
     assert not selected_models.exists() and not marker.exists(), "A choice or Enter invoked a model."
-    code, output = drive(picker, [(question, b"x"), ("gpt-5.6-terra for session reads", b"2"),
+    code, output = drive(picker, [(question, b"x"), ("gpt-5.6-terra for session reads", b"3"),
                                  ("gpt-5.6-astra for grouping and writing", b"s")], picker_env)
     assert code == 1 and "Codex is not signed in" in output, output
     checks = [json.loads(line) for line in selected_models.read_text().splitlines()]
@@ -578,6 +580,53 @@ else if (args[0] === "exec") {
     assert calls_log.read_text().splitlines().count("digest") == before + 1, calls_log.read_text()
     assert re.search(r"Reused +run", re.sub(r"\x1b\[[0-9;]*m", "", output)), output
     assert "reused from saved work" in output, output
+    # Suggest subagents from the first screen of a fresh data home: one run
+    # exports, shows one plan that names the roles step, reads and summarizes,
+    # writes no prompts, and goes on to the roles without a second approval.
+    scratch_claude = root / "scratch-claude/projects/-synthetic-scratch"
+    scratch_claude.mkdir(parents=True)
+    (scratch_claude / "cccccccc-1111-2222-3333-444444444440.jsonl").write_text(
+        "".join(
+            json.dumps({
+                "type": "user",
+                "timestamp": f"2026-10-24T09:00:{step:02d}Z",
+                "message": {
+                    "role": "user",
+                    "content": f"Step {step}: improve the release workflow and keep the change small, "
+                    "explaining each material change and running the focused tests before finishing.",
+                },
+            }) + "\n"
+            for step in range(6)
+        )
+    )
+    scratch_args = [
+        shutil.which("node"), str(cli), "--home", str(root / "scratch-home"),
+        "--claude-dir", str(root / "scratch-claude"), "--source", "claude",
+    ]
+    calls_before = len(calls_log.read_text().splitlines()) if calls_log.exists() else 0
+    code, output = drive(scratch_args, [
+        ("Enter to choose", b"2"),
+        # Fast is the first plan; s starts it.
+        ("Start reflection", b"1"),
+        ("sonnet for every step", b"s"),
+        ("What next?", b"3"),
+    ], model_env)
+    assert code == 0, output
+    assert "Suggest subagents  reads my sessions, then proposes roles" in output, output
+    assert "No prompts are written in this run." in output, output
+    assert "Then choose and write subagent roles" in output, output
+    assert "Suggesting subagents, as approved with the plan above." in output, output
+    assert "Open my subagents" in output, output
+    scratch_calls = calls_log.read_text().splitlines()[calls_before:]
+    for kind in ["digest", "summarize", "propose", "role"]:
+        assert kind in scratch_calls, (kind, scratch_calls)
+    assert "group" not in scratch_calls and "write" not in scratch_calls, scratch_calls
+    assert (root / "scratch-home/exports/manifest.json").exists(), output
+    assert (root / "scratch-home/library/subagents").is_dir(), output
+    assert not any(
+        entry.name.endswith(".oneshot.md") for entry in (root / "scratch-home/library").rglob("*")
+    ), "A prompt was written in a run for subagents only."
+
     print(
         "PTY workflow passed: an Enter typed before the plan and a held Enter both sent "
         "nothing; unknown flag refused; the bare command's own options; a reflection "
@@ -587,7 +636,8 @@ else if (args[0] === "exec") {
         "on screen; home screen, export, reflection plan; model consent declined; no model calls; "
         "opt-out respected; Ctrl-C at the Start question; the short plan at 12 rows; the subagents "
         "closing menu runs an opener only when chosen; Ctrl-C mid-run leaves no process and the "
-        "rerun reuses finished reads."
+        "rerun reuses finished reads; Suggest subagents from a fresh home makes its reads and "
+        "summaries, writes no prompts, and reaches the roles on one approval."
     )
 finally:
     shutil.rmtree(root)

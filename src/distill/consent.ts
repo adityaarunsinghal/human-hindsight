@@ -1115,6 +1115,10 @@ async function confirmReflection(
       const lines = [
         s.bold("Reflect on your history"),
         ...wrapText(`${scope}${projects}${eligible}`, width),
+        // A run for the preferences alone says so before the choices.
+        ...(plan.prompts === false
+          ? wrapText("No prompts are written in this run.", width).map(s.dim)
+          : []),
         "",
       ];
       const runnerInk = {

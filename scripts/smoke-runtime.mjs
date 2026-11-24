@@ -45,6 +45,11 @@ try {
       ...process.env,
       HUMAN_HINDSIGHT_HOME: undefined,
       CC_HINDSIGHT_HOME: libraryHome,
+      // A desktop session, so `gui` picks its own port as it does on a laptop.
+      SSH_CONNECTION: "",
+      SSH_CLIENT: "",
+      SSH_TTY: "",
+      DISPLAY: ":0",
     };
     const run = (args) =>
       execFileSync(process.execPath, [binary, ...args], { env, encoding: "utf8", timeout: 10000 });
