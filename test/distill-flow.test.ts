@@ -760,13 +760,59 @@ describe("consent", () => {
     expect(flat(text)).toContain("Sessions that would be read:");
   });
 
+  it("leaves a session over the size limit out, says so on the plan, and reads the rest", async () => {
+    const home = tmpHome(sessions(3));
+    fs.writeFileSync(path.join(home, "exports", "s01"), "z".repeat(50_000));
+    const claude = fakeCli("claude", ALIASES);
+    const { code, text } = await run(
+      { home, "input-budget": "20000", yes: true, generalize: false },
+      { runners: [claude] },
+    );
+    expect(code).toBe(0);
+    // Said before anything is sent, with the session's name and length.
+    const plan = flat(text.slice(0, text.indexOf("Preparing reflection")));
+    expect(plan).toContain(
+      "1 session is longer than the size limit per call of 20,000 characters and is left out of this run: s01 (50,000 characters).",
+    );
+    expect(plan).toContain("2 session reads");
+    // The other two are read, grouped, and written; the long one is never sent.
+    expect(modelCalls(claude, "digest")).toBe(2);
+    expect(flat(text)).toContain("Reflection complete");
+    expect(flat(text)).not.toContain("finished with failures");
+    // The closing lines give the command that includes it.
+    const closing = text.slice(text.indexOf("Reflection complete"));
+    expect(flat(closing)).toContain(
+      "1 session was left out for being longer than the size limit per call of 20,000 characters:",
+    );
+    expect(closing).toMatch(
+      /To include it, shortened to fit, run:\n {2}npx human-hindsight reflect --home=<HOME> .*--input-budget=20000 --truncate=extreme/,
+    );
+  });
+
+  it("previews the same plan with --dry-run: the long session is named and not listed to read", async () => {
+    const home = tmpHome(sessions(3));
+    fs.writeFileSync(path.join(home, "exports", "s01"), "z".repeat(50_000));
+    const claude = fakeCli("claude", ALIASES);
+    const { code, text } = await run(
+      { home, "input-budget": "20000", "dry-run": true },
+      { runners: [claude] },
+    );
+    expect(code).toBe(0);
+    expect(flat(text)).toContain("is left out of this run: s01 (50,000 characters).");
+    const listed = text.slice(text.indexOf("Sessions that would be read:"));
+    expect(listed).toContain("s00");
+    expect(listed).toContain("s02");
+    expect(listed).not.toContain("s01");
+    expect(modelCalls(claude)).toBe(0);
+  });
+
   it.each([
     {
-      name: "refuses a session over the budget before consent",
+      name: "when every selected session is over the size limit, sends nothing and gives the command that shortens them",
       args: { "input-budget": "1000" },
       big: true,
       code: 1,
-      says: "longer than the size limit per call",
+      says: "The selected session is longer than the size limit per call of 1,000 characters, so nothing was sent:",
     },
     {
       name: "exits 0 when nothing meets the substance threshold",
@@ -783,6 +829,10 @@ describe("consent", () => {
     const result = await run({ home, ...args }, { confirm, runners: [claude] });
     expect(result.code).toBe(code);
     expect(flat(result.text)).toContain(says);
+    if (big)
+      expect(result.text).toMatch(
+        /To shorten it to fit and reflect on it, run:\n {2}npx human-hindsight reflect --home=<HOME> --input-budget=1000 --truncate=extreme/,
+      );
     expect(confirm).not.toHaveBeenCalled();
     expect(modelCalls(claude)).toBe(0);
   });

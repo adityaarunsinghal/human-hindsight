@@ -223,6 +223,11 @@ export function computePlan(
   };
 }
 
+/** A session left out for its size: its export name and its length. */
+function leftOutName(entry: { export: string; chars: number }): string {
+  return `${cyan(entry.export)} ${dim(`(${entry.chars.toLocaleString("en-US")} characters)`)}`;
+}
+
 /** Apply the same UTF-16 character count as the digest stage before spending anything. */
 function computeOversized(
   home: string,
@@ -273,6 +278,8 @@ export interface DistillDeps {
 /** Large histories are offered this many of their newest sessions first. */
 const QUICK_START = 25;
 const NOTHING_SENT = "Nothing was sent.";
+/** How many sessions left out for their size are named in the closing lines. */
+const LEFT_OUT_SHOWN = 5;
 
 /**
  * Where each setting that can pin the CLI came from, read from the arguments
@@ -733,7 +740,7 @@ async function distillSelectedSessions(opts: {
   /** Silence this run's output after Ctrl-C has printed its line. */
   mute?: () => void;
 }): Promise<number> {
-  const { home, explicitArgs, deps, plan, clusterBatchSize, budget, truncate, timeoutMs } = opts;
+  const { home, explicitArgs, deps, clusterBatchSize, budget, truncate, timeoutMs } = opts;
   let { session, args } = opts;
   const out = deps.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
@@ -755,6 +762,47 @@ async function distillSelectedSessions(opts: {
   const bullet = dim(glyph("•", "-"));
   const noGroup = args.group === false;
   const concurrency = parseConcurrency(args.concurrency);
+
+  // Sessions longer than the size limit per call. Text is shortened only when
+  // asked for (--truncate=extreme), so by default they are left out of this
+  // run and everything else goes on: the plan names them before anything is
+  // sent, and the closing lines give the command that includes them.
+  // Known limit: a session read once with --truncate=extreme is left out
+  // again by a later default run, and the grouping follows.
+  const oversized = await withSpinner(
+    out,
+    "Checking session sizes",
+    async () => computeOversized(home, opts.plan.eligible, budget),
+    { plainLine: false },
+  );
+  const leftOut = truncate === "never" ? oversized : [];
+  const tooLong = new Set(leftOut.map((entry) => entry.export));
+  const plan = leftOut.length
+    ? computePlan(
+        opts.plan.eligible.filter((entry) => !tooLong.has(entry.export)),
+        { minSubstance: 0, noGroup, clusterBatchSize },
+      )
+    : opts.plan;
+  /** The command that includes them. After a run it keeps the quality that run used. */
+  const includeLeftOut = (ran: boolean) =>
+    nextCommandText("reflect", {
+      ...args,
+      home,
+      ...(ran && { quality: session.quality }),
+      truncate: "extreme",
+    });
+  if (leftOut.length && plan.digests === 0) {
+    // Nothing fits as it is, so there is no run to go on with.
+    say(
+      `${leftOut.length === 1 ? "The selected session is" : `All ${counted(leftOut.length, "selected session")} are`} longer than the size limit per call of ${budget.toLocaleString("en-US")} characters, so nothing was sent:`,
+    );
+    for (const entry of leftOut) write(`  ${skip(leftOutName(entry))}`);
+    command(
+      `To shorten ${leftOut.length === 1 ? "it" : "them"} to fit and reflect on ${leftOut.length === 1 ? "it" : "them"}, run:`,
+      includeLeftOut(false),
+    );
+    return 1;
+  }
   // The readiness check runs before the first real model call of the run and
   // never when nothing needs one. Every stage call goes through this gate.
   // A failed check prints its line once; the calls it stops fail with its
@@ -808,33 +856,6 @@ async function distillSelectedSessions(opts: {
     budget,
     timeoutMs,
   };
-
-  // Consent-time (pre-spend) overflow estimate.
-  const oversized = await withSpinner(
-    out,
-    "Checking session sizes",
-    async () => computeOversized(home, plan.eligible, budget),
-    { plainLine: false },
-  );
-
-  // Default (--truncate=never): refuse BEFORE spending anything if any session
-  // exceeds the budget. Nothing is ever cut silently. the user chooses a flag.
-  // (Dry-run still previews the plan below and notes the would-be block.)
-  if (!args["dry-run"] && truncate === "never" && oversized.length > 0) {
-    write();
-    say(
-      `${counted(oversized.length, "session is", "sessions are")} longer than the size limit per call of ${budget.toLocaleString("en-US")} characters, so nothing was sent:`,
-    );
-    for (const o of oversized) {
-      write(
-        `  ${skip(`${cyan(o.export)} ${dim(`(${o.chars.toLocaleString("en-US")} characters)`)}`)}`,
-      );
-    }
-    say(
-      "To include them, run again with --truncate=extreme to shorten them to fit, raise --input-budget, or narrow the scope with --project or --min-substance.",
-    );
-    return 1;
-  }
 
   // --fresh intent is confirmed up front, but the checkpoints are NOT deleted
   // until the MAIN consent gate and the readiness check also pass: declining
@@ -1352,6 +1373,16 @@ async function distillSelectedSessions(opts: {
     say(
       `${counted(doneTotal, "session read")} ${glyph("·", "-")} ${Math.floor(elapsed / 60)}m ${elapsed % 60}s`,
     );
+    if (leftOut.length) {
+      const one = leftOut.length === 1;
+      say(
+        `${counted(leftOut.length, "session was", "sessions were")} left out for being longer than the size limit per call of ${budget.toLocaleString("en-US")} characters:`,
+      );
+      for (const entry of leftOut.slice(0, LEFT_OUT_SHOWN)) write(`  ${skip(leftOutName(entry))}`);
+      if (leftOut.length > LEFT_OUT_SHOWN)
+        write(`  ${dim(`and ${(leftOut.length - LEFT_OUT_SHOWN).toLocaleString("en-US")} more`)}`);
+      command(`To include ${one ? "it" : "them"}, shortened to fit, run:`, includeLeftOut(true));
+    }
     if (highlight) {
       write(ink.bold(ink.magenta("What you care about")));
       say(terminalExcerpt(preferenceReview(home, highlight, reviews.reviews).text, 190));

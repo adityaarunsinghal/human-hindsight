@@ -154,6 +154,15 @@ export interface SubagentsPlan {
 /** A count with thousands separators, as everywhere else on screen. */
 const count = (n: number): string => n.toLocaleString("en-US");
 
+/** Up to three of the sessions left out for their size, by export name. */
+function leftOutNames(sessions: { export: string; chars: number }[]): string {
+  const shown = sessions
+    .slice(0, 3)
+    .map((entry) => `${entry.export} (${count(entry.chars)} characters)`);
+  const more = sessions.length - shown.length;
+  return more > 0 ? `${shown.join(", ")}, and ${count(more)} more` : shown.join(", ");
+}
+
 /** Human-facing CLI name + the cost noun, per runner (for consent copy). */
 function runnerCopy(name: DistillPlan["runnerName"]): { cli: string; cost: string } {
   return name === "kiro"
@@ -512,7 +521,8 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
     row("Library", parts.join(" "));
   }
 
-  // Sessions longer than the size limit per call.
+  // Sessions longer than the size limit per call: shortened when asked for,
+  // otherwise left out of this run, which goes on with the rest.
   if (plan.oversized?.length && plan.budget !== undefined) {
     const n = plan.oversized.length;
     const what = `${counted(n, "session is", "sessions are")} longer than the size limit per call of ${count(plan.budget)} characters`;
@@ -520,7 +530,7 @@ function distillRows(plan: DistillPlan, session: SessionDescription): Row[] {
       "Size",
       plan.truncate === "extreme"
         ? `${what} and will be shortened to fit.`
-        : `${what}. A real run stops before sending anything; add --truncate=extreme to shorten them, or raise --input-budget.`,
+        : `${what} and ${n === 1 ? "is" : "are"} left out of this run: ${leftOutNames(plan.oversized)}. To include ${n === 1 ? "it" : "them"}, shortened to fit, add --truncate=extreme.`,
     );
   }
 
@@ -881,14 +891,16 @@ function renderBarePlan(plan: DistillPlan, bullet: string): string {
       }.`,
     );
   }
-  // Never-mode overflow is refused before consent, so only extreme mode reaches here oversized.
   if (plan.budget !== undefined) {
     const oversized = plan.oversized ?? [];
-    if (oversized.length > 0 && plan.truncate === "extreme") {
-      lines.push(
-        `  ${yellow(`${glyph("⚠", "!")} ${counted(oversized.length, "session is", "sessions are")} longer than the ${count(plan.budget)}-character budget and will be shortened to fit.`)}`,
-      );
-    } else if (oversized.length === 0) {
+    if (oversized.length > 0) {
+      const what = `${counted(oversized.length, "session is", "sessions are")} longer than the ${count(plan.budget)}-character budget`;
+      const then =
+        plan.truncate === "extreme"
+          ? "will be shortened to fit."
+          : `${oversized.length === 1 ? "is" : "are"} left out of this run: ${leftOutNames(oversized)}.`;
+      lines.push(`  ${yellow(`${glyph("⚠", "!")} ${what} and ${then}`)}`);
+    } else {
       lines.push(
         `  ${dim(`Every eligible session fits the ${count(plan.budget)}-character budget.`)}`,
       );
