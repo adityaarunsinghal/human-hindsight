@@ -173,12 +173,16 @@ function noHistory(snapshot: EnvironmentSnapshot): boolean {
   );
 }
 
+/** Whether `--runner` lets this CLI run: no choice, `auto`, its name, or a list holding it. */
+function runnerAllows(runner: string | undefined, name: string): boolean {
+  if (!runner) return true;
+  const named = runner.split(",").map((part) => part.trim().toLowerCase());
+  return named.includes("auto") || named.includes(name);
+}
+
 function canReflect(snapshot: EnvironmentSnapshot, args: HomeArgs): boolean {
   return snapshot.rows.some(
-    (row) =>
-      row.name !== "kirocrew" &&
-      row.installed &&
-      (!args.runner || args.runner === "auto" || args.runner === row.name),
+    (row) => row.name !== "kirocrew" && row.installed && runnerAllows(args.runner, row.name),
   );
 }
 
@@ -321,15 +325,13 @@ export function homeFix(snapshot: EnvironmentSnapshot, args: HomeArgs): HomeFix 
   if (noHistory(snapshot)) return undefined;
   const runners = snapshot.rows.filter((row) => row.name !== "kirocrew");
   if (!canReflect(snapshot, args)) {
-    const named = runners.find((row) => row.name === args.runner);
+    const named = runners.find((row) => args.runner && runnerAllows(args.runner, row.name));
     if (named?.fix) return { says: `To reflect through ${named.tool}, run:`, run: named.fix };
     const row = busiestRow(included(snapshot).filter((item) => item.fix && !item.installed));
     const run = row?.fix ?? runners.find((item) => item.fix)?.fix;
     return { says: "Export works now. To reflect on your history, install a coding CLI:", run };
   }
-  const installed = runners.filter(
-    (row) => row.installed && (!args.runner || args.runner === "auto" || args.runner === row.name),
-  );
+  const installed = runners.filter((row) => row.installed && runnerAllows(args.runner, row.name));
   const signedOut = installed.filter((row) => row.signIn?.state === "needs-sign-in");
   if (signedOut.length && signedOut.length === installed.length) {
     const row = busiestRow(signedOut.filter((item) => item.included)) ?? signedOut[0];

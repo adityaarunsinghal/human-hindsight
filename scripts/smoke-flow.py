@@ -504,14 +504,37 @@ else if (args[0] === "exec") {
         ("gpt-5.6-terra for session reads", b"3"), ("gpt-5.6-astra for grouping and writing", b"\r"),
         ("Press s to start, or q to leave.", b"q"),
     ], picker_env)
-    assert code == 2 and "This run stays on this CLI" in output, output
+    # The choice is where the run starts; the plan names the CLI it may move to
+    # and the way to keep it on one.
+    flat_plan = " ".join(re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", output).split())
+    assert code == 2, output
+    assert "If Codex stops working, the run moves to Claude Code and says so." in flat_plan, output
+    assert "To keep it on Codex only, run with --runner=codex." in flat_plan, output
+    assert "This run stays on this CLI" not in output, output
     assert not selected_models.exists() and not marker.exists(), "A choice or Enter invoked a model."
-    code, output = drive(picker, [(question, b"x"), ("gpt-5.6-terra for session reads", b"3"),
-                                 ("gpt-5.6-astra for grouping and writing", b"s")], picker_env)
+
+    # Kept on one CLI with --runner: its failure ends the run and no other CLI is asked.
+    code, output = drive(
+        picker + ["--runner", "codex", "--quality", "best"], [("Start reflection", b"s")], picker_env
+    )
     assert code == 1 and "Codex is not signed in" in output, output
+    assert "Continuing with" not in output, output
     checks = [json.loads(line) for line in selected_models.read_text().splitlines()]
     assert {check["model"] for check in checks} == {"gpt-5.6-sol", "gpt-5.6-astra"}, checks
-    assert all(check["check"] for check in checks) and not marker.exists(), "The pinned plan sent work to a different runner."
+    assert all(check["check"] for check in checks) and not marker.exists(), "The run kept on one CLI asked another."
+
+    # Chosen at the plan: when it is not signed in, the run moves to the other
+    # ready CLI and says so in one line. Codex saw only the readiness requests.
+    selected_models.unlink()
+    code, output = drive(picker, [(question, b"x"), ("gpt-5.6-terra for session reads", b"3"),
+                                 ("gpt-5.6-astra for grouping and writing", b"s")], picker_env)
+    assert output.count("Codex is not signed in. Continuing with Claude Code.") == 1, output
+    checks = [json.loads(line) for line in selected_models.read_text().splitlines()]
+    assert {check["model"] for check in checks} == {"gpt-5.6-sol", "gpt-5.6-astra"}, checks
+    assert all(check["check"] for check in checks), "Codex was sent more than the readiness requests."
+    # The stand-in Claude Code refuses every model call, so the run ends there.
+    assert code == 1 and marker.exists(), output
+    marker.unlink()
 
     model_env = dict(env, TERM="xterm-256color", PATH=isolated_path(model_dir))
 

@@ -69,7 +69,7 @@ afterEach(() => {
 });
 
 describe("openRunSession pinning", () => {
-  it("a menu choice uses the discovered catalog once and stays on that CLI when it exhausts its quota", async () => {
+  it("a menu choice starts on that CLI, uses the discovered catalog once, and moves on when it exhausts its quota", async () => {
     const claude = fake("claude", ALIASES);
     const codex = fake("codex", ONE_CODEX, failing("quota"));
     const list = vi.spyOn(codex, "listModels");
@@ -77,23 +77,69 @@ describe("openRunSession pinning", () => {
     unavailable.preflight = async () => {
       throw new Error("CLI lacks a required flag");
     };
-    const automatic = await open([claude, codex, unavailable]).session;
+    const { session, output } = open([claude, codex, unavailable]);
+    const automatic = await session;
     expect(automatic.runnerChoices.map(({ name }) => name)).toEqual(["claude", "codex"]);
     const chosen = automatic.runnerChoices[1]?.select();
-    expect(chosen?.identityRunner).toBe("codex");
-    expect(chosen?.describe()).toMatchObject({
-      pinned: true,
-      alsoReady: [],
+    if (!chosen) throw new Error("expected a choice");
+    // The chosen CLI is first and the other ready one stays behind it; `--runner` reproduces the order.
+    expect(chosen.order).toEqual(["codex", "claude"]);
+    expect(chosen.ledgerRunner).toBe("codex");
+    // The plan asks for a quality, not for a CLI, so saved work is reused whichever CLI is chosen.
+    expect(chosen.pinned).toBe(false);
+    expect(chosen.identityRunner).toBeNull();
+    expect(chosen.describe()).toMatchObject({
+      pinned: false,
+      alsoReady: ["Claude Code"],
       plans: { balanced: { bulk: "gpt-5.6-terra" } },
     });
     expect(codex.models).toEqual([]);
     expect(list).toHaveBeenCalledTimes(1);
-    expect(await chosen?.liveCheck()).toMatchObject({
-      ok: false,
-      line: expect.stringContaining("Run npx human-hindsight reflect to choose another CLI."),
-    });
-    expect(claude.models).toEqual([]);
-    await chosen?.finalize();
+    // Out of quota: the run moves on and says so, in one line.
+    expect(await chosen.liveCheck()).toEqual({ ok: true });
+    expect(chosen.ledgerRunner).toBe("claude");
+    expect(output.text()).toContain(
+      "Codex has reached its usage limit. Continuing with Claude Code.",
+    );
+    expect(claude.models.length).toBeGreaterThan(0);
+    await chosen.finalize();
+  });
+
+  it("one name keeps the run on that CLI; a list is tried in its order and is not asked about again", async () => {
+    const pinned = await open([fake("claude", ALIASES), fake("codex", CODEX)], { runner: "codex" })
+      .session;
+    expect(pinned.pinned).toBe(true);
+    expect(pinned.order).toEqual(["codex"]);
+    expect(pinned.identityRunner).toBe("codex");
+    expect(pinned.runnerChoices).toEqual([]);
+
+    const listed = await open([fake("claude", ALIASES), fake("codex", CODEX), fake("kiro", NONE)], {
+      runner: "codex, claude",
+    }).session;
+    expect(listed.pinned).toBe(false);
+    expect(listed.order).toEqual(["codex", "claude"]);
+    expect(listed.identityRunner).toBeNull();
+    expect(listed.describe().alsoReady).toEqual(["Claude Code"]);
+    // The person gave the order, so there is nothing to choose.
+    expect(listed.runnerChoices).toEqual([]);
+  });
+
+  it.each([
+    "codex,codex",
+    "codex,auto",
+    "codex,",
+    "codex,nope",
+  ])("refuses the list %j before looking for any CLI", async (runner) => {
+    await expect(open([fake("codex", CODEX)], { runner }).session).rejects.toThrow(
+      /unknown --runner/,
+    );
+  });
+
+  it("a listed CLI that is not installed is left out, with a line saying so", async () => {
+    const { session, output } = open([fake("claude", ALIASES)], { runner: "kiro,claude" });
+    const opened = await session;
+    expect(opened.order).toEqual(["claude"]);
+    expect(output.text()).toContain("Kiro CLI is not installed and is left out.");
   });
   it("an automatic session discloses the other ready CLIs and uses plan labels", async () => {
     const { session } = open([fake("claude", ALIASES), fake("codex", CODEX)]);

@@ -12,7 +12,7 @@ import {
   installAndSignIn,
 } from "../runners/capabilities.js";
 import { orderCandidates } from "../runners/pool.js";
-import { makeRunner, parseRunnerMode, RUNNER_INFO } from "../runners/registry.js";
+import { makeRunner, parseRunnerList, RUNNER_INFO } from "../runners/registry.js";
 import type { RunnerIo } from "../runners/shared.js";
 import type { RunnerName } from "../runners/types.js";
 import { heading, setupTable } from "../ui/screen.js";
@@ -64,7 +64,9 @@ export async function runDoctor(
   const paths = resolvePaths(args);
   const out = deps.output ?? process.stdout;
   const write = (line = "") => out.write(`${line}\n`);
-  const mode = parseRunnerMode(args.runner);
+  // With an order of several CLIs, the first is the one a run starts on.
+  const named = parseRunnerList(args.runner);
+  const mode = named === "auto" ? "auto" : (named[0] ?? "auto");
   const discovery = await startEnvironment(paths, {
     ...args,
     io: deps.io,

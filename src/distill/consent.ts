@@ -432,10 +432,10 @@ function sendingRow(session: SessionDescription, what: string, check: string, af
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 
 /** "a, b, and c". */
-function listed(parts: string[]): string {
+function listed(parts: string[], joiner = "and"): string {
   if (parts.length <= 1) return parts.join("");
-  if (parts.length === 2) return `${parts[0]} and ${parts[1]}`;
-  return `${parts.slice(0, -1).join(", ")}, and ${parts.at(-1)}`;
+  if (parts.length === 2) return `${parts[0]} ${joiner} ${parts[1]}`;
+  return `${parts.slice(0, -1).join(", ")}, ${joiner} ${parts.at(-1)}`;
 }
 
 /** A model name as the plan screen says it. */
@@ -1143,12 +1143,21 @@ async function confirmReflection(
             width,
           ),
         );
+        // The choice is where the run starts. Every CLI that may receive text is named here.
+        if (ready && plan.runnerName && plan.session?.alsoReady.length)
+          lines.push(
+            ...wrapText(
+              `If ${cliName(plan.session)} stops working, the run moves to ${listed(plan.session.alsoReady, "or")} and says so. To keep it on ${cliName(plan.session)} only, run with --runner=${plan.runnerName}.`,
+              width,
+              { indent: "  " },
+            ).map(s.dim),
+          );
       } else if (plan.runnerName && plan.session) {
         lines.push(`Runs on  ${s[RUNNER_INK[plan.runnerName]](plan.session.runnerLine)}`);
         if (plan.session.alsoReady.length)
           lines.push(
             ...wrapText(
-              `If this CLI stops working, the run can move to ${listed(plan.session.alsoReady)}.`,
+              `If this CLI stops working, the run can move to ${listed(plan.session.alsoReady, "or")}.`,
               width,
               { indent: "  " },
             ),

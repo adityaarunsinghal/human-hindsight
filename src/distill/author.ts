@@ -17,8 +17,8 @@ import {
 import {
   contentFingerprint,
   fingerprint,
+  reusableLineage,
   type StageLineage,
-  sameLineage,
   stageLineage,
 } from "../core/fingerprint.js";
 import { atomicWriteFilePrivate, mkdirPrivate } from "../core/fsutil.js";
@@ -1007,7 +1007,17 @@ export async function runAuthorStage(opts: AuthorStageOptions): Promise<AuthorSt
         const unchanged =
           existing?.generation === opts.generation &&
           current !== null &&
-          sameLineage(existing.lineage, request.lineage as StageLineage);
+          reusableLineage(
+            existing.lineage,
+            request.lineage as StageLineage,
+            (runner) =>
+              prepareAuthorRequest(
+                opts.home,
+                logical,
+                { ...settings, automatic: false, runner },
+                contents,
+              ).lineage as StageLineage,
+          );
         // The file is not the prompt its provenance records: edited by hand,
         // or written by a version that recorded no hash.
         const differs =

@@ -698,7 +698,7 @@ export default defineCommand({
     runner: {
       type: "string",
       description:
-        "Which local CLI consolidates: claude, codex, kiro, opencode, or auto (default: auto)",
+        "Which local CLI consolidates: claude, codex, kiro, opencode, or auto (default). One name keeps the run on that CLI; several, separated by commas, are tried in order",
     },
     model: {
       type: "string",

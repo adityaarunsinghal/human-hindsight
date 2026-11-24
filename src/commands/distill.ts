@@ -605,7 +605,8 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       session,
       selectRunner: (chosen) => {
         session = chosen;
-        args = { ...args, runner: chosen.ledgerRunner };
+        // The chosen CLI and the ones it may move to, as `--runner` takes them.
+        args = { ...args, runner: chosen.order.join(",") };
       },
       plan,
       eligible: everything.digests,
@@ -970,7 +971,7 @@ async function distillSelectedSessions(opts: {
 
   // Both reuse counts are computed before the screen is shown, so the numbers
   // on screen are right whichever plan is picked.
-  function preview(session: RunSession, chosenRunner?: RunnerName) {
+  function preview(session: RunSession, chosenRunner?: string) {
     const description = session.describe();
     const selectedQuality = session.quality;
     const choices = {} as NonNullable<DistillPlan["choices"]>;
@@ -1043,13 +1044,13 @@ async function distillSelectedSessions(opts: {
     select() {
       let candidate = cached.get(choice.name);
       if (!candidate) {
-        const pinned = choice.select();
-        candidate = { session: pinned, preview: preview(pinned, choice.name) };
+        const chosen = choice.select();
+        candidate = { session: chosen, preview: preview(chosen, chosen.order.join(",")) };
         cached.set(choice.name, candidate);
       }
       session = candidate.session;
       selected = candidate.preview;
-      args = { ...args, runner: choice.name };
+      args = { ...args, runner: session.order.join(",") };
       opts.selectRunner(session);
       return selected.plan;
     },
@@ -1640,7 +1641,7 @@ export default defineCommand({
       type: "string",
       valueHint: "cli",
       description:
-        "Which local CLI runs the reflection: claude, codex, kiro, opencode, or auto (default: auto)",
+        "Which local CLI runs the reflection: claude, codex, kiro, opencode, or auto (default). One name keeps the run on that CLI; several, separated by commas, are tried in order",
     },
     fresh: {
       type: "boolean",

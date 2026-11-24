@@ -105,7 +105,9 @@ Options
 
   --runner <cli>                           Which local CLI runs the reflection:
                                            claude, codex, kiro, opencode, or
-                                           auto (default: auto)
+                                           auto (default). One name keeps the
+                                           run on that CLI; several, separated
+                                           by commas, are tried in order
   --model <name>                           Model for every step, as your CLI
                                            names it
   --cluster-model <name>                   Model for grouping sessions only
@@ -246,7 +248,9 @@ Usage
 Options
 
   --runner <cli>        Which local CLI consolidates: claude, codex, kiro,
-                        opencode, or auto (default: auto)
+                        opencode, or auto (default). One name keeps the run on
+                        that CLI; several, separated by commas, are tried in
+                        order
   --model <name>        Model for --consolidate, passed to the CLI's --model
   --project <name>      Include accepted instructions for this exact project,
                         alongside global instructions
@@ -269,7 +273,9 @@ Usage
 Options
 
   --runner <cli>               Which local CLI runs the stages: claude, codex,
-                               kiro, opencode, or auto (default: auto)
+                               kiro, opencode, or auto (default). One name keeps
+                               the run on that CLI; several, separated by
+                               commas, are tried in order
   --model <name>               Model for summarizing preferences (env
                                HUMAN_HINDSIGHT_SUBAGENT_MODEL; default: the
                                selected plan)

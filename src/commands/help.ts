@@ -12,7 +12,7 @@ import { parseQuality } from "../core/model-plan.js";
 import { type ValueRule, valueProblem } from "../core/value-rule.js";
 import { WINDOW_SIZE_RULE } from "../distill/generalize.js";
 import { RUNNER_INFO } from "../runners/capabilities.js";
-import { parseRunnerMode } from "../runners/registry.js";
+import { parseRunnerList } from "../runners/registry.js";
 import { SOURCE_PRODUCT_NAMES } from "../sources/labels.js";
 import { parseSourceMode } from "../sources/registry.js";
 import {
@@ -344,8 +344,8 @@ const VALUE_RULES: Record<string, ValueRule> = {
     says: choiceList([...Object.keys(SOURCE_PRODUCT_NAMES), "auto"]),
   },
   runner: {
-    accepts: (value) => passes(() => parseRunnerMode(value)),
-    says: choiceList([...Object.keys(RUNNER_INFO), "auto"]),
+    accepts: (value) => passes(() => parseRunnerList(value)),
+    says: `${choiceList([...Object.keys(RUNNER_INFO), "auto"])}, or several CLIs separated by commas`,
   },
   quality: {
     accepts: (value) => passes(() => parseQuality(value)),

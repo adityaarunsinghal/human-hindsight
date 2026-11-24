@@ -6,7 +6,7 @@ import {
   contentFingerprint,
   digestSourceFingerprint,
   fingerprint,
-  sameLineage,
+  reusableLineage,
   stageLineage,
 } from "../core/fingerprint.js";
 import type { OutcomeEvidence } from "../core/outcome.js";
@@ -324,7 +324,12 @@ export function planDigestReuse(opts: ReuseOptions): {
         contentHash: contentFingerprint(original),
       };
       const request = prepareDigestRequest(logical, original, settings);
-      if (!opts.fresh && sameLineage(checkpoint.lineage?.[entry.export], request.lineage)) {
+      const asRunner = (runner: RunnerName) =>
+        prepareDigestRequest(logical, original, { ...settings, automatic: false, runner }).lineage;
+      if (
+        !opts.fresh &&
+        reusableLineage(checkpoint.lineage?.[entry.export], request.lineage, asRunner)
+      ) {
         counts.reusable++;
         counts.reused.push(entry.export);
       } else counts.regenerating++;
@@ -532,7 +537,10 @@ export async function runDigestStage(opts: DigestStageOptions): Promise<DigestSt
         }
         const request = prepareDigestRequest(logical, original, settings);
         const cached = state.digests[id];
-        if (cached && sameLineage(state.lineage?.[id], request.lineage)) {
+        const asRunner = (runner: RunnerName) =>
+          prepareDigestRequest(logical, original, { ...settings, automatic: false, runner })
+            .lineage;
+        if (cached && reusableLineage(state.lineage?.[id], request.lineage, asRunner)) {
           result.skipped++;
           reporter.read(
             id,

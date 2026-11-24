@@ -506,7 +506,7 @@ describe("consent", () => {
     expect(modelCalls(codex, "digest")).toBe(1);
   });
 
-  it("switches the displayed models and cache identity with the CLI, then runs only the pinned Best plan", async () => {
+  it("a chosen CLI is where the run starts: its models show, the others stay as a fallback, and saved reads are reused whichever is chosen", async () => {
     const home = tmpHome(sessions(2));
     const claude = fakeCli("claude", ALIASES);
     const codex = fakeCli("codex", CODEX);
@@ -517,7 +517,13 @@ describe("consent", () => {
     expect(result.text).toContain("Choose a coding CLI before pressing s to start.");
     expect(flat(result.text)).toContain("fable for grouping and writing");
     expect(flat(result.text)).toContain("gpt-5.6-astra for grouping and writing");
-    expect(flat(result.text)).toContain("This run stays on this CLI.");
+    // Every CLI that may receive text is named before approval, with the way to keep it to one.
+    expect(flat(result.text)).toContain(
+      "If Codex stops working, the run moves to Claude Code and says so. To keep it on Codex only, run with --runner=codex.",
+    );
+    expect(flat(result.text)).toContain("through Codex (or the CLI the run moves to)");
+    expect(flat(result.text)).not.toContain("This run stays on this CLI.");
+    // Nothing went wrong, so only the chosen CLI was called.
     expect(claude.calls).toEqual([]);
     expect(
       codex.calls
@@ -528,12 +534,74 @@ describe("consent", () => {
     expect(codex.calls.filter((call) => call.stage === "digest").map((call) => call.model)).toEqual(
       ["gpt-5.6-sol", "gpt-5.6-sol"],
     );
-    const resume = await run(
-      { home, runner: "codex", quality: "best", "dry-run": true },
-      { runners: [claude, codex] },
+    // The reads are saved for the Best plan, not for one CLI: starting on either reuses them.
+    for (const runner of ["codex,claude", "claude,codex", "auto"]) {
+      const again = await run(
+        { home, runner, quality: "best", "dry-run": true },
+        { runners: [claude, codex] },
+      );
+      expect(flat(again.text), runner).toContain("no new session reads (2 reused from saved work)");
+      expect(again.text).not.toContain("Which coding CLI");
+    }
+  });
+
+  it("a run free to use any CLI reuses what one CLI saved for the same plan, at every step", async () => {
+    const home = tmpHome(sessions(3));
+    const first = fakeCli("codex", CODEX);
+    // Saved by a run kept on Codex, as a choice at the plan was in 2.1.0 to 2.1.2.
+    expect(
+      (await run({ home, yes: true, runner: "codex", generalize: false }, { runners: [first] }))
+        .code,
+    ).toBe(0);
+    expect(modelCalls(first, "digest")).toBe(3);
+    const claude = fakeCli("claude", ALIASES);
+    const codex = fakeCli("codex", CODEX);
+    const again = await run({ home, yes: true, generalize: false }, { runners: [claude, codex] });
+    expect(again.code).toBe(0);
+    // Nothing is read, grouped, or written again, and no CLI is even checked.
+    expect(claude.calls).toEqual([]);
+    expect(codex.calls).toEqual([]);
+    expect(again.text.match(/Everything was already up to date/g)).toHaveLength(1);
+    // Another plan is another result: Best reads again.
+    const best = fakeCli("claude", ALIASES);
+    const other = await run(
+      { home, quality: "best", "dry-run": true, generalize: false },
+      { runners: [best, fakeCli("codex", CODEX)] },
     );
-    expect(flat(resume.text)).toContain("no new session reads (2 reused from saved work)");
-    expect(resume.text).not.toContain("Which coding CLI");
+    expect(flat(other.text)).toContain("3 session reads");
+    // And a run kept on another CLI still reads for itself, as before.
+    const kept = await run(
+      { home, runner: "claude", "dry-run": true, generalize: false },
+      { runners: [fakeCli("claude", ALIASES)] },
+    );
+    expect(flat(kept.text)).toContain("3 session reads");
+  });
+
+  it("the chosen CLI failing partway moves the run to the next one, in one line, and the run finishes", async () => {
+    const home = tmpHome(sessions(3));
+    const claude = fakeCli("claude", ALIASES);
+    let reads = 0;
+    const codex = fakeCli("codex", CODEX, (opts) => {
+      // Ready at the check, then out of quota after its first read.
+      if (stageOf(opts) === "digest" && ++reads > 1)
+        throw Object.assign(new Error("usage limit reached"), { kind: "quota" });
+      return answer(opts);
+    });
+    const input = PassThrough.from(["x\ns\n"]);
+    const { code, text } = await run(
+      { home, generalize: false, concurrency: "1" },
+      { runners: [claude, codex], input },
+    );
+    expect(code).toBe(0);
+    expect(
+      text.match(/Codex has reached its usage limit\. Continuing with Claude Code\./g),
+    ).toHaveLength(1);
+    expect(modelCalls(claude, "digest")).toBe(2);
+    expect(modelCalls(claude, "author")).toBeGreaterThan(0);
+    expect(flat(text)).toContain("Read 3 of 3 sessions.");
+    expect(flat(text)).toContain("Switched from Codex to Claude Code (usage limit reached).");
+    // What to run next names the order the person chose, so a resume starts the same way.
+    expect(fs.readdirSync(path.join(home, "library"))).toContain("task-s00");
   });
 
   it.each([

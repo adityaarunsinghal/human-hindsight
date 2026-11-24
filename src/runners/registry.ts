@@ -33,6 +33,28 @@ export function parseRunnerMode(raw: string | undefined): RunnerMode {
   throw new Error(`unknown --runner "${raw}" (expected claude, codex, kiro, opencode, or auto)`);
 }
 
+/**
+ * Parse `--runner` where it may name several CLIs: `auto`, one CLI (the run
+ * stays on it), or a comma-separated list tried in that order.
+ */
+export function parseRunnerList(raw: string | undefined): RunnerName[] | "auto" {
+  const names = (raw ?? "auto").split(",").map((name) => name.trim());
+  if (names.length === 1) {
+    const mode = parseRunnerMode(names[0]);
+    return mode === "auto" ? "auto" : [mode];
+  }
+  const order: RunnerName[] = [];
+  for (const name of names) {
+    const mode = name ? parseRunnerMode(name) : "auto";
+    if (mode === "auto" || order.includes(mode))
+      throw new Error(
+        `unknown --runner "${raw}" (a list names each CLI once: claude, codex, kiro, opencode)`,
+      );
+    order.push(mode);
+  }
+  return order;
+}
+
 /** Options for {@link resolveRunner}. */
 export interface ResolveRunnerOptions extends RunnerEnv {
   /** Prefer the runner matching the active source under `auto`. */

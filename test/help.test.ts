@@ -440,7 +440,7 @@ describe("mistyped input runs nothing", () => {
   it("a wrong value for a shared choice is one line naming the option, the choices, and the value", async () => {
     const says: Record<string, string> = {
       source: "claude, codex, kiro, kirocrew, opencode, or auto",
-      runner: "claude, codex, kiro, opencode, or auto",
+      runner: "claude, codex, kiro, opencode, or auto, or several CLIs separated by commas",
       quality: "fast, balanced, or best",
       recent: "a whole number of sessions, such as 25",
     };
@@ -600,7 +600,11 @@ describe("mistyped input runs nothing", () => {
 
   it.each([
     ["HUMAN_HINDSIGHT_QUALITY", "quality", "fast, balanced, or best"],
-    ["HUMAN_HINDSIGHT_RUNNER", "runner", "claude, codex, kiro, opencode, or auto"],
+    [
+      "HUMAN_HINDSIGHT_RUNNER",
+      "runner",
+      "claude, codex, kiro, opencode, or auto, or several CLIs separated by commas",
+    ],
     ["HUMAN_HINDSIGHT_RECENT", "recent", "a whole number of sessions, such as 25"],
   ])("%s with a wrong value is named, unless the flag gives one", async (variable, name, says) => {
     const env = { [variable]: "bogus" };
