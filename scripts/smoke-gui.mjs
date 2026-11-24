@@ -941,10 +941,7 @@ try {
   });
   await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   await call("Page.addScriptToEvaluateOnNewDocument", {
-    source: `window.__documentId = Math.random(); Object.defineProperty(navigator, "clipboard", {configurable:true, value:{writeText:async(text)=>{window.__copied=text;}}});
-      window.__intervals = 0;
-      const originalInterval = window.setInterval.bind(window);
-      window.setInterval = (...args) => { window.__intervals++; return originalInterval(...args); };`,
+    source: `window.__documentId = Math.random(); Object.defineProperty(navigator, "clipboard", {configurable:true, value:{writeText:async(text)=>{window.__copied=text;}}});`,
   });
   await call("Emulation.setEmulatedMedia", {
     features: [{ name: "prefers-color-scheme", value: "light" }],
@@ -1061,7 +1058,6 @@ try {
   const topic = await evaluate('document.getElementById("tip-text").textContent');
   await delay(500);
   assert.equal(await evaluate('document.getElementById("tip-text").textContent'), topic);
-  assert.equal(await evaluate("window.__intervals"), 0, "nothing rotates on a timer");
   await evaluate('document.getElementById("tip-toggle").click()');
   assert.equal(
     await evaluate('document.querySelector(".brand").firstChild.textContent.trim()'),

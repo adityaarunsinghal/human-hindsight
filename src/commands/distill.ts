@@ -51,13 +51,14 @@ import {
 import { guardRun, mutableOutput } from "../distill/run-guard.js";
 import type { Digest } from "../distill/schemas.js";
 import { startStageProgress } from "../distill/stage-events.js";
+import type { LiveLibrary } from "../gui/live-library.js";
 import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerIo } from "../runners/shared.js";
 import type { AgentRunner, RunnerName } from "../runners/types.js";
 import { parseSourceMode } from "../sources/registry.js";
 import type { SourceName } from "../sources/types.js";
 import type { TerminalHost } from "../ui/live.js";
-import { canColor, canPrompt, glyph } from "../ui/mode.js";
+import { canColor, canPrompt, glyph, isInteractive } from "../ui/mode.js";
 import { terminalPrivacyReminder } from "../ui/privacy.js";
 import { withSpinner } from "../ui/progress.js";
 import { chooseMenuAnswer } from "../ui/prompt.js";
@@ -117,6 +118,7 @@ export interface DistillArgs {
   quality?: string;
   recent?: string;
   generalize?: boolean;
+  library?: boolean;
   "follow-up"?: boolean;
   project?: string;
   /** citty maps `--no-group` to `group: false`; grouping is on by default. */
@@ -263,6 +265,7 @@ export interface DistillDeps {
    * returns at once.
    */
   sleep?(ms: number): Promise<void>;
+  startLibrary?: (home: string) => Promise<LiveLibrary>;
   /** Legacy test seam; distill no longer performs clipboard writes. */
   clipboard?: (text: string) => Promise<{ ok: boolean; tool: string; error?: string }>;
 }
@@ -1065,6 +1068,7 @@ async function distillSelectedSessions(opts: {
         ? `, ${digestResult.notAttempted.length} not attempted because the stage stopped`
         : "") +
       ".";
+    write();
     write(digestResult.failed.length ? digestSummary : green(digestSummary));
 
     if (digestResult.failed.length > 0) {
@@ -1140,6 +1144,7 @@ async function distillSelectedSessions(opts: {
         batchSize: clusterBatchSize,
         progress: clusterProgress,
       }).finally(() => clusterProgress.end());
+      write();
       write(
         groupingLine({
           sessions: Object.keys(digestsForCluster).length,
@@ -1219,6 +1224,31 @@ async function distillSelectedSessions(opts: {
 
     const reviews = readPreferenceReviews(home);
     const observed = readObservedPreferences(home);
+    let liveLibrary: LiveLibrary | undefined;
+    if (
+      args.library !== false &&
+      isInteractive({ input: deps.input, output: out }) &&
+      (readLibrary(home).length || observed.length)
+    ) {
+      try {
+        const { startLiveLibrary } = await import("../gui/live-library.js");
+        liveLibrary = await (deps.startLibrary ?? startLiveLibrary)(home);
+        const { address } = liveLibrary;
+        write("Browse your library now or within 30 minutes after this command exits:");
+        write(
+          canColor({ output: out })
+            ? `\u001b]8;;${address}\u001b\\${address}\u001b]8;;\u001b\\`
+            : address,
+        );
+        const { isRemoteSession, forwardCommand } = await import("./gui.js");
+        if (isRemoteSession(process.env)) {
+          write("On your laptop, forward the port first:");
+          write(forwardCommand(Number(new URL(address).port), process.env));
+        }
+      } catch {
+        command("To browse your saved library, run:", nextCommandText("gui", { ...args, home }));
+      }
+    }
     const batch = new Set(Object.keys(digestsForCluster));
     const highlight = reviews.invalid
       ? undefined
@@ -1235,7 +1265,7 @@ async function distillSelectedSessions(opts: {
     // Working preferences come last. A failure here never fails the library.
     if (args.generalize !== false) {
       phase = "preferences";
-      const progress = startStageProgress(out, "Summarizing working preferences", progressOptions);
+      let progress: ReturnType<typeof startStageProgress> | undefined;
       try {
         const model = session.modelFor("generalize");
         const preferences = planGeneralize({
@@ -1249,7 +1279,14 @@ async function distillSelectedSessions(opts: {
         if (preferences?.damaged)
           say("Your saved preference summaries could not be read and will be rebuilt.");
         if (preferences) {
+          progress = startStageProgress(
+            out,
+            `Summarizing working preferences (${counted(preferences.inputs.length, "signal")}, ${counted(preferences.windows.length, "batch", "batches")})`,
+            progressOptions,
+          );
+          liveLibrary?.update({ kind: "begin", total: preferences.windows.length });
           const result = await runGeneralizeStage({
+            onBatch: (index, lessons) => liveLibrary?.update({ kind: "batch", index, lessons }),
             home,
             plan: preferences,
             runner: gatedRun,
@@ -1260,7 +1297,9 @@ async function distillSelectedSessions(opts: {
             progress,
           });
           progress.end();
+          write();
           preferenceSummariesIncomplete = result.status !== "done";
+          liveLibrary?.update({ kind: preferenceSummariesIncomplete ? "interrupted" : "complete" });
           say(preferencesLine(result, preferences.inputs.length));
           if (highlight)
             instruction = result.lessonList.find(
@@ -1273,12 +1312,13 @@ async function distillSelectedSessions(opts: {
         }
       } catch (error) {
         preferenceSummariesIncomplete = true;
-        progress.end();
+        liveLibrary?.update({ kind: "interrupted" });
+        progress?.end();
         say(
           `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run npx human-hindsight reflect to finish them.`,
         );
       } finally {
-        progress.end();
+        progress?.end();
       }
     }
     // One story about the preferences, the same sentence `status` and
@@ -1349,6 +1389,11 @@ export default defineCommand({
       default: true,
       description:
         "Stop a parallel stage after 5 consecutive identical failures (use --no-breaker to attempt every session)",
+    },
+    library: {
+      type: "boolean",
+      description:
+        "Serve the local library during an interactive reflection (skip with --no-library)",
     },
     generalize: {
       type: "boolean",

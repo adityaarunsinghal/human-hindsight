@@ -34,7 +34,6 @@ import { frameHeight, liveRegion, onTerminalExit, persistLiveRegion, writeAbove 
 import {
   canColor,
   canPrompt,
-  glyph,
   isInteractive,
   type TerminalInput,
   type TerminalOutput,
@@ -49,7 +48,7 @@ import {
   START_KEY,
   TYPED_AHEAD,
 } from "./prompt.js";
-import { palette, safeLine, visibleWidth } from "./style.js";
+import { choicePill, palette, safeLine, visibleWidth } from "./style.js";
 import { wrapText } from "./wrap.js";
 
 export { START_KEY };
@@ -113,8 +112,8 @@ export function startLines<Q extends string>(
   const rows = options.map((option, i) => {
     const label = named[i] ?? option.label;
     const active = option === selected;
-    const marker = active ? s.green(glyph("›", ">")) : s.dim(glyph("•", "-"));
-    return `${marker} ${i + 1}  ${active ? s.bold(s.green(label)) : label}`;
+    const ink = option.key === "best" ? "246;161;199" : "141;227;228";
+    return choicePill(active, String(i + 1), ` ${label}`, ink, o.color === true);
   });
   const besides = options.map((option, i) =>
     option.detail

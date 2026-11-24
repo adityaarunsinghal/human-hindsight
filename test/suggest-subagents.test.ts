@@ -569,7 +569,7 @@ describe("helpers", () => {
 
   it("resolveWindowSize defaults to 20 and rejects anything but a positive integer", () => {
     expect(resolveWindowSize(undefined)).toBe(DEFAULT_WINDOW_SIZE);
-    expect(DEFAULT_WINDOW_SIZE).toBe(20);
+    expect(DEFAULT_WINDOW_SIZE).toBe(100);
     expect(resolveWindowSize("12")).toBe(12);
     for (const bad of ["0", "-3", "2.5", "many", ""]) {
       expect(() => resolveWindowSize(bad)).toThrow(

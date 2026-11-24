@@ -47,6 +47,23 @@ export function palette(enabled: boolean) {
   };
 }
 
+/** Rounded terminal choices use ordinary Unicode half circles and keep their marker without color. */
+export function choicePill(
+  active: boolean,
+  key: string,
+  label: string,
+  ink: string,
+  color: boolean,
+): string {
+  const marker = active ? glyph("›", ">") : glyph("•", "-");
+  if (!color) return `( ${marker} ${key} ${label} )`;
+  const fill = active ? "164;220;202" : "33;39;55";
+  const foreground = active ? "21;38;31" : ink;
+  const keyInk = active ? foreground : "245;215;155";
+  const markerInk = active ? foreground : "156;164;191";
+  return `\x1b[38;2;${fill}m${glyph("◖", "(")}\x1b[48;2;${fill};38;2;${markerInk}m${marker} \x1b[1;38;2;${keyInk}m${key}\x1b[22;38;2;${foreground}m ${label}\x1b[49;38;2;${fill}m${glyph("◗", ")")}\x1b[39m`;
+}
+
 const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 const wideCharacter =
   /[\u1100-\u115f\u2329\u232a\u2e80-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe10-\ufe19\ufe30-\ufe6f\uff00-\uff60\uffe0-\uffe6\u{20000}-\u{3fffd}]|\p{Extended_Pictographic}|\p{Regional_Indicator}|\u20e3/u;

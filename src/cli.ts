@@ -3,6 +3,7 @@ import type { Writable } from "node:stream";
 import { parseArgs, runMain } from "citty";
 import { sharedArgs } from "./commands/_shared.js";
 import { isEnvironmentWorker, platformNotice } from "./core/environment.js";
+import { LIBRARY_WORKER, serveLiveLibrary } from "./gui/live-library.js";
 import { installEpipeHandler } from "./ui/epipe.js";
 
 // `human-hindsight list | head` closes our stdout mid-write. That's normal Unix
@@ -11,7 +12,9 @@ import { installEpipeHandler } from "./ui/epipe.js";
 installEpipeHandler(process.stdout as unknown as Writable);
 installEpipeHandler(process.stderr as unknown as Writable);
 
-if (!isEnvironmentWorker()) {
+if (process.send && process.argv[2] === LIBRARY_WORKER && process.argv[3]) {
+  await serveLiveLibrary(process.argv[3]);
+} else if (!isEnvironmentWorker()) {
   const { main, forwardRootFlags } = await import("./main.js");
   const { createShowUsage, rejectUnknownInput } = await import("./commands/help.js");
   const input = process.argv.slice(2);

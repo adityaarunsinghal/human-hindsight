@@ -17,12 +17,12 @@ Reflect on your history
 
 Runs on  Claude Code (claude 9.9.9)
 Quality
-› 1 Balanced   • 2 Best
+( › 1 Balanced )   ( • 2 Best )
   sonnet for session reads, opus for grouping and writing
 
 Plan  25 session reads, about 1 grouping call, and about 8 writing calls.
-  Then the working preference summaries. Their count is known after reading
-  sessions.
+  Then summarize preferences across your saved library, up to 100 observations
+  per call. Finished batches are reused.
   Up to 10 at a time. Grouping runs one call at a time.
 Sending  Selected session text and working preferences go through Claude Code to
   its provider, using your tokens.

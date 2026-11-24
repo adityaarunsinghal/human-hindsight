@@ -25,14 +25,18 @@ export interface Harness {
   requests: string[];
 }
 
-export function guiHarness(home: string, token = TEST_TOKEN): Harness {
+export function guiHarness(
+  home: string,
+  token = TEST_TOKEN,
+  liveBatches?: Parameters<typeof createGuiHandler>[0]["liveBatches"],
+): Harness {
   const host = `127.0.0.1:${TEST_PORT}`;
   const hosts = new Set([host, `localhost:${TEST_PORT}`]);
   return {
     url: `http://${host}`,
     host,
     token,
-    handle: createGuiHandler({ home, token, hosts }),
+    handle: createGuiHandler({ home, token, hosts, liveBatches }),
     requests: [],
   };
 }

@@ -1,4 +1,4 @@
-Human Hindsight 2.1.0
+Human Hindsight 2.1.1
 Understand how you work. Codify your taste.
 
 Global options
@@ -117,6 +117,9 @@ Options
                                            --no-breaker to attempt every
                                            session) (Default: true)
   --no-breaker                             Turn off --breaker
+  --library                                Serve the local library during an
+                                           interactive reflection (skip with
+                                           --no-library)
   --generalize                             Summarize working preferences after
                                            writing prompts (skip with
                                            --no-generalize) (Default: true)
@@ -269,7 +272,7 @@ Options
                                (default 10)
   --input-budget <characters>  Size limit per call, in characters of preferences
                                (default 400000)
-  --window-size <n>            Most preferences per summary call (default 20)
+  --window-size <n>            Most preferences per summary call (default 100)
   --fresh-generalize           Summarize every preference again, replacing the
                                saved preference summaries
   --author-only                Finish unwritten role prompts in the interrupted

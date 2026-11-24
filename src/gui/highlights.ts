@@ -13,6 +13,7 @@ import {
 } from "../core/preferences.js";
 import { type Lesson, readSuggestion, SuggestionReadError } from "../core/subagents.js";
 import { loadTasks } from "../distill/checkpoints.js";
+import type { LiveAgreements } from "./live-batches.js";
 import {
   type AgreementFacts,
   type AgreementSource,
@@ -33,6 +34,7 @@ import { countLabel, roleKey } from "./subagents-view.js";
  *   candidates instead. The reason can name a file path, so it is not sent.
  */
 export interface GuiAgreements {
+  live?: LiveAgreements;
   state: "none" | "ready" | "damaged";
   generatedAt: string | null;
   stale: boolean;

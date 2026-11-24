@@ -8,8 +8,8 @@ Asking Kiro CLI which models it offers. This contacts its service; no session te
   Reads    3 sessions, about 1 prompt, plus your working preferences.
   Runs on  Kiro CLI (kiro-cli 9.9.9)
   Calls    3 session reads, about 1 grouping call, and about 1 writing call.
-           Then the working preference summaries. Their count is known after
-           reading sessions.
+           Then summarize preferences across your saved library, up to 100
+           observations per call. Finished batches are reused.
            Up to 10 at a time. Grouping runs one call at a time.
   Models   This CLI did not list its models, so every step uses its own default
            model.

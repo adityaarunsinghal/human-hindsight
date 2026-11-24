@@ -4,10 +4,12 @@ import http, { type Server } from "node:http";
 import path from "node:path";
 import { z } from "zod";
 import {
+  CONSOLIDATED_PREFERENCES_FILE,
   preferencesFingerprint,
   readConsolidatedPreferences,
 } from "../core/consolidated-preferences.js";
 import { domainPath } from "../core/domains.js";
+import { GENERALIZED_PATH } from "../core/generalized.js";
 import {
   fromEarlierGrouping,
   isOutcomeVerified,
@@ -16,6 +18,7 @@ import {
   readLibrary,
 } from "../core/library.js";
 import {
+  PREFERENCE_REVIEW_FILE,
   preferenceReview,
   readPreferenceReviews,
   reviewedPreferences,
@@ -26,7 +29,12 @@ import {
   readObservedPreferences,
   renderPreferencesBlock,
 } from "../core/preferences.js";
-import { readSuggestion, type SuggestionArtifact, SuggestionReadError } from "../core/subagents.js";
+import {
+  readSuggestion,
+  type SuggestionArtifact,
+  SuggestionReadError,
+  suggestionPath,
+} from "../core/subagents.js";
 import {
   renderSubagentTree,
   SUBAGENT_TARGETS,
@@ -37,6 +45,7 @@ import { loadTasks } from "../distill/checkpoints.js";
 import { acquireWriterLock, WriterBusyError } from "../distill/operations.js";
 import { GUI_CSS, GUI_HTML, GUI_JS } from "./assets.js";
 import { readHighlights, savedAgreements } from "./highlights.js";
+import type { LiveBatches } from "./live-batches.js";
 import { SESSION_HEADER } from "./session.js";
 import { exportFilename } from "./subagents-view.js";
 
@@ -122,6 +131,38 @@ export interface GuiSubagents {
 }
 
 export type { GuiAgreements } from "./highlights.js";
+
+/** Check publication metadata without rereading prompts, transcripts or JSON contents. */
+function libraryRevision(home: string): string {
+  const library = path.join(home, "library");
+  const files = [
+    path.join(home, GENERALIZED_PATH),
+    path.join(library, PREFERENCE_REVIEW_FILE),
+    path.join(library, CONSOLIDATED_PREFERENCES_FILE),
+    suggestionPath(home),
+    ...[
+      "distill/digests.json",
+      "distill/tasks.json",
+      "exports/manifest.json",
+      "exports/outcomes.json",
+    ].map((name) => path.join(home, name)),
+  ];
+  try {
+    for (const entry of fs.readdirSync(library, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const dir = path.join(library, entry.name);
+      files.push(path.join(dir, "sources.json"), path.join(dir, `${entry.name}.oneshot.md`));
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  const hash = createHash("sha256");
+  for (const file of files.sort()) {
+    const stat = fs.statSync(file, { bigint: true, throwIfNoEntry: false });
+    if (stat) hash.update(JSON.stringify([file, `${stat.ino}`, `${stat.ctimeNs}`, `${stat.size}`]));
+  }
+  return hash.digest("hex");
+}
 
 /** Copyable shell text for this home, never executed by the browser or server. */
 function commandFor(home: string) {
@@ -414,6 +455,7 @@ export function createGuiHandler(opts: {
   home: string;
   token: string;
   hosts: ReadonlySet<string>;
+  liveBatches?: LiveBatches;
   /** Called once, on the first request that carried the session key. */
   onAuthenticated?: () => void;
 }): (req: GuiRequest) => Promise<GuiResponse> {
@@ -532,6 +574,12 @@ export function createGuiHandler(opts: {
         return reply(200, GUI_CSS, "text/css; charset=utf-8");
       case "/app.js":
         return reply(200, GUI_JS, "text/javascript; charset=utf-8");
+      case "/api/library/revision":
+        try {
+          return json({ revision: `${libraryRevision(home)}-${opts.liveBatches?.revision ?? 0}` });
+        } catch {
+          return failed("Could not check for library updates.");
+        }
       case "/api/library":
         try {
           return json(librarySnapshot(home, token));
@@ -546,7 +594,7 @@ export function createGuiHandler(opts: {
         }
       case "/api/preferences/generalized":
         try {
-          return json(savedAgreements(home));
+          return json({ ...savedAgreements(home), live: opts.liveBatches?.snapshot() });
         } catch {
           return failed("Could not read the saved preferences.");
         }
@@ -627,6 +675,7 @@ export async function startGuiServer(opts: {
   home: string;
   port?: number;
   token?: string;
+  liveBatches?: LiveBatches;
   /** Called once, on the first request that carried the session key. */
   onAuthenticated?: () => void;
 }): Promise<GuiServer> {
@@ -641,6 +690,7 @@ export async function startGuiServer(opts: {
     token,
     hosts,
     onAuthenticated: opts.onAuthenticated,
+    liveBatches: opts.liveBatches,
   });
   const server = http.createServer(
     { requestTimeout: 10_000, headersTimeout: 10_000 },

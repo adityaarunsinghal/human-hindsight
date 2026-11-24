@@ -189,6 +189,13 @@ def run_case(work, name, keys, expected, code, columns, o=None):
     menu = ESCAPES.sub("", text.split("STTY=")[0]).replace("\r", "\n")
     if o.get("hint") and "Press s to start, or q to leave." not in menu:
         failures.append("the key that does not start did not say how to start")
+    if o.get("start") and columns == 80:
+        if "◖› 1  Balanced (selected)◗" not in menu or "◖• 2  Best◗" not in menu:
+            failures.append("the first frame lost the rounded quality choices or their markers")
+        if "\x1b[48;2;164;220;202;" not in text:
+            failures.append("the selected quality lost its mint fill")
+        if expected == "start:best" and "◖› 2  Best (selected)◗" not in menu:
+            failures.append("selecting Best did not move the active pill")
     if not o.get("start"):
         if "› First (recommended)" not in menu or "• Second" not in menu or "• Third" not in menu:
             failures.append("the first frame did not mark its selected action and idle choices")
