@@ -381,7 +381,6 @@ function homeLines(
   prose(TAGLINE, s.dim);
   lines.push({ text: rail, drop: 1 });
   prose("Your history", s.bold, 3);
-  if (height !== undefined) lines.push({ text: rail, drop: 1 });
   const rows = included(snapshot).filter(
     (row) => row.historyError || row.storePresent || row.history?.sessions,
   );
@@ -417,7 +416,6 @@ function homeLines(
       prose("Every folder option: npx human-hindsight help --all", s.dim);
     }
   } else if (snapshot.totals?.sessions) {
-    if (height !== undefined) lines.push({ text: rail, drop: 1 });
     prose(
       `${counted(snapshot.totals.sessions, "session")} across ${counted(snapshot.totals.projects, "project")}`,
       s.yellow,

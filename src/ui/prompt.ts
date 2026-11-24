@@ -345,13 +345,8 @@ function menuLines<K extends string>(
   const used = heading.length + options.reduce((n, rows) => n + rows.length, 0) + footer.length;
   const spare = (height ?? used) - used;
   const lines = heading;
-  if (spare >= 1) lines.push("");
-  const spaceOptions = spare >= options.length + (footer.length ? 1 : 0);
-  options.forEach((rows, index) => {
-    if (index && spaceOptions) lines.push("");
-    lines.push(...rows);
-  });
-  if (footer.length && spare >= 2) lines.push("");
+  for (const rows of options) lines.push(...rows);
+  if (footer.length && spare >= 1) lines.push("");
   lines.push(...footer);
   return lines;
 }

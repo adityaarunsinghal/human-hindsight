@@ -2,22 +2,15 @@
 | Understand how you work. Codify your taste.
 |
 | Your history
-|
 | Claude Code  12 sessions, 3 projects
-|
 | 12 sessions across 3 projects
 ------------------------------------------------------------------------
 
 What would you like to do?
-
 > Reflect on my history (recommended)  export, then review the plan
-
 * Export my messages  local Markdown
-
 * Show projects  history inventory
-
 * Check setup  tools and sign-in
-
 * Quit  q
 
   Up/Down to move, Enter to choose

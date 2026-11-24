@@ -117,14 +117,13 @@ export function startLines<Q extends string>(
   });
   const besides = options.map((option, i) =>
     option.detail
-      ? `${" ".repeat(column - visibleWidth(named[i] ?? ""))}    ${s.dim(option.detail)}`
+      ? `${" ".repeat(column - visibleWidth(named[i] ?? ""))}  ${s.dim(option.detail)}`
       : "",
   );
   // One layout for every option, so the details line up or none is shown beside its row.
   const fits = rows.every((row, i) => visibleWidth(row + (besides[i] ?? "")) <= width);
   const lines = [s.bold(q.title ?? "Start?")];
   options.forEach((option, i) => {
-    lines.push("");
     const row = rows[i] ?? "";
     if (fits) lines.push(row + (besides[i] ?? ""));
     else {

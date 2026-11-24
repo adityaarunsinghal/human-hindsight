@@ -169,7 +169,7 @@ describe("stage progress", () => {
     for (const tick of s.ticks) tick();
     expect(s.screen()).toContain("Reading Field notes ×2 · Reference");
     expect(s.screen()).toMatch(
-      /estimating\n│\n│ Reading Field notes ×2 · Reference\n│\n│ The first summary/,
+      /estimating\n│ Reading Field notes ×2 · Reference\n│ The first summary/,
     );
     const firstFrameRows = s.screen().split("\n").length;
     s.clock.advance(100);

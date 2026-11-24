@@ -25,7 +25,7 @@ import type {
   SourceName,
   TimelineEvent,
 } from "../sources/types.js";
-import { canAnimate, glyph, lineWidth } from "../ui/mode.js";
+import { glyph, lineWidth } from "../ui/mode.js";
 import { terminalPrivacyReminder } from "../ui/privacy.js";
 import { type Progress, startProgress } from "../ui/progress.js";
 import { startStageProgress } from "../ui/screen.js";
@@ -479,7 +479,6 @@ function exportLocked(opts: ExportArgs, out: Writable): ExportStats {
         if (!readingActive) return;
         readingActive = false;
         reading?.end();
-        if (canAnimate({ output: out })) out.write("\n");
         progress = startProgress(out, "Preparing exports");
       },
     });
@@ -862,14 +861,9 @@ function exportSources(
 
   progress.clear();
   if (opts.guided && !opts.verbose) {
-    const closing = [
-      ...exportClosingLines(stats, { minMessages, project: opts.project }),
-      `Saved in ${stats.exportsDir}`,
-    ];
-    for (const [index, line] of closing.entries()) {
-      if (index > 0 && canAnimate({ output: out })) write();
+    for (const line of exportClosingLines(stats, { minMessages, project: opts.project }))
       write(line);
-    }
+    write(`Saved in ${stats.exportsDir}`);
     if (stats.kirocrewHandedOff) write(dim(kirocrewHandedOffLine(stats.kirocrewHandedOff)));
     if (stats.badLines) write(dim(`Skipped ${counted(stats.badLines, "damaged line")}.`));
     if (stats.keptAfterReadError) write(dim(keptAfterReadErrorLine(stats.keptAfterReadError)));

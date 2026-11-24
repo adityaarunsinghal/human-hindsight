@@ -735,7 +735,7 @@ describe("the Start question on a terminal", () => {
     expect(result.chosen).toEqual(chosen);
     // The plans, the selected one marked, and the start line naming it.
     const text = strip(result.text);
-    expect(text).toContain("1  Balanced (selected)");
+    expect(text).toContain("1 Balanced (selected)");
     expect(text).toContain("s  Start with Balanced");
     expect(text).toContain("q  Not now");
     if (keys[0] === "2") expect(text).toContain("s  Start with Best");
@@ -846,7 +846,7 @@ describe("the approval question", () => {
     expect(answer).toBe("declined");
     expect(chosen).toEqual([]);
     expect(cap.text()).toContain("Choose [s/q]");
-    expect(cap.text()).not.toContain("2  Best");
+    expect(cap.text()).not.toContain("2 Best");
   });
 
   it("declines at once with no terminal and no input stream", async () => {
