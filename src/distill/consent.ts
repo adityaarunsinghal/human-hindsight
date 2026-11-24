@@ -7,7 +7,6 @@ import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerName } from "../runners/types.js";
 import { persistLiveRegion, type TerminalHost } from "../ui/live.js";
 import {
-  canAnimate,
   canColor,
   canPrompt,
   glyph,
@@ -988,11 +987,11 @@ function optionRows(options: string[], width: number): string[] {
   const rows: string[] = [];
   let row = "";
   for (const option of options) {
-    if (row && visibleWidth(`${row}     ${option}`) > width) {
-      rows.push(row, "");
+    if (row && visibleWidth(`${row}   ${option}`) > width) {
+      rows.push(row);
       row = "";
     }
-    row += `${row ? "     " : ""}${option}`;
+    row += `${row ? "   " : ""}${option}`;
   }
   if (row) rows.push(row);
   return rows;
@@ -1059,7 +1058,6 @@ async function confirmReflection(
       if (runners.length) {
         lines.push(
           s.bold("Which coding CLI should run this reflection?"),
-          "",
           ...optionRows(
             runners.map(({ name }) =>
               choicePill(
@@ -1088,7 +1086,6 @@ async function confirmReflection(
       if (offerQuality()) {
         lines.push(
           s.bold("Quality"),
-          "",
           ...optionRows(
             [
               choicePill(quality === "balanced", "1", "Balanced", "141;227;228", color),
@@ -1098,7 +1095,6 @@ async function confirmReflection(
           ),
         );
       } else if (plan.qualityFixed) lines.push(`Quality  ${s.cyan(qualityName(quality))}`);
-      if (offerQuality() || plan.qualityFixed) lines.push("");
       const cli = ready && plan.session ? cliName(plan.session) : "the CLI you choose";
       const selected = ready ? plan.choices?.[quality] : undefined;
       if (selected) {
@@ -1119,7 +1115,6 @@ async function confirmReflection(
           if (row.label) section = row.label;
           if (!["Calls", "Library", "Size"].includes(section)) continue;
           const label = row.label === "Calls" ? "Plan" : row.label;
-          if (label && lines.at(-1) !== "") lines.push("");
           const ink = section === "Calls" ? s.blue : section === "Library" ? s.cyan : s.yellow;
           const lead = label ? `${ink(label)}  ` : "  ";
           lines.push(...wrapText(row.text, width, { indent: lead, hang: "  " }));
@@ -1128,7 +1123,6 @@ async function confirmReflection(
       const route =
         ready && plan.session?.alsoReady.length ? `${cli} (or the CLI the run moves to)` : cli;
       const sending = `Selected session text${plan.generalize ? " and working preferences go" : " goes"} through ${route} to its provider, using your tokens.`;
-      if (lines.at(-1) !== "") lines.push("");
       lines.push(...wrapText(sending, width, { indent: `${s.magenta("Sending")}  `, hang: "  " }));
       if (ready) {
         lines.push(
@@ -1271,10 +1265,6 @@ export function reportRunInterrupt(
       persistLiveRegion(output);
       const says = o.says ?? `Interrupted. ${o.saved?.() ?? FINISHED_WORK_SAVED} To continue, run:`;
       const lines = sayThenRun(says, resumeCommand, screenWidth(output));
-      if (canAnimate({ output })) {
-        lines.unshift("");
-        lines.splice(lines.length - 1, 0, "");
-      }
       output.write(`${lines.join("\n")}\n`, () => exit(130));
       o.mute?.();
     }

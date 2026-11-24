@@ -1,9 +1,6 @@
 │ Read Reference · completed · 1s
-│
 │ › Explain the new option.
-│
 │ Preference Lead with one example.
-
-│ Read Field notes · partial · 1s
 │
+│ Read Field notes · partial · 1s
 │ › Organize the field notes.

@@ -774,26 +774,17 @@ async function distillSelectedSessions(opts: {
     if (!gate.result) {
       const quality = session.quality === "balanced" ? "Balanced" : "Best";
       const runner = RUNNER_INFO[session.ledgerRunner].displayName;
-      const spaced = canAnimate({ output: out });
-      if (spaced) write();
       write(
         `${ink.bold("Preparing reflection")} ${glyph("·", "-")} ${ink[RUNNER_INK[session.ledgerRunner]](runner)} ${glyph("·", "-")} ${ink.yellow(quality)}`,
       );
-      if (spaced) write();
       write(
         `${ink.cyan(counted(plan.digests, "session"))}${projects.size ? ` across ${ink.magenta(counted(projects.size, "project"))}` : ""}`,
       );
       const represented = batchProjectLine(projectNames, out);
-      if (represented) {
-        if (spaced) write();
-        write(represented);
-      }
-      if (spaced) write();
+      if (represented) write(represented);
+      if (canAnimate({ output: out })) write();
       gate.result = session.liveCheck(stages).then((checked) => {
-        if (!checked.ok) {
-          if (spaced) write();
-          write(checked.line);
-        }
+        if (!checked.ok) write(checked.line);
         return checked;
       });
     }

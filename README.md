@@ -54,8 +54,8 @@ npx human-hindsight doctor              # Check for history and a signed-in codi
 Upgrading from 2.0? Your library, hand-edited prompts, ratings and preference reviews carry forward. `distill` is an alias for `reflect`. Existing `cc-hindsight` scripts and data folders still work. [Release notes](https://github.com/adityaarunsinghal/human-hindsight/blob/main/CHANGELOG.md)
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/adityaarunsinghal/human-hindsight/49c073d6a84dd936eca2b7b37098d361a144fb41/.github/assets/demo.gif" alt="Animated CLI walkthrough of the earlier cc-hindsight release" width="800">
-  <br><sub>CLI walkthrough recorded before the rename to Human Hindsight.</sub>
+  <img src="https://raw.githubusercontent.com/adityaarunsinghal/human-hindsight/main/.github/assets/demo.gif" alt="Human Hindsight reads two fictional coding sessions about a duplicate invoice and a retried refund, then opens the reusable prompt it wrote." width="800">
+  <br><sub>A reflection on two fictional sessions in ledger-import and checkout-api.</sub>
 </p>
 
 Created by Aditya Singhal. [Selected Work](https://adityasinghal.com/#current) · [npm](https://www.npmjs.com/package/human-hindsight) · [Report an issue](https://github.com/adityaarunsinghal/human-hindsight/issues) · [Contribute](https://github.com/adityaarunsinghal/human-hindsight/blob/main/CONTRIBUTING.md) · [MIT license](https://github.com/adityaarunsinghal/human-hindsight/blob/main/LICENSE)

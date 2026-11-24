@@ -6,8 +6,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [2.1.2] - 2026-11-24
 
-- The terminal gives the runner and quality pills more room inside and between choices. Blank rows separate the pills from their headings, model details, and start controls.
-- Home and history menus space out individual choices when the window has room. During a reflection, the readiness check, project activity, saved reads, and resume command each have their own space.
+- The runner and quality choices sit directly beneath their headings, with a blank row between the two groups. Home and history menu choices stay on consecutive rows.
+- Each saved read keeps its project, goal, and preference together. A single divider separates consecutive reads.
+- The README walkthrough follows two fictional sessions about a duplicate invoice and a retried refund, then opens the reusable prompt the reflection wrote.
 
 ## [2.1.1] - 2026-11-24
 

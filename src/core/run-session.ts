@@ -16,7 +16,7 @@ import { makeRunner, parseRunnerMode, RUNNER_INFO } from "../runners/registry.js
 import { AgentRunnerError, type RunnerIo } from "../runners/shared.js";
 import type { AgentRunner, ModelCatalog, RunnerName } from "../runners/types.js";
 import { writeAbove } from "../ui/live.js";
-import { canAnimate, canColor } from "../ui/mode.js";
+import { canColor } from "../ui/mode.js";
 import { palette } from "../ui/style.js";
 import { installedRunnerNames, readExportSessionShare } from "./environment.js";
 import { isPlanLabel, type ModelRole, planLabel, planModels, type Quality } from "./model-plan.js";
@@ -466,8 +466,6 @@ function createSession(
   // stopped working, so the check moves to the next disclosed CLI, which then
   // gets the same treatment.
   const unconfirmedSaid = new Set<string>();
-  const reportCheck = (line: string) =>
-    writeAbove(o.output, canAnimate({ output: o.output }) ? `\n${line}` : line);
   async function checkRole(stage: StageKey, announced: Set<RunnerName>): Promise<RoleCheck> {
     let counting = pool.active();
     let failures = 0;
@@ -522,7 +520,7 @@ function createSession(
           // Said once per CLI, however many of its models could not confirm.
           if (!unconfirmedSaid.has(line)) {
             unconfirmedSaid.add(line);
-            reportCheck(line);
+            writeAbove(o.output, line);
           }
           return { ok: true, runner: now, line };
         }
@@ -591,10 +589,13 @@ function createSession(
     const models = new Set(answers.map((answer) => answer.model));
     if (answers.length && models.size === 1 && answers.length === stages.length) {
       const reported = answers[0]?.reported;
-      reportCheck(ink.green(reported ? `${ready} is ready (${reported}).` : `${ready} is ready.`));
+      writeAbove(
+        o.output,
+        ink.green(reported ? `${ready} is ready (${reported}).` : `${ready} is ready.`),
+      );
     } else if (answers.length) {
       const parts = answers.map((answer) => `${answer.model} ${answer.words}`);
-      reportCheck(`${ink.green(`${ready} is ready`)}: ${ink.yellow(parts.join(", "))}.`);
+      writeAbove(o.output, `${ink.green(`${ready} is ready`)}: ${ink.yellow(parts.join(", "))}.`);
     }
     return unconfirmed ? { ok: true, line: unconfirmed } : { ok: true };
   }
