@@ -203,7 +203,10 @@ try:
     )
     fake.chmod(0o755)
     environment = dict(os.environ)
+    # The child PTYs simulate a person's terminal, including when this test runs in CI.
     for key in [
+        "CI",
+        "HUMAN_HINDSIGHT_PLAIN",
         "NO_COLOR",
         "FORCE_COLOR",
         "HUMAN_HINDSIGHT_FOLLOW_UP",
