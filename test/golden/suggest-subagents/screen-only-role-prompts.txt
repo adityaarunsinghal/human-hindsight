@@ -9,7 +9,7 @@
            time.
   Models   1 Balanced (selected): strong-model for writing roles
            2 Best: top-model for writing roles
-  Sending  The saved roles and their working agreements go to your provider
+  Sending  The saved roles and their working preferences go to your provider
            through Claude Code (or the CLI the run moves to), the same way your
            normal sessions do, and the calls use your tokens there. Before the
            first model call, one tiny request checks that Claude Code is ready.

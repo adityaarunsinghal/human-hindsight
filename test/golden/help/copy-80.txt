@@ -1,11 +1,11 @@
-human-hindsight copy
+npx human-hindsight copy
 Copy a prompt to paste into a new coding session.
 
 Examples
-  human-hindsight copy review-changes
+  npx human-hindsight copy review-changes
     Copy the prompt body. Use a name from list.
 
-  human-hindsight copy review-changes --no-follow-up
+  npx human-hindsight copy review-changes --no-follow-up
     Copy the prompt and return to the shell.
 
 Common options
@@ -14,7 +14,7 @@ Common options
   --follow-up   Offer next steps in a terminal (disable with --no-follow-up)
 
 More help
-  human-hindsight copy --help --all  Every option for this command
-  human-hindsight doctor             Check your setup
-  human-hindsight help --all         All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  npx human-hindsight copy --help --all  Every option for this command
+  npx human-hindsight doctor             Check your setup
+  npx human-hindsight help --all         All commands and options
+  https://adityasinghal.com/#current

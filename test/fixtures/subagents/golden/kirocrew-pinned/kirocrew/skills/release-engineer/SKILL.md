@@ -51,7 +51,7 @@ Before a migration or bulk edit, copy the affected data to versioned storage and
 
 Applies when: Migrating, reshaping or bulk-editing stored data.
 
-# Shared agreements
+# Shared preferences
 
 ## Separate what was verified from what was inferred (separate-verified-from-inferred)
 

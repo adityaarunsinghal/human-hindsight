@@ -89,7 +89,7 @@ import { chooseMenuAnswer, readLine } from "../ui/prompt.js";
 import { banner, counted, dim, fail, green, hint, yellow } from "../ui/style.js";
 import { wrapText } from "../ui/wrap.js";
 import { parseConcurrency, resolvePaths, sharedArgs } from "./_shared.js";
-import { type NextCommand, nextCommandText, runNextCommand } from "./next.js";
+import { type NextCommand, nextCommandText, runNextCommand, shellWord } from "./next.js";
 
 export { SUGGESTION_FAILURE_FILE, SUGGESTION_PARTIAL_FILE } from "../core/subagents.js";
 export {
@@ -454,8 +454,16 @@ async function runExport(
     green(`wrote ${result.written.length} of ${counted(files.size, "file")} to ${dir}`) +
       (result.skipped.length ? `; kept ${counted(result.skipped.length, "existing file")}` : ""),
   );
-  if (result.skipped.length) write(dim("re-run with --force to overwrite the kept files."));
-  write(hint(`read ${path.join(dir, "HANDOFF.md")}`));
+  if (result.skipped.length) {
+    write(dim("To overwrite the kept files, run"));
+    const flags = [`--export=${dir}`];
+    if (args.target) flags.push(`--target=${args.target}`);
+    if (args["pin-model"]) flags.push(`--pin-model=${args["pin-model"]}`);
+    write(
+      `  ${hintCommand("suggest-subagents", withoutGenerateOnly(args))} ${flags.map(shellWord).join(" ")} --force`,
+    );
+  }
+  write(dim(`Read the setup instructions in ${path.join(dir, "HANDOFF.md")}.`));
   return 0;
 }
 
@@ -639,7 +647,7 @@ type CallFailure = Extract<CheckedResult<unknown>, { ok: false }>;
 function unplacedNote(result: CheckedResult<ProposeOutput>, note: Writer): void {
   if (!result.ok || !result.repairs.length) return;
   note(
-    `    ${counted(result.repairs.length, "working agreement")} fit no role, so ${result.repairs.length === 1 ? "it is" : "they are"} kept in the ${UNPLACED_PLAYBOOK} notes; review ${result.repairs.length === 1 ? "it" : "them"} in the exported files.`,
+    `    ${counted(result.repairs.length, "preference")} fit no role, so ${result.repairs.length === 1 ? "it is" : "they are"} kept in the ${UNPLACED_PLAYBOOK} notes; review ${result.repairs.length === 1 ? "it" : "them"} in the exported files.`,
   );
 }
 
@@ -783,7 +791,7 @@ function originalSources(artifact: SuggestionArtifact): SuggestionResultSource[]
   return [
     {
       stage: "generalize",
-      unit: "saved agreements",
+      unit: "saved agreements", // The original provenance label for earlier suggestions.
       runner: artifact.runner,
       model: artifact.models.generalize,
     },
@@ -828,9 +836,7 @@ async function authorAndPublish(opts: {
     ids.map((id) => {
       const lesson = byId.get(id);
       if (!lesson)
-        throw new Error(
-          `The saved suggestion names a working agreement it does not hold ("${id}").`,
-        );
+        throw new Error(`The saved suggestion names a preference it does not hold ("${id}").`);
       return lesson;
     });
   const shared = pick(artifact.shared);
@@ -944,7 +950,7 @@ function planChoice(
 
 /** The summary of a finished suggestion: zero counts are left out. */
 function suggestionSummary(result: SuggestionArtifact, lessons: number, width: number): string {
-  const parts = [`${counted(lessons, "working agreement")} in all`];
+  const parts = [`${counted(lessons, "preference")} in all`];
   if (result.shared.length) parts.push(`${number(result.shared.length)} shared by every role`);
   if (result.playbooks.length)
     parts.push(`${counted(result.playbooks.length, "group")} of project-specific notes`);
@@ -979,8 +985,8 @@ async function runGenerate(
     return 1;
   }
   if (!prefs.length) {
-    write("No preferences yet. Distill your sessions first.");
-    write(hint(hintCommand("distill", args)));
+    write("No preferences yet. Reflect on your sessions first.");
+    write(hint(hintCommand("reflect", args)));
     return 0;
   }
   const includeUnreviewed = args["include-unreviewed"] === true;
@@ -1018,7 +1024,7 @@ async function runGenerate(
     if (shown.damaged)
       write(
         yellow(
-          `The saved working agreements could not be read (${shown.damaged}). This run replaces them.`,
+          `The saved preference summaries could not be read (${shown.damaged}). This run replaces them.`,
         ),
       );
     const candidates = selectSuggestionInputs(prefs, reviewState.reviews, {
@@ -1067,7 +1073,7 @@ async function runGenerate(
       beforeCheck: () => {
         if (savedSuggestionKey(home) !== baseKey)
           throw new Error(
-            "The saved suggestion changed while you reviewed the plan. Run suggest-subagents again.",
+            `The saved suggestion changed while you reviewed the plan. Run ${hintCommand("suggest-subagents", args)} again.`,
           );
       },
       run: async ({ resumeAuthor, ready }) => {
@@ -1132,7 +1138,7 @@ async function runGenerate(
           return stop(
             "generalize",
             {
-              error: "There are no portable agreements to group into roles.",
+              error: "There are no reusable preferences to group into roles.",
               problems: ["no generalized lesson"],
               raw: null,
             },
@@ -1204,7 +1210,7 @@ async function runGenerate(
         );
         for (const role of result.roles) {
           write(
-            `  ${glyph("•", "-")} ${role.display_name} (${role.name}): ${counted(role.lesson_ids.length, "working agreement")}${role.prompt ? "" : yellow(", using the role description as its prompt")}`,
+            `  ${glyph("•", "-")} ${role.display_name} (${role.name}): ${counted(role.lesson_ids.length, "preference")}${role.prompt ? "" : yellow(", using the role description as its prompt")}`,
           );
         }
         write(suggestionSummary(result, lessons.length, screenWidth(out)));
@@ -1246,7 +1252,7 @@ async function closingMenu(
   if (!followUp || !canPrompt(io)) {
     out.write(`${hint(`${hintCommand("gui", args)} --tab=subagents`)}\n`);
     out.write(
-      `${hint(`${hintCommand("suggest-subagents", withoutGenerateOnly(args))} --export <dir>`)}\n`,
+      `${hint(`${hintCommand("suggest-subagents", withoutGenerateOnly(args))} --export ${DEFAULT_EXPORT_DIR}`)}\n`,
     );
     return 0;
   }
@@ -1290,7 +1296,7 @@ async function runAuthorOnly(
   const saved = pending ? null : readSuggestion(home);
   const artifact = pending ?? saved?.artifact;
   if (!artifact) {
-    write("No saved suggestion to write role prompts for. Run suggest-subagents first.");
+    write("No saved suggestion to write role prompts for. Create a suggestion first.");
     write(hint(hintCommand("suggest-subagents", args)));
     return 1;
   }
@@ -1299,7 +1305,7 @@ async function runAuthorOnly(
   if (saved?.stale || (pending && isSuggestionStale(home, pending))) {
     write(
       yellow(
-        "The reviewed preferences changed. Role prompts will use this proposal's saved agreements.",
+        "The reviewed preferences changed. Role prompts will use this proposal's saved preferences.",
       ),
     );
   }
@@ -1310,7 +1316,7 @@ async function runAuthorOnly(
       fingerprint(pendingAuthorProposal(home, baseKey)) !== fingerprint(pending)
     ) {
       throw new Error(
-        "The role proposal changed while you reviewed the plan. Run suggest-subagents --author-only again.",
+        `The role proposal changed while you reviewed the plan. Run ${hintCommand("suggest-subagents", args)} --author-only again.`,
       );
     }
   }
@@ -1450,7 +1456,7 @@ export default defineCommand({
     },
     "fresh-generalize": {
       type: "boolean",
-      description: "Summarize every preference again, replacing the saved working agreements",
+      description: "Summarize every preference again, replacing the saved preference summaries",
     },
     "author-only": {
       type: "boolean",

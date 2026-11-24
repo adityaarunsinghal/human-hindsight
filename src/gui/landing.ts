@@ -3,17 +3,20 @@
  * Browser-safe, no DOM.
  *
  * An address with a route always wins (`#preferences`, a bookmark). Without
- * one, a saved subagent suggestion opens the Subagents overview, also when it
- * is out of date (the overview says so); otherwise the Prompts overview opens.
- * A suggestion that could not be read does not count.
+ * one, preferences take the person straight to their reflection. A library
+ * with only a saved suggestion opens Subagents; otherwise it opens Prompts.
  */
 
 export type Tab = "prompts" | "preferences" | "subagents";
 export const TABS: readonly Tab[] = ["prompts", "preferences", "subagents"];
 
-export function landingTab(route: string, suggestion: { saved: boolean }): Tab | null {
+export function landingTab(
+  route: string,
+  library: { preferences: boolean; saved: boolean },
+): Tab | null {
   if (route) return null;
-  return suggestion.saved ? "subagents" : "prompts";
+  if (library.preferences) return "preferences";
+  return library.saved ? "subagents" : "prompts";
 }
 
 /** Where a person was in a tab: the open item and how far they had scrolled. */

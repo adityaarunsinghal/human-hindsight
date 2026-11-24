@@ -17,7 +17,7 @@ import {
 } from "./operations.js";
 import type { RetryHandler } from "./retry.js";
 import { toJsonSchema } from "./schemas.js";
-import type { StageProgressSink } from "./stage-events.js";
+import type { SavedSessionRead, StageProgressSink } from "./stage-events.js";
 
 export type RunnerFn = <T>(opts: RunOptions<T>) => Promise<T>;
 export interface StageFailure {
@@ -139,7 +139,9 @@ export async function executeOperation(o: {
   } else {
     // A placeholder request (a blocked unit, a recovery not yet prepared) is never sent.
     if (!request.prompt.trim())
-      throw new Error("Operation has no prepared request; run normal distill to prepare it");
+      throw new Error(
+        "Operation has no prepared request. Run npx human-hindsight reflect to prepare it.",
+      );
     // A normal attempt records the model request; strict retry records its whole prepared request.
     const attempt = store.start(
       operation.id,
@@ -232,8 +234,12 @@ export function stageReporter(
     detail(line: string) {
       sink?.detail?.(line);
     },
-    running(id: string, label: string) {
-      sink?.running?.(id, label);
+    running(id: string, label: string, project?: string) {
+      sink?.running?.(id, label, project);
+    },
+    read(id: string, status: "done" | "skipped", read: SavedSessionRead, line: string) {
+      if (sink) sink.item({ id, status, read, line });
+      else write(line);
     },
     /** `brief` is the sink's line: the sink names the status itself. */
     item(

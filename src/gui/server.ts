@@ -102,7 +102,7 @@ export interface GuiSnapshot {
   /** `start` is the bare command: the guided first run. */
   /** `gui` reopens this library after a restart. */
   commands: Record<
-    "start" | "gui" | "preferences" | "consolidate" | "export" | "distill" | "status",
+    "start" | "gui" | "preferences" | "consolidate" | "export" | "reflect" | "status",
     string
   >;
   skipped: number;
@@ -339,7 +339,7 @@ function librarySnapshot(home: string, reviewToken: string): GuiSnapshot {
       preferences: command("preferences"),
       consolidate: command("preferences", " --consolidate"),
       export: command("export"),
-      distill: command("distill"),
+      reflect: command("reflect"),
       status: command("status"),
     },
     skipped,
@@ -548,7 +548,7 @@ export function createGuiHandler(opts: {
         try {
           return json(savedAgreements(home));
         } catch {
-          return failed("Could not read the saved working agreements.");
+          return failed("Could not read the saved preferences.");
         }
       case "/api/subagents":
         try {

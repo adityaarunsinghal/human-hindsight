@@ -152,12 +152,12 @@ export function countLabel(count: number, word: string): string {
 export function coverageRows(coverage: Coverage): [string, number][] {
   return [
     ["Preferences considered", coverage.source_candidates],
-    ["Preferences used in agreements", coverage.mapped],
+    ["Source preferences used", coverage.mapped],
     ["Preferences left out", coverage.set_aside],
-    ["General agreements", coverage.disposition_counts.generalized],
-    ["Project-specific agreements", coverage.disposition_counts.contextual],
+    ["General preferences", coverage.disposition_counts.generalized],
+    ["Project-specific preferences", coverage.disposition_counts.contextual],
     ["One-time notes", coverage.disposition_counts.historical],
-    ["Agreements shared by every role", coverage.shared_count],
+    ["Preferences shared by every role", coverage.shared_count],
     ["Playbooks", coverage.playbook_count],
   ];
 }
@@ -189,7 +189,7 @@ export function changedAgreements(
 /** The out-of-date banner: what changed, and what exporting now would include. */
 export function staleSuggestionText(changed: number): string {
   const now = changed
-    ? `Exporting now gives the roles as shown, including ${countLabel(changed, "agreement")} whose source preferences you dismissed or that left the library (marked below).`
+    ? `Exporting now gives the roles as shown, including ${countLabel(changed, "preference")} whose source preferences you dismissed or that left the library (marked below).`
     : "Exporting now gives the roles as shown.";
   return `The preferences these roles were made from changed since they were made. ${now} Run this to make them again:`;
 }

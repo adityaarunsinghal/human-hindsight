@@ -1,5 +1,5 @@
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { isPlanLabel } from "../src/core/model-plan.js";
 import { openRunSession, type RunSessionOptions } from "../src/core/run-session.js";
 import { renderPlan } from "../src/distill/consent.js";
@@ -69,6 +69,32 @@ afterEach(() => {
 });
 
 describe("openRunSession pinning", () => {
+  it("a menu choice uses the discovered catalog once and stays on that CLI when it exhausts its quota", async () => {
+    const claude = fake("claude", ALIASES);
+    const codex = fake("codex", ONE_CODEX, failing("quota"));
+    const list = vi.spyOn(codex, "listModels");
+    const unavailable = fake("opencode", NONE);
+    unavailable.preflight = async () => {
+      throw new Error("CLI lacks a required flag");
+    };
+    const automatic = await open([claude, codex, unavailable]).session;
+    expect(automatic.runnerChoices.map(({ name }) => name)).toEqual(["claude", "codex"]);
+    const chosen = automatic.runnerChoices[1]?.select();
+    expect(chosen?.identityRunner).toBe("codex");
+    expect(chosen?.describe()).toMatchObject({
+      pinned: true,
+      alsoReady: [],
+      plans: { balanced: { bulk: "gpt-5.6-terra" } },
+    });
+    expect(codex.models).toEqual([]);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(await chosen?.liveCheck()).toMatchObject({
+      ok: false,
+      line: expect.stringContaining("Run npx human-hindsight reflect to choose another CLI."),
+    });
+    expect(claude.models).toEqual([]);
+    await chosen?.finalize();
+  });
   it("an automatic session discloses the other ready CLIs and uses plan labels", async () => {
     const { session } = open([fake("claude", ALIASES), fake("codex", CODEX)]);
     const s = await session;

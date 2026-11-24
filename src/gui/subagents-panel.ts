@@ -104,7 +104,7 @@ export function renderIntro(command: string, firstRun?: string): HTMLElement {
       "p",
       firstRun
         ? "Suggested subagents are specialist roles made from the preferences in your sessions, and none have been found yet. Run this in your terminal to read your sessions first, then choose Refresh:"
-        : "Suggested subagents turn your working agreements into specialist roles for recurring tasks. Run this in your terminal to make your first suggestion; it shows which model it will use and asks before starting. Then choose Refresh to explore and export the roles.",
+        : "Suggested subagents turn your preferences into specialist roles for recurring tasks. Run this in your terminal to make your first suggestion; it shows which model it will use and asks before starting. Then choose Refresh to explore and export the roles.",
     ),
     commandRow(firstRun ?? command),
   );
@@ -201,7 +201,7 @@ function lessonBlock(artifact: SuggestionArtifact, lesson: Lesson, ctx: PanelCon
             : "",
         ]
           .filter(Boolean)
-          .join(", and ")}. An export made now still includes this agreement.`,
+          .join(", and ")}. An export made now still includes this preference.`,
         "lesson-changed",
       ),
     );
@@ -268,8 +268,8 @@ export function renderRole(
     element("p", role.description),
     fields,
     triggers,
-    element("h2", `Working agreements · ${role.lesson_ids.length}`),
-    ...lessonList(artifact, role.lesson_ids, ctx, "No working agreements."),
+    element("h2", `Preferences · ${role.lesson_ids.length}`),
+    ...lessonList(artifact, role.lesson_ids, ctx, "No preferences."),
     element("h2", "Files"),
     ...fileNodes,
   );
@@ -284,9 +284,9 @@ export function renderShared(
   return detail(
     element(
       "p",
-      "Every specialist carries these agreements. The current request and the project's own instructions take precedence over them.",
+      "Every specialist carries these preferences. The current request and the project's own instructions take precedence over them.",
     ),
-    ...lessonList(artifact, artifact.shared, ctx, "No shared agreements in this suggestion."),
+    ...lessonList(artifact, artifact.shared, ctx, "No shared preferences in this suggestion."),
     file ? element("h2", "File") : undefined,
     file ? fileBlock(file) : undefined,
   );
@@ -301,14 +301,14 @@ export function renderPlaybooks(
   return detail(
     element(
       "p",
-      "A playbook is a step-by-step procedure for one recurring job, built from the working agreements it lists.",
+      "A playbook is a step-by-step procedure for one recurring job, built from the preferences it lists.",
     ),
     ...artifact.playbooks.flatMap((playbook) => {
       const file = knowledgeFile(files, playbookPath(playbook.name));
       return [
         element("h2", playbook.name),
         element("p", playbook.purpose),
-        ...lessonList(artifact, playbook.lesson_ids, ctx, "No working agreements."),
+        ...lessonList(artifact, playbook.lesson_ids, ctx, "No preferences."),
         ...(file ? [fileBlock(file)] : []),
       ];
     }),
@@ -363,7 +363,7 @@ export function renderCoverage(
   return detail(
     element("p", `Made ${generated} with ${artifact.runner} from ${selection}.`),
     table(["Item", "Count"], coverageRows(artifact.coverage)),
-    table(["Role", "Agreements"], coverageRoleRows(artifact)),
+    table(["Role", "Preferences"], coverageRoleRows(artifact)),
     setAside.length ? element("h2", "Preferences left out, and why") : undefined,
     setAside.length ? list : undefined,
     file ? element("h2", "File") : undefined,

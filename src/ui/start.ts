@@ -30,10 +30,11 @@
 import { createInterface, type Interface } from "node:readline";
 import type { Readable, Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
-import { frameHeight, liveRegion, onTerminalExit, persistLiveRegion } from "./live.js";
+import { frameHeight, liveRegion, onTerminalExit, persistLiveRegion, writeAbove } from "./live.js";
 import {
   canColor,
   canPrompt,
+  glyph,
   isInteractive,
   type TerminalInput,
   type TerminalOutput,
@@ -71,6 +72,15 @@ export interface StartQuestion<Q extends string> {
   options?: readonly StartOption<Q>[];
   /** The option selected when the question opens. */
   selected?: Q;
+  /** A disclosure that changes when a CLI or quality key is pressed. */
+  controls?: {
+    lines(width: number, color: boolean): string[];
+    keys(): string[];
+    choose(key: string): boolean;
+    ready(): boolean;
+    hint(): string;
+    previewCommand?(): string | undefined;
+  };
 }
 
 /** Started with the selected option, left, or interrupted (Ctrl-C). */
@@ -89,6 +99,11 @@ export function startLines<Q extends string>(
 ): string[] {
   const s = palette(o.color === true);
   const width = o.width ?? Number.POSITIVE_INFINITY;
+  if (q.controls)
+    return [
+      ...q.controls.lines(width, o.color === true),
+      ...(o.notes ?? []).map((note) => s.dim(`  ${note}`)),
+    ];
   const options = q.options ?? [];
   const selected = options.find((option) => option.key === (o.selected ?? q.selected));
   const named = options.map(
@@ -97,7 +112,9 @@ export function startLines<Q extends string>(
   const column = Math.max(0, ...named.map((label) => visibleWidth(label)));
   const rows = options.map((option, i) => {
     const label = named[i] ?? option.label;
-    return `  ${i + 1}  ${option === selected ? s.bold(label) : label}`;
+    const active = option === selected;
+    const marker = active ? s.green(glyph("›", ">")) : s.dim(glyph("•", "-"));
+    return `${marker} ${i + 1}  ${active ? s.bold(s.green(label)) : label}`;
   });
   const besides = options.map((option, i) =>
     option.detail
@@ -148,7 +165,8 @@ export async function askStart<Q extends string>(
   const output: TerminalOutput = io.output ?? process.stdout;
   if (input.readableEnded || input.destroyed) return "quit";
   const opening = startLines(q, { notes: [START_HINT] });
-  if (startTakesKeys(io) && opening.length <= frameHeight(output)) {
+  const requiredRows = q.controls ? 4 : opening.length;
+  if (startTakesKeys(io) && requiredRows <= frameHeight(output)) {
     const answer = await keyStart(q, io, input, output);
     if (answer !== RAW_MODE_REFUSED) return answer;
   }
@@ -182,14 +200,44 @@ function keyStart<Q extends string>(
     let typedAhead = false;
     let hinted = false;
     let inPaste = false;
+    let partialMarker = "";
+    let printedPlan: string | undefined;
     const paste = pasteMode(io);
 
     function draw(): void {
       if (finished) return;
-      const notes = [...(typedAhead ? [TYPED_AHEAD] : []), ...(hinted ? [START_HINT] : [])];
+      const notes = [
+        ...(typedAhead ? [TYPED_AHEAD] : []),
+        ...(hinted ? [q.controls?.hint() ?? START_HINT] : []),
+      ];
       // A live region leaves the last column free.
       const width = terminalWidth(output) - 1;
-      region?.render(startLines(q, { selected, color, width, notes }));
+      const lines = startLines(q, { selected, color, width, notes });
+      // A newly selected CLI can have long model names or extra disclosures.
+      // On short or narrow screens the plan scrolls above the single-key
+      // question. Every model, warning, and choice is still printed in full.
+      if (
+        q.controls &&
+        (lines.length > frameHeight(output) || lines.some((line) => visibleWidth(line) > width))
+      ) {
+        const controls = lines.length - notes.length - 2;
+        const command = q.controls.previewCommand?.();
+        const plan = [
+          ...lines.slice(0, controls),
+          ...(command ? ["  To see the whole plan first, run:", `    ${command}`] : []),
+        ].join("\n");
+        if (plan !== printedPlan) {
+          region?.render([]);
+          region?.flush();
+          writeAbove(output, plan, io.env);
+          printedPlan = plan;
+        }
+        region?.render(lines.slice(controls));
+        region?.flush();
+        return;
+      }
+      printedPlan = undefined;
+      region?.render(lines);
       region?.flush();
     }
     function detach(): void {
@@ -242,11 +290,23 @@ function keyStart<Q extends string>(
     }
     /** One read from the terminal: what it may answer, and what it may not. */
     function read(chunk: string): void {
-      let text = chunk;
+      let text = partialMarker + chunk;
+      partialMarker = "";
       // Ctrl-C always interrupts, wherever it is in the read.
       if (text.includes("\u0003")) {
         interrupt();
         return;
+      }
+      // A PTY read may end partway through a paste marker. A lone Escape
+      // outside a paste is the quit key.
+      const escapeAt = text.lastIndexOf("\u001b");
+      if (escapeAt >= 0 && (inPaste || text.length > 1)) {
+        const tail = text.slice(escapeAt);
+        if (
+          tail.length < PASTE_START.length &&
+          (PASTE_START.startsWith(tail) || PASTE_END.startsWith(tail))
+        )
+          partialMarker = tail;
       }
       // Everything inside a bracketed paste is ignored, markers included.
       if (inPaste || text.includes(PASTE_START)) {
@@ -276,8 +336,16 @@ function keyStart<Q extends string>(
         quit();
         return;
       }
-      if (key === START_KEY) {
+      if (key === START_KEY && (!q.controls || q.controls.ready())) {
         finish({ start: true, ...(selected && { selected }) });
+        return;
+      }
+      if (q.controls?.choose(key)) {
+        hinted = false;
+        draw();
+        // Reading the chosen CLI's local cache may take time. Keys waiting
+        // before its replacement plan was shown cannot authorize that plan.
+        if (discardTypeAhead(input) > 0) setAside();
         return;
       }
       const option = /^[1-9]$/.test(text) ? options[Number(text) - 1] : undefined;
@@ -314,6 +382,7 @@ function keyStart<Q extends string>(
     paste.on();
     // On screen first, then what was waiting is thrown away, then listening starts.
     draw();
+    if (finished) return;
     if (discardTypeAhead(input) > 0) setAside();
     input.resume();
   });
@@ -383,15 +452,15 @@ async function lineStart<Q extends string>(
   const plain = (lines: string[]) =>
     lines.map((line) => stripVTControlCharacters(safeLine(line))).join("\n");
   output.write(`${plain(startLines(q, { selected, width, wrap: true }))}\n`);
-  const keys = [...options.map((_, i) => String(i + 1)), START_KEY, "q"].join("/");
-  const prompt = `  Choose [${keys}]: `;
+  const prompt = () =>
+    `  Choose [${[...(q.controls?.keys() ?? options.map((_, i) => String(i + 1))), START_KEY, "q"].join("/")}]: `;
   const paste = pasteMode(io);
   paste.on();
   let inPaste = false;
   let noted = false;
   try {
     for (;;) {
-      const answer = await next(prompt);
+      const answer = await next(prompt());
       if ("end" in answer) {
         if (answer.end === "interrupt") {
           output.write(`${INTERRUPTED_LINE}\n`);
@@ -401,14 +470,21 @@ async function lineStart<Q extends string>(
       }
       // A pasted line, or any line of a paste, never answers.
       if (inPaste || hasPasteMarker(answer.line)) {
-        inPaste = answer.line.lastIndexOf(PASTE_START) > answer.line.lastIndexOf(PASTE_END);
+        inPaste =
+          answer.line.lastIndexOf(PASTE_START) > answer.line.lastIndexOf(PASTE_END) ||
+          (inPaste && !answer.line.includes(PASTE_END));
         if (!noted) output.write(`  ${TYPED_AHEAD}\n`);
         noted = true;
         continue;
       }
       const value = answer.line.trim().toLowerCase();
-      if (value === START_KEY) return { start: true, ...(selected && { selected }) };
+      if (value === START_KEY && (!q.controls || q.controls.ready()))
+        return { start: true, ...(selected && { selected }) };
       if (value === "q" || value === "quit") return "quit";
+      if (q.controls?.choose(value)) {
+        output.write(`${plain(startLines(q, { selected, width, wrap: true }))}\n`);
+        continue;
+      }
       const option = /^[1-9]$/.test(value) ? options[Number(value) - 1] : undefined;
       if (option) {
         selected = option.key;
@@ -417,7 +493,7 @@ async function lineStart<Q extends string>(
         );
         continue;
       }
-      output.write(`  ${START_HINT}\n`);
+      output.write(`  ${q.controls?.hint() ?? START_HINT}\n`);
     }
   } finally {
     paste.off();

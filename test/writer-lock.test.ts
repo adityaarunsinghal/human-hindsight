@@ -169,7 +169,7 @@ describe("while distill holds the writer lock", () => {
       });
       const cap = capture();
       const code = await run(home.dir, runner as RunnerFn, cap.out);
-      expect(cap.text()).toContain("human-hindsight distill is changing this library");
+      expect(cap.text()).toContain("npx human-hindsight reflect is changing this library");
       expect(code).toBe(1);
       expect(runner).not.toHaveBeenCalled();
       expect(snapshot(home.dir)).toEqual(before);
@@ -213,7 +213,7 @@ describe("with a lock left by a run under an earlier machine name", () => {
       .split("\n")
       .filter((line) => line.includes("writer lock"));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toContain("human-hindsight distill on laptop-on-another-network");
+    expect(lines[0]).toContain("npx human-hindsight reflect on laptop-on-another-network");
     expect(lines[0]).toContain(`remove ${dir}`);
   });
 });
@@ -337,7 +337,7 @@ describe("Ctrl-C during a run", () => {
     expect(said).not.toContain("Your progress is saved");
     // The stopping run prints nothing after its line and the command.
     const after = said.split(line ?? "To continue, run:")[1] ?? "";
-    expect(after.trim()).toMatch(/^human-hindsight \S+( \S+)*$/);
+    expect(after.trim()).toMatch(/^npx human-hindsight \S+( \S+)*$/);
     expect(after).not.toMatch(/stopped by the interrupt|failed:|CLI call/);
     expect(
       cap
@@ -345,7 +345,7 @@ describe("Ctrl-C during a run", () => {
         .split("\n")
         .find((printed) => printed.includes(resume))
         ?.trim(),
-    ).toMatch(/^human-hindsight /);
+    ).toMatch(/^npx human-hindsight /);
     expect(host.listenerCount("SIGINT")).toBe(0);
   });
 });
@@ -382,7 +382,7 @@ describe("an answer that lands after Ctrl-C", () => {
     expect(abortedAtInterrupt).toBe(true);
     const line = "Interrupted. Nothing was saved; run the same command again:";
     const after = cap.text().split(line)[1] ?? "";
-    expect(after.trim()).toMatch(/^human-hindsight preferences( \S+)*$/);
+    expect(after.trim()).toMatch(/^npx human-hindsight preferences( \S+)*$/);
     expect(readConsolidatedPreferences(home.dir).artifact ?? undefined).toBeUndefined();
     expect(clipboard).not.toHaveBeenCalled();
   });
@@ -402,7 +402,7 @@ describe("the writer lock on Ctrl-C", () => {
       home: home.dir,
       command: "distill",
       output: capture().out,
-      resume: "human-hindsight distill",
+      resume: "npx human-hindsight reflect",
       cleanup: () => cleanup,
       interrupt: () => {},
       host,
@@ -419,7 +419,7 @@ describe("the writer lock on Ctrl-C", () => {
     guard.end();
     expect(exitedWith).toBeUndefined();
     expect(writerBusyReason(home.dir)).toContain(
-      "human-hindsight distill is changing this library",
+      "npx human-hindsight reflect is changing this library",
     );
     finishCleanup();
     await cleanup;
@@ -437,7 +437,7 @@ describe("the writer lock on Ctrl-C", () => {
       home: home.dir,
       command: "distill",
       output: capture().out,
-      resume: "human-hindsight distill",
+      resume: "npx human-hindsight reflect",
       cleanup: () => new Promise<void>(() => {}),
       host,
       exit: (code) => codes.push(code),

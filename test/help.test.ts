@@ -1,5 +1,6 @@
 import { type ArgsDef, type CommandDef, type CommandMeta, runCommand } from "citty";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import pkg from "../package.json" with { type: "json" };
 import helpCommand, {
   createShowUsage,
   findInputProblem,
@@ -54,9 +55,9 @@ describe("root help", () => {
     expect(text).not.toMatch(/--[a-z]+-dir/);
     expect(text).not.toContain("\u001b");
     // The footer points at doctor, the full reference, and the project page.
-    expect(text).toContain("human-hindsight doctor");
-    expect(text).toContain("human-hindsight help --all");
-    expect(text).toContain("https://github.com/adityaarunsinghal/human-hindsight");
+    expect(text).toContain("npx human-hindsight doctor");
+    expect(text).toContain("npx human-hindsight help --all");
+    expect(text).toContain(pkg.homepage);
     // Start here names the bare command.
     expect(text).toMatch(/Start here\n\s+npx human-hindsight/);
   });
@@ -95,6 +96,15 @@ describe("root help", () => {
 });
 
 describe("command help", () => {
+  it("shows the same reflection examples and options under the earlier command name", async () => {
+    for (const all of [false, true]) {
+      const canonical = await page("reflect", { all });
+      expect(await page("distill", { all })).toBe(canonical);
+      expect(canonical).toContain("The earlier name distill still works.");
+      expect(canonical).toContain("npx human-hindsight reflect --recent 10");
+    }
+  });
+
   it("every registered command has a topic with a summary, an example, and real common flags", async () => {
     const shared = (await resolveDefinition<ArgsDef>(main.args ?? {})) as ArgsDef;
     for (const { name, def } of await registered()) {
@@ -104,7 +114,7 @@ describe("command help", () => {
       expect(topic.summary, name).toMatch(/^[A-Z].+\.$/);
       expect(topic.examples.length, name).toBeGreaterThan(0);
       for (const example of topic.examples) {
-        expect(example.run.startsWith(`human-hindsight ${name}`), example.run).toBe(true);
+        expect(example.run.startsWith(`npx human-hindsight ${name}`), example.run).toBe(true);
       }
       const args = { ...shared, ...(await resolveDefinition<ArgsDef>(def.args ?? {})) };
       for (const flag of topic.common) {
@@ -120,17 +130,17 @@ describe("command help", () => {
       const topic = helpTopics.find((item) => item.name === name);
       if (!topic) throw new Error(`no topic for ${name}`);
       expect(meta.description, name).toBe(topic.summary);
-      expect(reference, name).toContain(`human-hindsight ${name}\n${topic.summary}\n`);
-      expect(await page(name), name).toContain(`human-hindsight ${name}\n${topic.summary}\n`);
+      expect(reference, name).toContain(`npx human-hindsight ${name}\n${topic.summary}\n`);
+      expect(await page(name), name).toContain(`npx human-hindsight ${name}\n${topic.summary}\n`);
     }
   });
 
   it("leads with examples, then common options, then a pointer to the full list", async () => {
-    const text = await page("distill");
+    const text = await page("reflect");
     const at = (label: string) => text.indexOf(label);
     expect(at("Examples")).toBeGreaterThan(0);
     expect(at("Examples")).toBeLessThan(at("Common options"));
-    expect(at("Common options")).toBeLessThan(at("human-hindsight distill --help --all"));
+    expect(at("Common options")).toBeLessThan(at("npx human-hindsight reflect --help --all"));
   });
 
   it("placeholders name real values on every flag of every command", async () => {
@@ -161,7 +171,7 @@ describe("command help", () => {
     for (const [command, flag, placeholder] of rows) {
       expect(reference, `${command} --${flag}`).toContain(`--${flag} ${placeholder}`);
     }
-    const distill = await page("distill", { all: true });
+    const reflect = await page("reflect", { all: true });
     for (const label of [
       "--recent 25",
       "--quality balanced|best",
@@ -173,7 +183,7 @@ describe("command help", () => {
       "--cluster-batch-size <n>",
       "--project <name>",
     ])
-      expect(distill).toContain(label);
+      expect(reflect).toContain(label);
     expect(await page("distill")).toContain("--recent 25 ");
     expect(await page("export")).toMatch(/--source <tool> +History to read: claude, codex/);
   });
@@ -226,7 +236,7 @@ describe("full reference", () => {
       const wide = text
         .split("\n")
         .filter((line) => line.length > 60)
-        .filter((line) => !/^ {2}(npx )?human-hindsight \S|^ {2}https:\/\/\S+$/.test(line));
+        .filter((line) => !/^ {2}npx human-hindsight \S|^ {2}https:\/\/\S+$/.test(line));
       expect(wide).toEqual([]);
     }
   });
@@ -245,12 +255,12 @@ describe("mistyped input runs nothing", () => {
     [
       "an unknown command",
       ["exprot"],
-      /Unknown command "exprot"\. Did you mean `human-hindsight export`\?/,
+      /Unknown command "exprot"\. Did you mean `npx human-hindsight export`\?/,
     ],
     [
       "an unknown help target",
       ["help", "distil"],
-      /Unknown command "distil"\. Did you mean `human-hindsight help distill`\?/,
+      /Unknown command "distil"\. Did you mean `npx human-hindsight help reflect`\?/,
     ],
     [
       "a near-miss flag on the bare command",
@@ -260,17 +270,17 @@ describe("mistyped input runs nothing", () => {
     [
       "a near-miss flag on a command",
       ["distill", "--dryrun"],
-      /Unknown option --dryrun for `human-hindsight distill`\. Did you mean --dry-run\?/,
+      /Unknown option --dryrun for `npx human-hindsight reflect`\. Did you mean --dry-run\?/,
     ],
     [
       "a flag that belongs to another command",
       ["status", "--dry-run"],
-      /Unknown option --dry-run for `human-hindsight status`/,
+      /Unknown option --dry-run for `npx human-hindsight status`/,
     ],
     [
       "an unrelated flag",
       ["--bogus"],
-      /Unknown option --bogus\. See `human-hindsight --help --all`/,
+      /Unknown option --bogus\. See `npx human-hindsight --help --all`/,
     ],
     [
       "a misspelled negation",
@@ -280,24 +290,24 @@ describe("mistyped input runs nothing", () => {
     ["a negated flag that takes a value", ["--no-home"], /Unknown option --no-home/],
     ["an unknown short flag", ["export", "-x"], /Unknown option -x/],
     [
-      "a distill option on the bare command",
+      "a reflect option on the bare command",
       ["--fresh"],
-      /^That option belongs to distill: human-hindsight distill --fresh$/,
+      /^That option belongs to reflect: npx human-hindsight reflect --fresh$/,
     ],
     [
-      "a distill option with a value on the bare command",
+      "a reflect option with a value on the bare command",
       ["--concurrency", "4"],
-      /^That option belongs to distill: human-hindsight distill --concurrency 4$/,
+      /^That option belongs to reflect: npx human-hindsight reflect --concurrency 4$/,
     ],
     [
       "a word that resembles no command",
       ["frobnicate"],
-      /^Unknown command "frobnicate"\. See `human-hindsight --help` for the commands\.$/,
+      /^Unknown command "frobnicate"\. See `npx human-hindsight --help` for the commands\.$/,
     ],
     [
       "a help target that resembles no command",
       ["help", "frob"],
-      /^Unknown command "frob"\. See `human-hindsight --help` for the commands\.$/,
+      /^Unknown command "frob"\. See `npx human-hindsight --help` for the commands\.$/,
     ],
     ["a home screen option on a command", ["status", "--yes"], /Unknown option --yes for/],
   ];
@@ -312,7 +322,7 @@ describe("mistyped input runs nothing", () => {
     expect(commands.length).toBeGreaterThan(15);
     for (const { name, def } of commands) {
       expect(await findInputProblem(main, [name, "--bogus-flag"]), name).toMatch(
-        new RegExp(`^Unknown option --bogus-flag for \`human-hindsight ${name}\``),
+        new RegExp(`^Unknown option --bogus-flag for \`npx human-hindsight ${name}\``),
       );
       const args = { ...shared, ...(await resolveDefinition<ArgsDef>(def.args ?? {})) };
       for (const flag of Object.keys(args)) {
@@ -327,7 +337,7 @@ describe("mistyped input runs nothing", () => {
       }
     }
     expect(await findInputProblem(main, ["export", "--porject", "alpha-app"])).toBe(
-      "Unknown option --porject for `human-hindsight export`. Did you mean --project?",
+      "Unknown option --porject for `npx human-hindsight export`. Did you mean --project?",
     );
   });
 
@@ -343,7 +353,7 @@ describe("mistyped input runs nothing", () => {
       expect(await findInputProblem(main, [name, ...filled]), name).toBeUndefined();
       const extra = await findInputProblem(main, [name, ...filled, "no"]);
       expect(extra, `${name} with one word too many`).toMatch(/^Unexpected argument: no\. /);
-      expect(extra).toContain(`\`human-hindsight ${name}\``);
+      expect(extra).toContain(`\`npx human-hindsight ${name}\``);
       if (positionals.length === 0) {
         none++;
         expect(extra).toContain("takes no arguments");
@@ -364,13 +374,13 @@ describe("mistyped input runs nothing", () => {
     }
     expect(none).toBeGreaterThan(10);
     expect(await findInputProblem(main, ["distill", "--yes", "no"])).toBe(
-      "Unexpected argument: no. `human-hindsight distill` takes no arguments; see `human-hindsight distill --help`.",
+      "Unexpected argument: no. `npx human-hindsight reflect` takes no arguments; see `npx human-hindsight reflect --help`.",
     );
     expect(await findInputProblem(main, ["show", "a", "b"])).toBe(
-      "Unexpected argument: b. `human-hindsight show` takes NAME; see `human-hindsight show --help`.",
+      "Unexpected argument: b. `npx human-hindsight show` takes NAME; see `npx human-hindsight show --help`.",
     );
     expect(await findInputProblem(main, ["rate", "a", "up", "now"])).toBe(
-      "Unexpected argument: now. `human-hindsight rate` takes NAME RATING; see `human-hindsight rate --help`.",
+      "Unexpected argument: now. `npx human-hindsight rate` takes NAME RATING; see `npx human-hindsight rate --help`.",
     );
     // A value flag still takes the next word, and the bare command treats a word as a command.
     expect(await findInputProblem(main, ["distill", "--project", "no"])).toBeUndefined();
@@ -382,7 +392,7 @@ describe("mistyped input runs nothing", () => {
     ["the bare command's own options", ["--dry-run", "--yes", "--no-follow-up", "--plain"]],
     ["root flags with values that look like commands", ["--project", "status", "--home", "/tmp/x"]],
     ["root flags before a command", ["--home", "/tmp/x", "export", "--project", "app"]],
-    ["the equals form", ["distill", "--quality=best", "--recent=25"]],
+    ["the equals form", ["reflect", "--quality=best", "--recent=25"]],
     ["camel case, as the parser accepts it", ["distill", "--dryRun"]],
     ["a negated boolean", ["gui", "--no-open", "--no-follow-up"]],
     ["help and version flags", ["export", "--help", "--all"]],
@@ -480,7 +490,7 @@ describe("mistyped input runs nothing", () => {
         ["-1", "x"],
         ["0", "2"],
       ],
-      ...(["distill", "suggest-subagents"] as const).flatMap((command) => [
+      ...(["reflect", "distill", "suggest-subagents"] as const).flatMap((command) => [
         [
           command,
           "concurrency",
@@ -608,7 +618,7 @@ describe("mistyped input runs nothing", () => {
     [["--"]],
   ])("%j: a leading -- is an error that points at --help", async (rawArgs) => {
     expect(await findInputProblem(main, rawArgs)).toBe(
-      "Nothing runs after a leading --. Put the command first; see `human-hindsight --help`.",
+      "Nothing runs after a leading --. Put the command first; see `npx human-hindsight --help`.",
     );
   });
 });

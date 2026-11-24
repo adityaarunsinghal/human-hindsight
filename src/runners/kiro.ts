@@ -564,7 +564,7 @@ function writeNoToolsAgent(cwd: string, name: string): void {
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const config = {
     name,
-    description: "human-hindsight distill runner; no tools, answer from provided content only.",
+    description: "Human Hindsight reflection runner; no tools, answer from provided content only.",
     prompt: DISTILL_SYSTEM,
     tools: [],
     mcpServers: {},

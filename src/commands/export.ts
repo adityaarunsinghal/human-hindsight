@@ -989,7 +989,7 @@ function reportExport(
     }
   }
 
-  write(hint(nextCommandText("distill", opts), lineWidth(opts.output ?? process.stdout)));
+  write(hint(nextCommandText("reflect", opts), lineWidth(opts.output ?? process.stdout)));
 }
 
 /**
@@ -1073,6 +1073,6 @@ export default defineCommand({
     console.log(`${dim(terminalPrivacyReminder(process.stdout))}\n`);
     const result = runExport(args as unknown as ExportArgs);
     if (result.busy) process.exitCode = 1;
-    else if (result.exportedSessions > 0) await offerNext("distill", args, { hintPrinted: true });
+    else if (result.exportedSessions > 0) await offerNext("reflect", args, { hintPrinted: true });
   },
 });

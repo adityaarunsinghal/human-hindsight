@@ -48,7 +48,7 @@ const CODEX: ModelCatalog = {
   source: "catalog",
 };
 const NONE: ModelCatalog = { ids: [], source: "none" };
-const LISTING_LINE = "Checking which coding CLIs are ready.";
+const LISTING_LINE = "Checking available coding CLIs…";
 const FIXED_NOW = () => 1_800_000_000_000;
 
 type Stage = "check" | "digest" | "window" | "merge" | "author" | "generalize";
@@ -352,7 +352,9 @@ describe("the plan screen", () => {
     // claim about the network: the run session says so itself when a model
     // list really comes from a service.
     expect(text.split(LISTING_LINE)).toHaveLength(2);
-    expect(flat(text).indexOf(LISTING_LINE)).toBeLessThan(flat(text).indexOf("Distill plan"));
+    expect(flat(text).indexOf(LISTING_LINE)).toBeLessThan(
+      flat(text).indexOf("Reflect on your history"),
+    );
     expect(flat(text)).not.toMatch(/contact your provider|contacts its service/);
     expect(modelCalls(claude)).toBe(0);
   });
@@ -442,12 +444,12 @@ describe("the plan screen", () => {
     expect(code).toBe(2);
     expect(io.remaining).toEqual([]);
     await expect(text).toMatchFileSnapshot(golden("distill-quick-start"));
-    expect(flat(text)).toContain("My 25 most recent sessions");
-    expect(flat(text)).toContain("Everything (30 eligible sessions)");
-    expect(flat(text)).toContain("your 25 most recent sessions (of 30 eligible)");
+    expect(flat(text)).toContain("25 most recent sessions");
+    expect(flat(text)).toContain("All 30 eligible sessions");
+    expect(flat(text)).toContain("25 recent sessions across 1 project · 30 eligible");
     expect(modelCalls(claude)).toBe(0);
     // One line says what is being checked before the plan; no line per step of it.
-    expect(text).toContain("Checking which coding CLIs are ready.");
+    expect(text).toContain("Checking available coding CLIs…");
     expect(text).not.toMatch(/Finding ready CLIs|Checking session sizes/);
   });
 
@@ -483,6 +485,56 @@ describe("the plan screen", () => {
 // --- consent promises ----------------------------------------------------------
 
 describe("consent", () => {
+  it("an explicit automatic runner keeps its disclosed fallback order", async () => {
+    const home = tmpHome(sessions(1));
+    const claude = fakeCli("claude", ALIASES, () => {
+      throw Object.assign(new Error("Signed out."), { kind: "sign-in" });
+    });
+    const codex = fakeCli("codex", CODEX);
+    const { code, text } = await run(
+      { home, runner: "auto", generalize: false },
+      {
+        runners: [claude, codex],
+        input: PassThrough.from(["s\n"]),
+      },
+    );
+    expect(code).toBe(0);
+    expect(text).not.toContain("Which coding CLI should run this reflection?");
+    expect(flat(text)).toContain("If this CLI stops working, the run can move to Codex.");
+    expect(flat(text)).toContain("through Claude Code (or the CLI the run moves to)");
+    expect(modelCalls(codex, "digest")).toBe(1);
+  });
+
+  it("switches the displayed models and cache identity with the CLI, then runs only the pinned Best plan", async () => {
+    const home = tmpHome(sessions(2));
+    const claude = fakeCli("claude", ALIASES);
+    const codex = fakeCli("codex", CODEX);
+    const input = PassThrough.from(["s\nc\n2\nx\n\ns\n"]);
+    const result = await run({ home, generalize: false }, { runners: [claude, codex], input });
+    expect(result.code).toBe(0);
+    expect(result.text).toContain("Which coding CLI should run this reflection?");
+    expect(result.text).toContain("Choose a coding CLI before pressing s to start.");
+    expect(flat(result.text)).toContain("fable for grouping and writing");
+    expect(flat(result.text)).toContain("gpt-5.6-astra for grouping and writing");
+    expect(flat(result.text)).toContain("This run stays on this CLI.");
+    expect(claude.calls).toEqual([]);
+    expect(
+      codex.calls
+        .filter((call) => call.stage === "check")
+        .map((call) => call.model)
+        .sort(),
+    ).toEqual(["gpt-5.6-astra", "gpt-5.6-sol"]);
+    expect(codex.calls.filter((call) => call.stage === "digest").map((call) => call.model)).toEqual(
+      ["gpt-5.6-sol", "gpt-5.6-sol"],
+    );
+    const resume = await run(
+      { home, runner: "codex", quality: "best", "dry-run": true },
+      { runners: [claude, codex] },
+    );
+    expect(flat(resume.text)).toContain("no new session reads (2 reused from saved work)");
+    expect(resume.text).not.toContain("Which coding CLI");
+  });
+
   it.each([
     { name: "a no", input: () => PassThrough.from(["n\n"]) as Readable },
     { name: "end of input", input: () => PassThrough.from([]) as Readable },
@@ -640,7 +692,7 @@ describe("consent", () => {
     expect(code).toBe(2);
     expect(reached?.sessions).toBe(26);
     expect(touched).toEqual([]);
-    expect(flat(text)).not.toContain("Which sessions would you like to start with?");
+    expect(flat(text)).not.toContain("Which history do you want to reflect on?");
     expect(modelCalls(claude)).toBe(0);
   });
 
@@ -721,7 +773,7 @@ describe("consent", () => {
       args: { "min-substance": "9" },
       big: false,
       code: 0,
-      says: "nothing to distill",
+      says: "Nothing to reflect on",
     },
   ])("$name", async ({ args, big, code, says }) => {
     const home = tmpHome([entry("big", "x", 5)]);
@@ -750,7 +802,7 @@ describe("consent", () => {
     ).catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(PlainFailure);
     expect((failure as Error).message).toBe(
-      `${path.join(home, "exports", "manifest.json")} is damaged (${reason}). Run \`human-hindsight export\` again to rebuild it.`,
+      `${path.join(home, "exports", "manifest.json")} is damaged (${reason}). Run \`npx human-hindsight export\` again to rebuild it.`,
     );
     // Nothing about it on stdout; the guard writes the line to stderr.
     expect(output.text()).not.toMatch(/manifest|error/);
@@ -899,7 +951,7 @@ describe("the run", () => {
       "2 earlier prompts are no longer part of the grouping. They are kept; remove them with:",
     );
     // ...and the command alone on its own line, for this home.
-    expect(lines[at + 2]).toBe("  human-hindsight prune --home=<HOME>");
+    expect(lines[at + 2]).toBe("  npx human-hindsight prune --home=<HOME>");
     expect(text.split("no longer part of the grouping").length - 1).toBe(1);
   });
 
@@ -921,7 +973,7 @@ describe("the run", () => {
       { runners: [fakeCli("claude", ALIASES)] },
     );
     expect(flat(text)).toContain(
-      `Kept 1 prompt you edited, as you wrote it: ${slug}. To replace it with the new version, run distill again with --force.`,
+      `Kept 1 prompt you edited, as you wrote it: ${slug}. To replace it with the new version, run npx human-hindsight reflect --force.`,
     );
     expect(
       fs.readFileSync(path.join(home, "library", slug as string, `${slug}.oneshot.md`), "utf8"),
@@ -932,7 +984,7 @@ describe("the run", () => {
   it.each([
     [
       { status: "done", lessons: 2, reused: 1, errors: [] },
-      "Working preferences: 3 preferences summarized into 2 working agreements (1 batch reused).",
+      "Working preferences: 2 preferences summarized from 3 observations (1 batch reused).",
     ],
     [
       {
@@ -945,11 +997,11 @@ describe("the run", () => {
           incomplete: { windows_failed: 1, candidates_not_covered: 1 },
         },
       },
-      "Working preferences: 2 of 3 preferences summarized; run distill again to finish (finished work is reused).",
+      "Working preferences: 2 of 3 preferences summarized; run npx human-hindsight reflect to finish (finished work is reused).",
     ],
     [
       { status: "failed", lessons: 0, reused: 0, errors: ["Batch 1: boom"] },
-      "Working preferences could not be summarized this time (Batch 1: boom). Your prompts are saved; run distill again to finish them.",
+      "Working preferences could not be summarized this time (Batch 1: boom). Your prompts are saved; run npx human-hindsight reflect to finish them.",
     ],
   ] as const)("the working preferences line for a run that is %s", (result, line) => {
     expect(preferencesLine(result as unknown as GeneralizeResult, 3)).toBe(line);
@@ -1087,7 +1139,7 @@ describe("the run", () => {
   it("names the kept prompts up to three, and the rest only with --verbose", () => {
     expect(keptLine(["a", "b", "c"])).toContain(": a, b, c.");
     expect(keptLine(["a", "b", "c", "d"])).toBe(
-      "Kept 4 prompts you edited, as you wrote them. To replace them with the new version, run distill again with --force.",
+      "Kept 4 prompts you edited, as you wrote them. To replace them with the new version, run npx human-hindsight reflect --force.",
     );
     expect(keptLine(["a", "b", "c", "d"], true)).toContain(": a, b, c, d.");
   });
@@ -1117,7 +1169,7 @@ describe("the run", () => {
     const { code, text } = await run({ home, yes: true, quality: "best" }, { runners: [editing] });
     expect(code).toBe(0);
     expect(flat(text)).toContain("Library: 1 prompt kept (edited by you).");
-    expect(flat(text)).toContain("run distill again with --force");
+    expect(flat(text)).toContain("run npx human-hindsight reflect --force");
     expect(text).not.toMatch(/could not be written|prompts? written/);
     expect(fs.readFileSync(file, "utf8")).toContain("My own addition.");
   });
@@ -1173,7 +1225,12 @@ describe("the run", () => {
     // A command or a path is alone on its line and may be wider; prose never is.
     const prose = lines
       .slice(from)
-      .filter((line) => !/^\s+human-hindsight\s|^→ next: human-hindsight\s|^Done in /.test(line));
+      .filter(
+        (line) =>
+          !/^\s+npx human-hindsight\s|^→ next: npx human-hindsight\s|^Library: .*\/library$/.test(
+            line,
+          ),
+      );
     expect(prose.filter((line) => line.length > columns)).toEqual([]);
   });
 
@@ -1213,8 +1270,10 @@ describe("the run", () => {
     const at = lines.findIndex((line) => line.includes(story));
     expect(at).toBeGreaterThan(-1);
     expect(lines[at + 1]).toBe("Review them in your browser:");
-    expect(lines[at + 2]).toMatch(/^ {2}human-hindsight gui --home=\S+ --tab=preferences$/);
+    expect(lines[at + 2]).toMatch(/^ {2}npx human-hindsight gui --home=\S+ --tab=preferences$/);
     expect(text.split(story).length - 1).toBe(1);
+    expect(flat(text)).toContain("What you care about Keep each change small.");
+    expect(text).toContain("Reflection finished with incomplete preference summaries");
   });
 
   it("when only the working preferences need a call, the check runs just before it", async () => {
@@ -1285,7 +1344,7 @@ describe("the run", () => {
     expect(code).toBe(1);
     expect(flat(text)).toContain("Sessions that could not be read");
     expect(flat(text)).toContain(
-      "human-hindsight distill --home=<HOME> --retry-failed --retry-stage=digest",
+      "npx human-hindsight reflect --home=<HOME> --retry-failed --retry-stage=digest",
     );
     expect(flat(text)).toContain("Library: 1 prompt written.");
   });
@@ -1392,7 +1451,7 @@ describe("the run", () => {
     { damaged: false, lines: [] as string[] },
     {
       damaged: true,
-      lines: ["Your saved working agreements could not be read and will be rebuilt."],
+      lines: ["Your saved preference summaries could not be read and will be rebuilt."],
     },
   ])("a failed preference summary leaves the library, prints one notice, exits 0 (damaged set: $damaged)", async ({
     damaged,
@@ -1465,13 +1524,18 @@ describe("the run", () => {
     expect(cleaned).toBe(true);
     const text = outputs.at(-1) ?? "";
     const lines = text.trim().split("\n");
-    const said = flat(lines.slice(-3, -1).join(" "));
-    expect(said).toBe(
-      "Interrupted. Sessions read so far are saved; the rest are read next time. To continue, run:",
+    const said = flat(
+      lines
+        .slice(
+          lines.findIndex((line) => line.startsWith("Interrupted.")),
+          -1,
+        )
+        .join(" "),
     );
+    expect(said).toBe("Interrupted. 2 of 4 session reads saved. To continue, run:");
     // The command is alone on its own line, whole.
     const last = lines.at(-1) ?? "";
-    expect(last).toMatch(/^ {2}human-hindsight distill --home=<HOME> /);
+    expect(last).toMatch(/^ {2}npx human-hindsight reflect --home=<HOME> /);
     expect(last).toContain("--quality=balanced --concurrency=1");
     expect(last).not.toContain("--yes");
     // The stopping run printed nothing after its line.
@@ -1584,7 +1648,7 @@ describe("after the run", () => {
     const { code, text } = await run(args, { runners: [claude] });
     expect(code).toBe(0);
     const gui = (lines: string) =>
-      lines.split("\n").find((line) => /^→ next: human-hindsight gui\b/.test(line));
+      lines.split("\n").find((line) => /^→ next: npx human-hindsight gui\b/.test(line));
     const printed = gui(text);
     expect(printed).toBeDefined();
     const status = goldenText(
@@ -1629,7 +1693,7 @@ describe("what distill prints around its plan", () => {
     vi.stubEnv("HUMAN_HINDSIGHT_PLAIN", "1");
     const home = tmpHome(sessions(30));
     const claude = fakeCli("claude", ALIASES);
-    // Quick start answered "My 25 most recent sessions".
+    // Quick start answered "25 most recent sessions".
     const io = scripted([["Choose [", "1\n"]]);
     let seen: DistillPlan | undefined;
     const code = await runDistill(

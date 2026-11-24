@@ -58,7 +58,7 @@ describe("interactive next commands", () => {
       ),
     ).toBe(true);
     expect(run).toHaveBeenCalledWith(
-      "distill",
+      "reflect",
       expect.arrayContaining([
         "--home=/library with spaces",
         "--source=opencode",
@@ -185,7 +185,7 @@ describe("interactive next commands", () => {
     expect([...text].every((c) => c.charCodeAt(0) >= 0x20 && c.charCodeAt(0) !== 0x7f)).toBe(true);
     expect(
       text.startsWith(
-        "human-hindsight distill --home=/data/hindsight $'--claude-dir=/history/two\\nlines' " +
+        "npx human-hindsight reflect --home=/data/hindsight $'--claude-dir=/history/two\\nlines' " +
           "$'--codex-dir=/history/with\\ttab and space' --kiro-dir=/history/plain",
       ),
     ).toBe(true);
@@ -196,6 +196,35 @@ describe("interactive next commands", () => {
     for (const command of ["export", "preferences", "gui"] as const) {
       expect(nextArguments(command, input).join(" ")).not.toContain("--cluster-");
     }
+  });
+
+  it("keeps the history selection for retention and only the library folder for prune", () => {
+    const chosen = {
+      home: "/another library",
+      source: "claude",
+      "claude-dir": "/copied history",
+      project: "one-project",
+      runner: "codex",
+      plain: true,
+      apply: true,
+      force: true,
+    };
+    expect(nextCommandText("retention", chosen)).toBe(
+      "npx human-hindsight retention '--home=/another library' '--claude-dir=/copied history' --source=claude --plain",
+    );
+    expect(nextCommandText("prune", chosen)).toBe(
+      "npx human-hindsight prune '--home=/another library' --plain",
+    );
+  });
+
+  it("preserves explicit automatic runner selection for reflection handoffs", () => {
+    vi.stubEnv("HUMAN_HINDSIGHT_RUNNER", undefined);
+    expect(nextArguments("reflect", {})).not.toContain("--runner=auto");
+    expect(nextCommandText("distill", { runner: "auto" })).toBe(
+      "npx human-hindsight reflect --runner=auto",
+    );
+    vi.stubEnv("HUMAN_HINDSIGHT_RUNNER", "auto");
+    expect(nextArguments("reflect", {}, { dispatch: true })).toContain("--runner=auto");
   });
 
   it("forwards --author-model to a distill handoff only, and reads its env default", () => {
@@ -279,6 +308,7 @@ describe("interactive next commands", () => {
     ],
   ])("%s keeps the choices it can use", (_what, text, kept, left) => {
     const words = text.split(" ");
+    expect(words.slice(0, 2)).toEqual(["npx", "human-hindsight"]);
     for (const flag of kept) expect(words, flag).toContain(flag);
     for (const flag of left) expect(text, flag).not.toContain(flag);
     // Never an action or approval flag.
@@ -361,7 +391,7 @@ describe("interactive next commands", () => {
     vi.stubEnv("CLAUDE_CONFIG_DIR", "/history/claude");
     // The same folders this person's shell already selects: left out.
     expect(nextCommandText("distill", { home: "/data", "claude-dir": "/history/claude" })).toBe(
-      "human-hindsight distill",
+      "npx human-hindsight reflect",
     );
     // Others are kept.
     expect(nextArguments("distill", { home: "/other", "claude-dir": "/elsewhere" })).toEqual([
@@ -471,13 +501,18 @@ describe("the closing menu after a distill", () => {
 
   it("offers the library, subagents, and done, in that order", async () => {
     const t = await choose(["3"]);
-    expect(t.screen).toContain(
-      "1  Open my library (recommended)  reflect on how you work and what you care about",
-    );
-    expect(t.screen).toContain("2  Generate my subagents");
-    expect(t.screen).toContain("3  Done for now");
+    expect(t.screen).toContain("• Open my reflections (recommended)  in the browser");
+    expect(t.screen).toContain("• Suggest subagents");
+    expect(t.screen).toContain("› Done for now");
     expect(t.code).toBe(0);
     expect(t.calls).toEqual([]);
+  });
+
+  it("opens the Preferences overview in the browser", async () => {
+    const t = await choose([KEYS.enter]);
+    expect(t.calls).toEqual([
+      { command: "gui", args: expect.arrayContaining(["--tab=preferences"]) },
+    ]);
   });
 
   it("subagents runs that command, which ends with its own closing menu; nothing else opens here", async () => {
@@ -511,7 +546,7 @@ describe("the closing menu after a distill", () => {
     expect(await offerLibraryNext({ home, yes: true }, t.io, fake.run)).toBe(0);
     expect(read).not.toHaveBeenCalled();
     expect(t.input.rawModeCalls).toEqual([]);
-    expect(t.output.text()).toContain("next: human-hindsight gui");
+    expect(t.output.text()).toContain("next: npx human-hindsight gui");
     expect(t.output.text()).toContain("suggest-subagents");
     expect(fake.calls).toEqual([]);
   });

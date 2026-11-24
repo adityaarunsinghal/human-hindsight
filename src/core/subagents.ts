@@ -19,7 +19,7 @@ import { type AggregatedPreference, preferenceId, readObservedPreferences } from
  *
  * `suggest-subagents` turns preference candidates into portable lessons
  * (stage A), groups the lessons into 2 to 15 specialist roles plus shared
- * agreements and playbooks (stage B), and writes a prompt per role (stage C).
+ * preferences and playbooks (stage B), and writes a prompt per role (stage C).
  * This module owns the shape of that result and nothing that calls a model:
  * the zod schema, the coverage ledger, the input fingerprint, input selection,
  * and the atomic read and write. The renderer (`subagents-render.ts`), the GUI

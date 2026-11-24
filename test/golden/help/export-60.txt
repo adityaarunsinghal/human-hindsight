@@ -1,12 +1,12 @@
-human-hindsight export
+npx human-hindsight export
 Save your messages from coding sessions as Markdown.
 
 Examples
-  human-hindsight export
+  npx human-hindsight export
     Export your messages from all available histories on
     this machine.
 
-  human-hindsight export --project my-app
+  npx human-hindsight export --project my-app
     Export one project. Use its name from scan.
 
 Common options
@@ -17,10 +17,10 @@ Common options
                       to be exported
 
 More help
-  human-hindsight export --help --all
+  npx human-hindsight export --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

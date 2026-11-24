@@ -27,7 +27,7 @@ describe("the built page script", () => {
     expect(GUI_JS).toContain(PLAIN_GUI_COMMAND);
     expect(GUI_JS).toContain("Prompts guide");
     expect(GUI_JS).toContain("Download all targets (zip)");
-    expect(GUI_JS).toContain("General agreements");
+    expect(GUI_JS).toContain("General preferences");
     expect(GUI_JS).toContain("Grouped by the kind of work where each was seen.");
     expect(GUI_JS).toContain("kept from before the last regrouping");
   });

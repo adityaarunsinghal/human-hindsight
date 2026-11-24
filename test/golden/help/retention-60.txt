@@ -1,12 +1,12 @@
-human-hindsight retention
+npx human-hindsight retention
 Preview or apply settings that keep local session history
 longer.
 
 Examples
-  human-hindsight retention
+  npx human-hindsight retention
     See the settings available for your installed tools.
 
-  human-hindsight retention --source claude --apply
+  npx human-hindsight retention --source claude --apply
     Review and confirm changes for Claude Code.
 
 Common options
@@ -18,10 +18,10 @@ Common options
                    present
 
 More help
-  human-hindsight retention --help --all
+  npx human-hindsight retention --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

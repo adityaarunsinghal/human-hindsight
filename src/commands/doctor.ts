@@ -100,7 +100,7 @@ export async function runDoctor(
       if (check.ok) available.push(check.name);
       else
         fixes.push(
-          `${RUNNER_INFO[check.name].displayName} cannot run distillation. ${check.reason}`,
+          `${RUNNER_INFO[check.name].displayName} cannot run a reflection. ${check.reason}`,
         );
     }
     if (fixes.length) {
@@ -117,11 +117,13 @@ export async function runDoctor(
     const explicit = mode === "auto" ? undefined : mode;
     const choice = explicit ?? orderCandidates(available, share)[0];
     if (!choice) {
-      write("Export works without a compatible CLI. Resolve a setup issue above to distill.");
+      write(
+        "Export works without a compatible CLI. Resolve a setup issue above to reflect on your history.",
+      );
     } else if (!available.includes(choice)) {
       const { displayName } = RUNNER_INFO[choice];
       write(
-        `Distill cannot use the selected ${displayName}. Remove --runner to select automatically.`,
+        `Reflection cannot use the selected ${displayName}. Remove --runner to select automatically.`,
       );
       if (!installed.includes(choice))
         write(`Install ${displayName} with ${installAndSignIn(choice)}`);
@@ -133,7 +135,7 @@ export async function runDoctor(
         reason = `most of your exported sessions come from it (${count} ${count === 1 ? "session" : "sessions"})`;
       }
       for (const line of wrapText(
-        `Distill would use ${RUNNER_INFO[choice].displayName}: ${reason}. The sign-in column is a hint from each tool's own status command; distill checks access after you approve its plan.`,
+        `Reflection would use ${RUNNER_INFO[choice].displayName}: ${reason}. The sign-in column is a hint from each tool's own status command; reflection checks access after you approve its plan.`,
         width,
       )) {
         write(line);
@@ -148,7 +150,7 @@ export async function runDoctor(
 export default defineCommand({
   meta: {
     name: "doctor",
-    description: "Check local history, CLI versions, sign-in hints, and distillation setup",
+    description: "Check local history, CLI versions, sign-in hints, and reflection setup",
   },
   args: { ...sharedArgs },
   async run({ args }) {

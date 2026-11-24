@@ -234,7 +234,7 @@ export function createRunnerPool(o: {
       waiting: [],
     });
   }
-  if (!states.length) throw new Error("No runner is available. Run human-hindsight doctor.");
+  if (!states.length) throw new Error("No runner is available. Run npx human-hindsight doctor.");
   let index = 0;
   let attempts = 0;
   const current = () => states[index] as CandidateState;

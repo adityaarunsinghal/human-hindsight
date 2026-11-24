@@ -1,25 +1,19 @@
 # cc-hindsight has moved to Human Hindsight
 
-Start the guided setup with the renamed command, or install it globally.
+<p align="center">
+  <img src="https://raw.githubusercontent.com/adityaarunsinghal/human-hindsight/v2.1.0/.github/assets/human-hindsight-banner.jpg" alt="Human Hindsight terminal with colorful session counts and arcs leading to the words “Codify your taste”" width="1280">
+</p>
 
-```bash
+**Understand how you work. Codify your taste.**
+
+Start a new reflection with the current package.
+
+```sh
 npx human-hindsight
-npm install -g human-hindsight
 ```
 
-This deprecated package keeps the `cc-hindsight` command working by forwarding
-to the matching version of `human-hindsight`. Both commands need Node.js 22.13+
-on Node 22, or 23.4+ on newer versions. They use the same launcher and pass
-through arguments, input, signals, and exit codes.
+This deprecated package forwards the `cc-hindsight` command to the matching version of `human-hindsight`. The two commands use the same launcher and pass through arguments, input, output, signals and exit codes. They can be installed together. Both require Node.js 22.13 or later in the 22 line, or 23.4 or later.
 
-Existing `~/.cc-hindsight` libraries and `CC_HINDSIGHT_HOME` remain supported.
-The new command uses `~/.human-hindsight` for fresh installations and also
-accepts `HUMAN_HINDSIGHT_HOME`. Your existing library stays in place. The next
-distill can regenerate earlier results under the new model plan while preserving
-hand-edited prompts, ratings, and preference reviews.
+Your existing `~/.cc-hindsight` library and `CC_HINDSIGHT_HOME` setting still work. New installations use `~/.human-hindsight` by default and accept `HUMAN_HINDSIGHT_HOME`. In 2.1 the command is called `reflect`. Scripts that use `distill` reach the same command. Upgrading from 2.0 keeps your hand-edited prompts, ratings and preference reviews.
 
-Both packages can be installed together: `human-hindsight` owns the new command
-and this package owns the old one.
-
-Source, documentation, and releases:
-[Human Hindsight](https://github.com/adityaarunsinghal/human-hindsight).
+[Main README](https://github.com/adityaarunsinghal/human-hindsight#readme) · [Release notes](https://github.com/adityaarunsinghal/human-hindsight/blob/main/CHANGELOG.md) · [Selected Work](https://adityasinghal.com/#current)

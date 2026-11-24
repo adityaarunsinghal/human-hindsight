@@ -72,7 +72,7 @@ def first_frame_ms(arguments, environment, marker, runs=5):
             # Quit once the menu is whole on screen: a key that arrives while the
             # question is still being written is typed ahead, and is thrown away.
             menu_end = time.monotonic() + 10
-            while b"Use arrow keys and Enter" not in seen and b"Choose [" not in seen:
+            while b"Enter to choose" not in seen and b"Choose [" not in seen:
                 assert time.monotonic() < menu_end, seen.decode("utf8", errors="replace")
                 if select.select([primary], [], [], 0.02)[0]:
                     seen += os.read(primary, 65536)
@@ -80,7 +80,7 @@ def first_frame_ms(arguments, environment, marker, runs=5):
             while time.monotonic() < pause:
                 if select.select([primary], [], [], 0.02)[0]:
                     seen += os.read(primary, 65536)
-            os.write(primary, b"q" if b"Use arrow keys" in seen else b"q\n")
+            os.write(primary, b"q" if b"Enter to choose" in seen else b"q\n")
             # Keep reading: a full terminal buffer would block the last frame.
             deadline = time.monotonic() + 10
             while process.poll() is None and time.monotonic() < deadline:
@@ -108,8 +108,8 @@ def strip(text):
     return ESCAPES.sub("", text).replace("\r\n", "\n").replace("\r", "\n")
 
 
-def home_screen(arguments, environment, columns, rows):
-    """The bare command on a `columns` x `rows` terminal until its menu is up, then q."""
+def home_screen(arguments, environment, columns, rows, keys=b"q", stop_at=None):
+    """Choose a Home action, optionally closing a GUI server once it is ready."""
     primary, child = pty.openpty()
     fcntl.ioctl(child, termios.TIOCSWINSZ, struct.pack("HHHH", rows, columns, 0, 0))
     process = subprocess.Popen(arguments, stdin=child, stdout=child, stderr=child, env=environment)
@@ -122,11 +122,11 @@ def home_screen(arguments, environment, columns, rows):
             if ready:
                 seen += os.read(primary, 65536)
             text = strip(seen.decode("utf8", errors="replace"))
-            if "Use arrow keys and Enter" in text or "Choose [" in text:
+            if "Enter to choose" in text or "Choose [" in text:
                 time.sleep(0.5)
                 while select.select([primary], [], [], 0.1)[0]:
                     seen += os.read(primary, 65536)
-                os.write(primary, b"q" if "Use arrow keys" in text else b"q\n")
+                os.write(primary, keys if "Enter to choose" in text else keys + b"\n")
                 break
         deadline = time.monotonic() + 10
         while process.poll() is None and time.monotonic() < deadline:
@@ -135,6 +135,9 @@ def home_screen(arguments, environment, columns, rows):
                     seen += os.read(primary, 65536)
                 except OSError:
                     break
+                if stop_at and stop_at in seen:
+                    process.terminate()
+                    stop_at = None
         return process.wait(timeout=2), strip(seen.decode("utf8", errors="replace"))
     finally:
         if process.poll() is None:
@@ -209,6 +212,8 @@ try:
         "HUMAN_HINDSIGHT_PLAIN",
         "NO_COLOR",
         "FORCE_COLOR",
+        "LC_ALL",
+        "LC_CTYPE",
         "HUMAN_HINDSIGHT_FOLLOW_UP",
         "HUMAN_HINDSIGHT_PROJECT",
         "HUMAN_HINDSIGHT_RUNNER",
@@ -221,6 +226,7 @@ try:
             # A temporary home folder: no real history or settings are ever read.
             "HOME": str(root / "home"),
             "TERM": "xterm-256color",
+            "LANG": "en_US.UTF-8",
             "FORCE_COLOR": "1",
         }
     )
@@ -295,11 +301,32 @@ try:
     # no row is wider than the window. At 12 rows the numbered menu still works.
     code, screen = home_screen(bare, plain_environment, 80, 24)
     assert code == 0, screen
-    assert "Human Hindsight" in screen and "Use arrow keys and Enter" in screen, screen
+    assert "Human Hindsight" in screen and "Enter to choose" in screen, screen
+    assert "Understand how you work. Codify your taste." in screen, screen
+    assert "› Reflect on my history (recommended)" in screen and "• Export my messages" in screen, screen
+    assert "Resume my reflection" not in screen, screen
     assert "Choose [" not in screen, screen
     assert all(len(line) <= 80 for line in screen.splitlines()), screen
     code, screen = home_screen(bare, plain_environment, 80, 12)
     assert code == 0 and "Choose [1]:" in screen, screen
+
+    # Open the real browser route from an unfinished reflection. SSH mode prints
+    # the local address without launching a browser on the developer's machine.
+    saved = root / "library/distill"
+    saved.mkdir()
+    (saved / "digests.json").write_text(json.dumps({"digests": {}}))
+    export_name = json.loads((root / "library/exports/manifest.json").read_text())[0]["export"]
+    (saved / "operations.json").write_text(json.dumps({
+        "version": 1, "operations": [{"kind": "digest", "unitId": export_name, "state": "running"}],
+    }))
+    code, screen = home_screen(
+        bare, dict(plain_environment, SSH_CONNECTION="127.0.0.1 1234 127.0.0.1 22"),
+        80, 24, keys=b"\x1b[B\r", stop_at=b"Press Ctrl+C to stop.",
+    )
+    assert code == 0, screen
+    assert "› Resume my reflection (recommended)" in screen, screen
+    assert "• Resume my reflection (recommended)" in screen and "› Open my reflections" in screen, screen
+    assert "#preferences&token=" in screen, "Home did not open the Preferences overview."
     assert not marker.exists(), "The home screen invoked a model."
     print(
         "Terminal smoke passed: early linked privacy copy wrapped to the window, immediate colored progress "

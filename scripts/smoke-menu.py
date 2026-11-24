@@ -134,7 +134,7 @@ def run_case(work, name, keys, expected, code, columns, o=None):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", o.get("rows", 24), columns, 0, 0))
     before = stty(slave)
-    env = {k: v for k, v in os.environ.items() if k not in {"CI", "HUMAN_HINDSIGHT_PLAIN", "NO_COLOR", "FORCE_COLOR"}}
+    env = {k: v for k, v in os.environ.items() if k not in {"CI", "HUMAN_HINDSIGHT_PLAIN", "NO_COLOR", "FORCE_COLOR", "LC_ALL", "LC_CTYPE"}}
     env.update({"TERM": "xterm-256color", "LANG": "en_US.UTF-8"})
     if o.get("start"):
         env["SMOKE_START"] = "1"
@@ -189,10 +189,13 @@ def run_case(work, name, keys, expected, code, columns, o=None):
     menu = ESCAPES.sub("", text.split("STTY=")[0]).replace("\r", "\n")
     if o.get("hint") and "Press s to start, or q to leave." not in menu:
         failures.append("the key that does not start did not say how to start")
-    if o.get("start"):
-        pass
-    elif columns == 80 and DETAIL not in menu:
-        failures.append("the detail was left out although it fits")
+    if not o.get("start"):
+        if "› First (recommended)" not in menu or "• Second" not in menu or "• Third" not in menu:
+            failures.append("the first frame did not mark its selected action and idle choices")
+        if expected == "second" and ("• First (recommended)" not in menu or "› Second" not in menu):
+            failures.append("the recommendation moved with the cursor")
+        if columns == 80 and DETAIL not in menu:
+            failures.append("the detail was left out although it fits")
     if columns < 80 and not o.get("start"):
         if DETAIL in menu or "a detail" in menu:
             failures.append("a detail that does not fit was printed or cut")

@@ -6,25 +6,26 @@ import {
   type EnvironmentOptions,
   type EnvironmentRow,
   type EnvironmentSnapshot,
-  environmentSetupRows,
   readExportSessionShare,
   startEnvironment,
 } from "../core/environment.js";
 import { suggestionPath } from "../core/subagents.js";
-import { writerBusyReason } from "../distill/operations.js";
+import { type OperationRecord, OperationStore, writerBusyReason } from "../distill/operations.js";
 import type { RunnerIo } from "../runners/shared.js";
 import { SOURCE_PRODUCT_NAMES } from "../sources/labels.js";
+import { parseSourceMode } from "../sources/registry.js";
 import { frameHeight } from "../ui/live.js";
 import {
+  canColor,
   canPrompt,
+  glyph,
   isInteractive,
   lineWidth,
   type TerminalOutput,
   terminalWidth,
 } from "../ui/mode.js";
 import { chooseMenuAnswer, type MenuChoice, type MenuIo } from "../ui/prompt.js";
-import { heading, railLine, setupTable } from "../ui/screen.js";
-import { counted, dim, hint, visibleWidth } from "../ui/style.js";
+import { counted, hint, palette, visibleWidth } from "../ui/style.js";
 import { wrapText } from "../ui/wrap.js";
 import { resolvePaths } from "./_shared.js";
 import { runExport } from "./export.js";
@@ -39,6 +40,7 @@ import { runScan } from "./scan.js";
 
 export type HomeArgs = Parameters<typeof runScan>[0] & {
   runner?: string;
+  recent?: string;
   plain?: boolean;
   yes?: boolean;
   "dry-run"?: boolean;
@@ -46,10 +48,9 @@ export type HomeArgs = Parameters<typeof runScan>[0] & {
 
 export type HomeAction =
   | "build"
-  | "distill"
+  | "reflect"
   | "gui"
-  | "subagents"
-  | "prompts"
+  | "preferences"
   | "refresh"
   | "suggest"
   | "export"
@@ -61,35 +62,65 @@ export interface SavedWork {
   exported: boolean;
   exportedAt?: Date;
   library: boolean;
-  suggested: boolean;
-  /** A distill run stopped before it finished (Ctrl-C, a closed terminal), and no command is running now. */
+  /** A reflection stopped before it finished (Ctrl-C, a closed terminal), and no command is running now. */
   interrupted?: boolean;
 }
 
 /**
- * A distill run stopped part way: its ledger still lists work as running or
- * waiting, and no command holds the writer lock (a live run is not
- * interrupted). Reads one small file; a damaged ledger counts as no run.
+ * A reflection stopped part way: its ledger still lists work as running or
+ * waiting, and no command holds the writer lock. A filtered Home only
+ * offers to resume work that belongs to the person's selected exports.
  */
-function interruptedRun(home: string): boolean {
-  let operations: unknown;
+async function interruptedRun(home: string, args: HomeArgs): Promise<boolean> {
   try {
     const parsed = JSON.parse(
       fs.readFileSync(path.join(home, "distill", "operations.json"), "utf8"),
     ) as { operations?: unknown };
-    operations = parsed.operations;
+    if (!Array.isArray(parsed.operations)) return false;
+    const unfinished: OperationRecord[] = parsed.operations.filter(
+      (op) =>
+        op &&
+        op.source !== "explicit-task-recovery" &&
+        ["running", "queued", "result-saved"].includes(op.state),
+    );
+    if (!unfinished.length || writerBusyReason(home)) return false;
+    const source = parseSourceMode(args.source);
+    if (!args.project && source === "auto" && !args.recent) return true;
+    const { computePlan, parseManifest } = await import("./distill.js");
+    const file = path.join(home, "exports", "manifest.json");
+    const entries = parseManifest(fs.readFileSync(file, "utf8"), file);
+    const selected = new Set(
+      computePlan(entries, {
+        project: args.project,
+        activeOrigins: source === "auto" ? undefined : new Set([source]),
+        recent: args.recent ? Number(args.recent) : undefined,
+        minSubstance: 2,
+        noGroup: false,
+      }).eligible.map((entry) => entry.export),
+    );
+    if (!selected.size) return false;
+    if (unfinished.some((op) => op.kind === "digest" && selected.has(op.unitId))) return true;
+    const laterStages = unfinished.filter((op) =>
+      ["cluster-window", "cluster-merge", "author"].includes(op.kind),
+    );
+    if (!laterStages.length) return false;
+    const store = new OperationStore(home);
+    return laterStages.some((op) => {
+      const input = store.loadInput(op.id);
+      if (op.kind === "author")
+        return input.sources.some((ref) => selected.has(path.posix.basename(ref.path)));
+      const grouping = input.logicalInput as { windowIds?: unknown };
+      return (
+        Array.isArray(grouping?.windowIds) && grouping.windowIds.some((id) => selected.has(id))
+      );
+    });
   } catch {
     return false;
   }
-  if (!Array.isArray(operations)) return false;
-  const unfinished = operations.some(
-    (op) => op && typeof op === "object" && ["running", "queued"].includes(op.state),
-  );
-  return unfinished && writerBusyReason(home) === null;
 }
 
 /** The menu needs file presence and recency. Opening an artifact performs its full validation. */
-function savedWork(home: string, args: HomeArgs): SavedWork {
+async function savedWork(home: string, args: HomeArgs): Promise<SavedWork> {
   const file = path.join(home, "exports", "manifest.json");
   let exported = false;
   let exportedAt: Date | undefined;
@@ -100,8 +131,10 @@ function savedWork(home: string, args: HomeArgs): SavedWork {
     // Missing or unreadable exports can be rebuilt from history.
   }
   const dir = path.join(home, "library");
-  const suggested = fs.existsSync(suggestionPath(home));
-  let library = suggested || fs.existsSync(path.join(dir, "preferences.generalized.json"));
+  let library =
+    fs.existsSync(path.join(home, "distill", "digests.json")) ||
+    fs.existsSync(suggestionPath(home)) ||
+    fs.existsSync(path.join(dir, "preferences.generalized.json"));
   if (!library) {
     try {
       library = fs.readdirSync(dir, { withFileTypes: true }).some(
@@ -119,8 +152,7 @@ function savedWork(home: string, args: HomeArgs): SavedWork {
     exported,
     exportedAt,
     library,
-    suggested,
-    interrupted: exported && interruptedRun(home),
+    interrupted: exported && (await interruptedRun(home, args)),
   };
 }
 
@@ -140,7 +172,7 @@ function noHistory(snapshot: EnvironmentSnapshot): boolean {
   );
 }
 
-function canDistill(snapshot: EnvironmentSnapshot, args: HomeArgs): boolean {
+function canReflect(snapshot: EnvironmentSnapshot, args: HomeArgs): boolean {
   return snapshot.rows.some(
     (row) =>
       row.name !== "kirocrew" &&
@@ -151,9 +183,9 @@ function canDistill(snapshot: EnvironmentSnapshot, args: HomeArgs): boolean {
 
 function refreshDetail(snapshot: EnvironmentSnapshot): string {
   const fresh = snapshot.totals?.newSessions;
-  if (fresh === undefined) return "checking for sessions since your last export";
-  if (fresh === 0) return "nothing new since your last export";
-  return `${counted(fresh, "new session")} since your last export`;
+  if (fresh === undefined) return "checking for sessions since my last export";
+  if (fresh === 0) return "nothing new since my last export";
+  return `${counted(fresh, "new session")} since my last export`;
 }
 
 /**
@@ -169,83 +201,47 @@ function candidateChoices(
   const choices: MenuChoice<HomeAction>[] = [];
   const history = hasHistory(snapshot);
   const writable = snapshot.dataHomeWritable;
-  const ready = writable && canDistill(snapshot, args);
-  const refresh: MenuChoice<HomeAction> = {
-    key: "refresh",
-    label: "Refresh my library",
-    detail: refreshDetail(snapshot),
-  };
-  const finish: MenuChoice<HomeAction> = {
-    key: "distill",
-    label: "Finish the last run",
-    detail: "reuses the work already saved",
-  };
+  const ready = writable && canReflect(snapshot, args);
   const doctor: MenuChoice<HomeAction> = {
     key: "doctor",
-    label: "Check my setup",
-    detail: "versions, sign-in, fixes",
+    label: "Check setup",
+    detail: "tools and sign-in",
   };
-  // An interrupted run comes first: finishing it is the one step that keeps its work.
-  if (ready && saved.interrupted) choices.push(finish);
-  if (saved.suggested) {
-    choices.push(
-      {
-        key: "subagents",
-        label: "Open my subagents",
-        detail: "in your browser",
-      },
-      {
-        key: "prompts",
-        label: "Open my prompt library",
-        detail: "in your browser",
-      },
-    );
-    if (ready && saved.exported) choices.push(refresh);
-  } else if (saved.library) {
+  if (ready && saved.interrupted) {
+    choices.push({ key: "reflect", label: "Resume my reflection", detail: "reuses saved work" });
+  } else if (ready && ((!saved.exported && history) || (!saved.library && saved.exported))) {
     choices.push({
-      key: "gui",
-      label: "Open my library",
-      detail: "in your browser",
-    });
-    if (ready) {
-      choices.push({
-        key: "suggest",
-        label: "Generate my subagents",
-        detail: "roles from your preferences",
-      });
-    }
-    if (ready && saved.exported) choices.push(refresh);
-  } else if (saved.exported) {
-    // Without a ready CLI the exported sessions wait on setup, so that comes first.
-    if (ready && !saved.interrupted) {
-      choices.push({
-        key: "distill",
-        label: "Distill my exported sessions",
-        detail: "review the plan, then build",
-      });
-    } else if (!ready) {
-      choices.push(doctor);
-    }
-  } else if (ready && history) {
-    choices.push({
-      key: "build",
-      label: "Build my prompt library",
-      detail: "export, then a plan you approve",
+      key: saved.exported ? "reflect" : "build",
+      label: "Reflect on my history",
+      detail: saved.exported ? "from my exported messages" : "export, then review the plan",
     });
   }
-  if (writable && history) {
+  if (saved.library) {
+    choices.push(
+      { key: "gui", label: "Open my reflections", detail: "in the browser" },
+      { key: "preferences", label: "Read my preferences", detail: "guidance from my history" },
+    );
+  }
+  if (ready && history && saved.exported && (saved.library || saved.interrupted)) {
     choices.push({
-      key: "export",
-      label: "Export my prompts only",
-      detail: "Markdown, no model calls",
+      key: "refresh",
+      label: "Reflect on new sessions",
+      detail: refreshDetail(snapshot),
     });
+  }
+  if (ready && saved.library) {
+    choices.push({
+      key: "suggest",
+      label: "Suggest subagents",
+      detail: "roles from my preferences",
+    });
+  }
+  if (!ready && saved.exported && !saved.library) choices.push(doctor);
+  if (writable && history) {
+    choices.push({ key: "export", label: "Export my messages", detail: "local Markdown" });
   }
   if (history) {
-    choices.push({
-      key: "scan",
-      label: args.project ? "Show matching projects" : "Show every project",
-      detail: "the full inventory",
-    });
+    choices.push({ key: "scan", label: "Show projects", detail: "history inventory" });
   }
   if (!choices.includes(doctor)) choices.push(doctor);
   return choices;
@@ -288,13 +284,7 @@ function updatedChoices(
   return [...kept, ...added];
 }
 
-function lastActive(date: Date, now: Date): string {
-  return date.toDateString() === now.toDateString()
-    ? "today"
-    : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
-}
-
-const TAGLINE = "The prompt you'd write if you knew then what you know now.";
+const TAGLINE = "Understand how you work. Codify your taste.";
 const toolNames = Object.values(SOURCE_PRODUCT_NAMES);
 const toolList = `${toolNames.slice(0, -1).join(", ")}, or ${toolNames.at(-1)}`;
 
@@ -325,13 +315,12 @@ export function homeFix(snapshot: EnvironmentSnapshot, args: HomeArgs): HomeFix 
   }
   if (noHistory(snapshot)) return undefined;
   const runners = snapshot.rows.filter((row) => row.name !== "kirocrew");
-  if (!canDistill(snapshot, args)) {
+  if (!canReflect(snapshot, args)) {
     const named = runners.find((row) => row.name === args.runner);
-    if (named?.fix)
-      return { says: `To build a library through ${named.tool}, run:`, run: named.fix };
+    if (named?.fix) return { says: `To reflect through ${named.tool}, run:`, run: named.fix };
     const row = busiestRow(included(snapshot).filter((item) => item.fix && !item.installed));
     const run = row?.fix ?? runners.find((item) => item.fix)?.fix;
-    return { says: "Export works now. To build a library, install a coding CLI:", run };
+    return { says: "Export works now. To reflect on your history, install a coding CLI:", run };
   }
   const installed = runners.filter(
     (row) => row.installed && (!args.runner || args.runner === "auto" || args.runner === row.name),
@@ -339,22 +328,9 @@ export function homeFix(snapshot: EnvironmentSnapshot, args: HomeArgs): HomeFix 
   const signedOut = installed.filter((row) => row.signIn?.state === "needs-sign-in");
   if (signedOut.length && signedOut.length === installed.length) {
     const row = busiestRow(signedOut.filter((item) => item.included)) ?? signedOut[0];
-    if (row?.fix) return { says: "Sign in before building a library:", run: row.fix };
+    if (row?.fix) return { says: "Sign in before reflecting:", run: row.fix };
   }
   return undefined;
-}
-
-/**
- * A tool row with nothing to say: no command installed and no history (its
- * store is absent, or counted and empty). Such tools are named together on
- * one line instead. A row still being counted, or that could not be read,
- * stays.
- */
-function quietRow(row: EnvironmentRow): boolean {
-  if (row.historyError) return false;
-  const empty = !row.storePresent || (row.history?.exact === true && row.history.sessions === 0);
-  // Kiro Crew has no command of its own: it runs through kiro-cli.
-  return empty && (row.name === "kirocrew" || !row.installed);
 }
 
 /** One line of the frame above the menu. `drop` lines leave first, lowest first, when rows run short. */
@@ -380,139 +356,100 @@ function fitLines(lines: HomeLine[], height: number | undefined): string[] {
   return kept.map((line) => line.text);
 }
 
-/**
- * Lines that leave first when the terminal is short: the tagline, then blank
- * spacers (and the note on what is still being checked, which holds a
- * spacer's place), then sub-headings.
- */
-const DROP = { tagline: 1, spacer: 3, heading: 4 } as const;
-
-/**
- * The lines above the menu: heading, the setup table, what is known, one fix,
- * privacy. With `height`, optional lines (the tagline, blank spacers, the
- * section headings) are left out until the lines fit, so the title and the
- * live menu stay on one screen.
- */
+/** The history inventory above the controls. Setup details live in Check setup. */
 function homeLines(
   snapshot: EnvironmentSnapshot,
   args: HomeArgs,
   width: number,
-  now: Date = new Date(),
-  o: { saved?: SavedWork; height?: number } = {},
+  io: HomeIo,
+  height?: number,
 ): string[] {
-  // A live region leaves the last column free, so prose wraps one column early.
-  const usable = Math.max(20, width - 1);
-  // The tagline is left out where it would be cut off; the rail adds two columns.
-  const tagline = visibleWidth(TAGLINE) + 2 <= usable ? TAGLINE : undefined;
-  const [title = "", subtitle] = heading(`Human Hindsight ${pkg.version}`, tagline).split("\n");
-  const lines: HomeLine[] = [{ text: title }];
-  if (subtitle) lines.push({ text: subtitle, drop: DROP.tagline });
-  // The rail runs unbroken down the card: headings, the table, prose, and the
-  // blank lines between them all carry it. The menu below stands apart.
-  lines.push({ text: railLine(), drop: DROP.spacer });
-  lines.push({ text: heading("Your coding tools on this machine"), drop: DROP.heading });
-  const shown = snapshot.rows.filter((row) => !quietRow(row));
-  const quiet = snapshot.rows.filter((row) => quietRow(row) && row.name !== "kirocrew");
-  const empty = noHistory(snapshot);
-  if (shown.length) {
-    // Room for facts still to come matters only to a frame that is redrawn;
-    // a table printed once, after the facts settle, is measured as it is.
-    let cells = environmentSetupRows(
-      { ...snapshot, rows: shown },
-      { live: o.height !== undefined },
-    );
-    // Narrower than 80 columns a cell holding both counts would wrap; the
-    // total below still gives the projects.
-    if (width < 80) {
-      const sessionsOnly = (text: string) => text.replace(/^[\d,]+ projects? · /, "");
-      cells = cells.map((cell) => ({
-        ...cell,
-        history: sessionsOnly(cell.history),
-        reserve: cell.reserve && {
-          ...cell.reserve,
-          history: cell.reserve.history && sessionsOnly(cell.reserve.history),
-        },
-      }));
+  const s = palette(canColor(io));
+  const mark = (symbol: string, ascii: string) => glyph(symbol, ascii, io.env);
+  const rail = s.dim(mark("│", "|"));
+  // A live region reserves the last column. The rail and its space take two more.
+  const inner = Math.max(1, width - 3);
+  const lines: HomeLine[] = [
+    { text: `${rail} ${s.bold("Human Hindsight")} ${s.magenta(pkg.version)}` },
+  ];
+  const prose = (
+    text: string,
+    style: (value: string) => string = (value) => value,
+    drop?: number,
+  ) =>
+    lines.push(...wrapText(text, inner).map((line) => ({ text: `${rail} ${style(line)}`, drop })));
+  prose(TAGLINE, s.dim);
+  lines.push({ text: rail, drop: 1 });
+  prose("Your history", s.bold, 3);
+  const rows = included(snapshot).filter(
+    (row) => row.historyError || row.storePresent || row.history?.sessions,
+  );
+  const toolWidth = Math.max(0, ...rows.map((row) => visibleWidth(row.tool)));
+  const colors = {
+    claude: s.yellow,
+    codex: s.blue,
+    kiro: s.green,
+    kirocrew: s.green,
+    opencode: s.magenta,
+  };
+  for (const row of rows) {
+    const history = row.history;
+    const tool = colors[row.name](row.tool.padEnd(toolWidth));
+    let fact: string;
+    if (row.historyError) fact = s.yellow("could not read history");
+    else if (!history) fact = s.dim(mark("counting…", "counting..."));
+    else {
+      const count = counted(history.sessions, row.name === "kirocrew" ? "chat" : "session");
+      fact = `${s.cyan(count + (history.exact ? "" : mark("…", "...")))}${s.dim(mark(" · ", ", "))}${counted(history.projects, "project")}`;
     }
-    const table = setupTable(cells, width);
-    lines.push(...table.map((text) => ({ text })));
+    if (visibleWidth(`${tool}  ${fact}`) <= inner) lines.push({ text: `${rail} ${tool}  ${fact}` });
+    else lines.push({ text: `${rail} ${tool.trimEnd()}` }, { text: `${rail}   ${fact}` });
   }
-  // The rail and its space take two columns.
-  const inner = Math.max(18, usable - 2);
-  const prose = (text: string, style: (s: string) => string = (s) => s, drop?: number) =>
-    lines.push(...wrapText(text, inner).map((line) => ({ text: railLine(style(line)), drop })));
-  // The empty state names every tool itself; elsewhere the quiet ones share a line.
-  if (quiet.length && shown.length && !empty) {
-    const names = quiet.map((row) => row.tool);
-    const list =
-      names.length > 2
-        ? `${names.slice(0, -1).join(", ")}, or ${names.at(-1)}`
-        : names.join(" or ");
-    prose(`No history or command found for ${list}.`, dim);
-  }
-  const total = snapshot.totals;
-  if (empty) {
+  if (noHistory(snapshot)) {
     if (args.project || (args.source && args.source !== "auto")) {
       prose("No history matches this selection.");
-      prose("To see every project, run human-hindsight scan");
+      prose("To see every project, run npx human-hindsight scan");
     } else {
       prose("No session history found on this machine yet.");
-      prose(`Looked for ${toolList.replace(/, or ([^,]+)$/, ", and $1")}.`);
+      prose(`Looked for ${toolList.replace(/, or ([^,]+)$/, ", and $1")}.`, s.dim);
       prose("Kept somewhere else? Pass its folder, for example --claude-dir <dir>.");
-      prose("Every folder option: human-hindsight help --all");
+      prose("Every folder option: npx human-hindsight help --all", s.dim);
     }
-  } else if (total && total.sessions > 0) {
-    const latest = total.newest ? ` Newest activity: ${lastActive(total.newest, now)}.` : "";
+  } else if (snapshot.totals?.sessions) {
     prose(
-      `${counted(total.sessions, "session")} across ${counted(total.projects, "project")}.${latest}`,
+      `${counted(snapshot.totals.sessions, "session")} across ${counted(snapshot.totals.projects, "project")}`,
+      s.yellow,
     );
-  }
-  if (o.saved?.interrupted) {
-    prose("The last distill run stopped before it finished. Its progress is saved.");
+  } else if (rows.some((row) => row.history?.exact === false)) {
+    prose("Checking Kiro Crew runs in Kiro CLI history.", s.dim);
   }
   const fix = homeFix(snapshot, args);
   if (fix) {
-    // The command is alone on its own line, whole, so it can be copied. A
-    // live frame cuts a row at the width, so `a && b` that does not fit is
-    // shown as its two commands, one per line, each still whole.
+    prose(fix.says);
     const steps =
       fix.run && visibleWidth(fix.run) + 2 > inner
         ? fix.run.split(" && ")
         : fix.run
           ? [fix.run]
           : [];
-    // The command lines carry no rail: a line picked up whole with the mouse
-    // must be the command and nothing else.
-    lines.push(...wrapText(fix.says, inner).map((text) => ({ text: railLine(text) })));
     lines.push(...steps.map((step) => ({ text: `  ${step}` })));
   }
-  // What is still being checked takes the place of the blank line above the
-  // next heading, so the frame does not move up when it is done.
-  if (snapshot.pending.length)
-    prose(`Still checking ${snapshot.pending.join(", ")}.`, dim, DROP.spacer);
-  else lines.push({ text: railLine(), drop: DROP.spacer });
-  lines.push({ text: heading("Private by default"), drop: DROP.heading });
-  prose("No session text leaves this machine until you approve a plan.");
-  // Exactly what this screen runs. What those status commands do is up to
-  // each tool: Kiro CLI's may also contact its own service when it can.
-  prose("This screen only asks your coding tools for their version and sign-in status.");
-  return fitLines(lines, o.height);
+  lines.push({ text: s.dim(mark("─", "-").repeat(Math.max(1, Math.min(width - 1, 72)))) });
+  return fitLines(lines, height);
 }
 
 /** The command behind an action, with the tab it opens on. */
 function actionCommand(action: HomeAction): { command: NextCommand; tab?: string } {
   if (action === "build" || action === "refresh") return { command: "export" };
   if (action === "suggest") return { command: "suggest-subagents" };
-  if (action === "subagents") return { command: "gui", tab: "subagents" };
-  if (action === "prompts") return { command: "gui", tab: "prompts" };
+  if (action === "gui") return { command: "gui", tab: "preferences" };
   return { command: action };
 }
 
-/** Probes, history counting, the clock, and dispatch are injected so tests run no command. */
+/** Probes, history counting, and dispatch are injected so tests run no command. */
 export interface HomeIo extends MenuIo {
   processes?: RunnerIo;
   countHistory?: EnvironmentOptions["countHistory"];
-  now?: () => Date;
   /** Run the chosen action. The default dispatches the real command. */
   dispatch?: (action: HomeAction, args: HomeArgs) => Promise<number>;
 }
@@ -535,7 +472,7 @@ async function waitForSummary(settled: Promise<void>, io: HomeIo): Promise<void>
 }
 
 /**
- * The bare command. With a terminal: the setup table and a single-key menu in
+ * The bare command. With a terminal: the history inventory and a single-key menu in
  * one live region, painted from cheap facts at once and refreshed in place as
  * slower facts land. Without one, or with `--yes`, `--dry-run`, or
  * `--no-follow-up`: the settled summary and the next command, and stdin is
@@ -544,9 +481,8 @@ async function waitForSummary(settled: Promise<void>, io: HomeIo): Promise<void>
 export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<number> {
   const args = flowArgs(input);
   const paths = resolvePaths(args);
-  const saved = savedWork(paths.home, args);
+  const saved = await savedWork(paths.home, args);
   const output = io.output ?? process.stdout;
-  const now = io.now ?? (() => new Date());
   const discovery = await startEnvironment(paths, {
     source: args.source,
     project: args.project,
@@ -555,16 +491,18 @@ export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<nu
     countHistory: io.countHistory,
   });
   const choices = openingChoices(discovery.snapshot(), saved, args);
-  const recommended = choices[0]?.key ?? "doctor";
   const terminal = output as TerminalOutput;
   // In a live menu the frame must fit the window: the menu's own rows (a
   // blank, the title, each item, quit, the key hint) come off the height.
-  const live = isInteractive(io);
+  const live = isInteractive(io) && args["follow-up"] !== false && !args.yes && !args["dry-run"];
   const above = () =>
-    homeLines(discovery.snapshot(), args, terminalWidth(terminal), now(), {
-      saved,
-      height: live ? frameHeight(terminal) - (choices.length + 4) : undefined,
-    });
+    homeLines(
+      discovery.snapshot(),
+      args,
+      terminalWidth(terminal),
+      io,
+      live ? frameHeight(terminal) - (choices.length + 4) : undefined,
+    );
   let unsubscribe: (() => void) | undefined;
   let answer: HomeAction | "quit" | "interrupt";
   let runnerAvailable: boolean;
@@ -572,21 +510,25 @@ export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<nu
     // The flags are checked before the streams: these modes never touch stdin.
     if (args["follow-up"] === false || args.yes || args["dry-run"] || !canPrompt(io)) {
       await waitForSummary(discovery.settled, io);
+      const recommended = candidateChoices(discovery.snapshot(), saved, args)[0]?.key ?? "doctor";
       const { command, tab } = actionCommand(recommended);
       const next = nextCommandText(command, tab ? { ...args, tab } : args);
       output.write(`${above().join("\n")}\n\n${hint(next, lineWidth(terminal))}\n`);
       return 0;
     }
+    const quit = { key: "quit", label: "Quit", detail: "q" } as const;
+    const menu: MenuChoice<HomeAction | "quit">[] = [...choices, quit];
     let redraw: (() => void) | undefined;
     unsubscribe = discovery.subscribe(() => {
       const next = updatedChoices(choices, discovery.snapshot(), saved, args);
       choices.splice(0, choices.length, ...next);
+      menu.splice(0, menu.length, ...next, quit);
       redraw?.();
     });
     answer = await chooseMenuAnswer(
       {
         title: "What would you like to do?",
-        choices,
+        choices: menu,
         above,
         onRedraw: (render) => {
           redraw = render;
@@ -595,7 +537,7 @@ export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<nu
       },
       io,
     );
-    runnerAvailable = canDistill(discovery.snapshot(), args);
+    runnerAvailable = canReflect(discovery.snapshot(), args);
   } finally {
     unsubscribe?.();
     discovery.close();
@@ -620,15 +562,16 @@ async function runAction(
   if (action === "suggest") return generateSubagents(args);
   if (action === "export" || action === "build" || action === "refresh") {
     const stats = runExport({ ...args, guided: true, output: o.output });
+    if (stats.busy) return 1;
     if (stats.exportedSessions === 0) {
       o.output.write(`${hint(nextCommandText("scan", args))}\n`);
       return 0;
     }
     if (action === "export") {
-      o.output.write(`${hint(nextCommandText(o.runnerAvailable ? "distill" : "doctor", args))}\n`);
+      o.output.write(`${hint(nextCommandText(o.runnerAvailable ? "reflect" : "doctor", args))}\n`);
       return 0;
     }
-    return runNextCommand("distill", args);
+    return runNextCommand("reflect", args);
   }
   const { command, tab } = actionCommand(action);
   return runNextCommand(command, tab ? { ...args, tab } : args);

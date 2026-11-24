@@ -3,7 +3,7 @@ import { type CommandDef, defineCommand, parseArgs, type SubCommandsDef } from "
 import pkg from "../package.json" with { type: "json" };
 import { flagEnvironments, homeArgs, publishedVariables, sharedArgs } from "./commands/_shared.js";
 import copy from "./commands/copy.js";
-import distill from "./commands/distill.js";
+import reflect from "./commands/distill.js";
 import doctor from "./commands/doctor.js";
 import edit from "./commands/edit.js";
 import exportCmd from "./commands/export.js";
@@ -125,7 +125,7 @@ export const main = defineCommand({
       doctor,
       help,
       export: exportCmd,
-      distill,
+      reflect,
       list,
       show,
       copy,

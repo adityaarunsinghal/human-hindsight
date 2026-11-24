@@ -388,7 +388,7 @@ export function makeOpenCodeRunner(io: RunnerIo = defaultIo, scratchBase?: strin
             });
             if (result.code !== 0 || result.timedOut) {
               process.stderr.write(
-                "OpenCode could not remove a generated distillation session; Human Hindsight excludes it from exports.\n",
+                "OpenCode could not remove a generated reflection session; Human Hindsight excludes it from exports.\n",
               );
             }
           }

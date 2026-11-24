@@ -1,9 +1,9 @@
-Human Hindsight 2.0.0
-Turn your coding sessions into reusable prompts and working agreements.
+Human Hindsight 2.1.0
+Understand how you work. Codify your taste.
 
 Global options
 Usage
-  human-hindsight [OPTIONS]
+  npx human-hindsight [OPTIONS]
 
 Options
 
@@ -16,7 +16,7 @@ Options
                            --no-follow-up)
   --runner <cli>           Coding CLI for model calls: claude, codex, kiro,
                            opencode, or auto (default)
-  --model <name>           Model for every distill step, in place of the
+  --model <name>           Model for every reflection step, in place of the
                            --quality plan
   --cluster-model <name>   Model for grouping sessions into tasks only (default:
                            --model)
@@ -43,10 +43,10 @@ Options
   --all                    Show the full reference when requesting help
   -v, --version            Print the installed version
 
-human-hindsight (no command)
+npx human-hindsight (no command)
 Show your setup and a menu of next steps.
 Usage
-  human-hindsight [OPTIONS]
+  npx human-hindsight [OPTIONS]
 
 Options
 
@@ -54,20 +54,20 @@ Options
   --yes      Print the setup summary and the next command without asking
              anything
 
-human-hindsight scan
+npx human-hindsight scan
 Find projects and sessions on this machine.
 Usage
-  human-hindsight scan
+  npx human-hindsight scan
 
-human-hindsight doctor
+npx human-hindsight doctor
 Check your history, installed tools, and sign-in hints.
 Usage
-  human-hindsight doctor
+  npx human-hindsight doctor
 
-human-hindsight help
+npx human-hindsight help
 Read examples or look up every command and option.
 Usage
-  human-hindsight help [OPTIONS] [COMMAND]
+  npx human-hindsight help [OPTIONS] [COMMAND]
 
 Arguments
 
@@ -77,10 +77,10 @@ Options
 
   --all  Show the full reference when requesting help
 
-human-hindsight export
+npx human-hindsight export
 Save your messages from coding sessions as Markdown.
 Usage
-  human-hindsight export [OPTIONS]
+  npx human-hindsight export [OPTIONS]
 
 Options
 
@@ -90,23 +90,24 @@ Options
   --verbose           Also show what was left out of each session and how its
                       evidence was gathered
 
-human-hindsight distill
-Build a prompt library from your exported sessions.
+npx human-hindsight reflect
+Find preferences and reusable prompts in your sessions.
+The earlier name distill still works.
 Usage
-  human-hindsight distill [OPTIONS]
+  npx human-hindsight reflect [OPTIONS]
 
 Options
 
-  --runner <cli>                           Which local CLI distills: claude,
-                                           codex, kiro, opencode, or auto
-                                           (default: auto)
+  --runner <cli>                           Which local CLI runs the reflection:
+                                           claude, codex, kiro, opencode, or
+                                           auto (default: auto)
   --model <name>                           Model for every step, as your CLI
                                            names it
   --cluster-model <name>                   Model for grouping sessions only
                                            (defaults to --model)
   --author-model <name>                    Model for writing prompts only
                                            (defaults to --model)
-  --project <name>                         Only distill sessions from this
+  --project <name>                         Only reflect on sessions from this
                                            project
   --group                                  Group sessions into tasks (use
                                            --no-group for one prompt per
@@ -155,15 +156,15 @@ Options
   --verbose                                Show which sessions and prompts are
                                            being worked on, and per-item detail
 
-human-hindsight list
+npx human-hindsight list
 List saved prompts and the names you can use to open them.
 Usage
-  human-hindsight list
+  npx human-hindsight list
 
-human-hindsight show
+npx human-hindsight show
 Read a saved prompt in your terminal.
 Usage
-  human-hindsight show [OPTIONS] <NAME>
+  npx human-hindsight show [OPTIONS] <NAME>
 
 Arguments
 
@@ -173,38 +174,38 @@ Options
 
   --raw  Print the prompt as plain Markdown, without styling or wrapping
 
-human-hindsight copy
+npx human-hindsight copy
 Copy a prompt to paste into a new coding session.
 Usage
-  human-hindsight copy [OPTIONS] <NAME>
+  npx human-hindsight copy [OPTIONS] <NAME>
 
 Arguments
 
   NAME  Prompt name, as `list` shows it in the Name column (Required)
 
-human-hindsight edit
+npx human-hindsight edit
 Edit a saved prompt in your preferred text editor.
 Usage
-  human-hindsight edit [OPTIONS] <NAME>
+  npx human-hindsight edit [OPTIONS] <NAME>
 
 Arguments
 
   NAME  Prompt name, as `list` shows it in the Name column (Required)
 
-human-hindsight rate
+npx human-hindsight rate
 Record whether a saved prompt worked for you.
 Usage
-  human-hindsight rate [OPTIONS] <NAME> <RATING>
+  npx human-hindsight rate [OPTIONS] <NAME> <RATING>
 
 Arguments
 
   NAME    Prompt name, as `list` shows it in the Name column (Required)
   RATING  up or down (Required)
 
-human-hindsight prune
+npx human-hindsight prune
 Remove library entries left behind when sessions were regrouped.
 Usage
-  human-hindsight prune [OPTIONS]
+  npx human-hindsight prune [OPTIONS]
 
 Options
 
@@ -212,19 +213,19 @@ Options
   --force    Also remove entries you edited by hand
   --dry-run  List what would be removed; remove nothing
 
-human-hindsight status
+npx human-hindsight status
 See what has finished and what to run next.
 Usage
-  human-hindsight status [OPTIONS]
+  npx human-hindsight status [OPTIONS]
 
 Options
 
   --verbose  Also show generation ids and the bookkeeping of unfinished calls
 
-human-hindsight preferences
+npx human-hindsight preferences
 Print accepted working preferences for your instruction file.
 Usage
-  human-hindsight preferences [OPTIONS]
+  npx human-hindsight preferences [OPTIONS]
 
 Options
 
@@ -244,10 +245,10 @@ Options
                         with the preference count)
   --yes                 Approve the plan without asking (for scripting)
 
-human-hindsight suggest-subagents
+npx human-hindsight suggest-subagents
 Generate specialist subagents from your working preferences.
 Usage
-  human-hindsight suggest-subagents [OPTIONS]
+  npx human-hindsight suggest-subagents [OPTIONS]
 
 Options
 
@@ -270,7 +271,7 @@ Options
                                (default 400000)
   --window-size <n>            Most preferences per summary call (default 20)
   --fresh-generalize           Summarize every preference again, replacing the
-                               saved working agreements
+                               saved preference summaries
   --author-only                Finish unwritten role prompts in the interrupted
                                or saved suggestion
   --timeout <seconds>          Time limit per call in seconds (default 900, plus
@@ -287,10 +288,10 @@ Options
                                Claude Code, Kiro CLI and Kiro Crew files
                                (default: inherit)
 
-human-hindsight retention
+npx human-hindsight retention
 Preview or apply settings that keep local session history longer.
 Usage
-  human-hindsight retention [OPTIONS]
+  npx human-hindsight retention [OPTIONS]
 
 Options
 
@@ -298,10 +299,10 @@ Options
   --dry-run  Preview only, even when --apply is present
   --yes      With --apply, opt in without a confirmation prompt
 
-human-hindsight gui
-Open your library in a browser.
+npx human-hindsight gui
+Explore your reflections and library in a browser.
 Usage
-  human-hindsight gui [OPTIONS]
+  npx human-hindsight gui [OPTIONS]
 
 Options
 
@@ -314,7 +315,7 @@ Options
   --no-open                            Turn off --open
 
 More help
-  human-hindsight help <command>  Examples and common options
-  human-hindsight doctor          Check your setup
-  human-hindsight help --all      All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  npx human-hindsight help <command>  Examples and common options
+  npx human-hindsight doctor          Check your setup
+  npx human-hindsight help --all      All commands and options
+  https://adityasinghal.com/#current

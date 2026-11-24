@@ -53,12 +53,12 @@ function renderLibraryIssues(issues: LibraryIssue[]): string[] {
 }
 
 /** Render the "summaries of sessions no longer exported" warning block; empty when clean. */
-function renderStaleDigests(keys: string[]): string[] {
+function renderStaleDigests(keys: string[], flow: object): string[] {
   if (keys.length === 0) return [];
   const lines = [
     "",
     yellow(
-      `${keys.length} session ${keys.length === 1 ? "summary is" : "summaries are"} for a session no longer exported (deleted or renamed; distill --fresh clears them):`,
+      `${keys.length} session ${keys.length === 1 ? "summary is" : "summaries are"} for a session no longer exported (deleted or renamed; ${nextCommandText("reflect", flow)} --fresh clears them):`,
     ),
   ];
   for (const key of keys) {
@@ -77,14 +77,14 @@ export type SuggestionState =
  * The saved subagent suggestion in plain words: none yet, ready, out of date
  * (the reviewed preferences changed since it was generated), or unreadable.
  */
-export function suggestionStatusText(saved: SuggestionState): string {
+export function suggestionStatusText(saved: SuggestionState, flow: object = {}): string {
   const label = "suggested subagents:";
   if (saved.state === "absent") return `${label} ${dim("none yet")}`;
   if (saved.state === "damaged") return `${label} ${yellow(`unreadable (${saved.reason})`)}`;
   const roles = `${bold(String(saved.roles))} ${saved.roles === 1 ? "role" : "roles"}`;
   const day = saved.generatedAt.slice(0, 10);
   return saved.stale
-    ? `${label} ${roles}, ${yellow(`out of date since ${day}; run human-hindsight suggest-subagents to refresh them`)}`
+    ? `${label} ${roles}, ${yellow(`out of date since ${day}; run ${nextCommandText("suggest-subagents", flow)} to refresh them`)}`
     : `${label} ${roles}, ready, generated ${day}`;
 }
 
@@ -108,34 +108,34 @@ export function suggestionStatusLine(home: string): string {
     const reason = error instanceof SuggestionReadError ? error.reason : (error as Error).message;
     saved = { state: "damaged", reason };
   }
-  return suggestionStatusText(saved);
+  return suggestionStatusText(saved, { home });
 }
 
 /**
- * The saved working agreements in plain words, for each state the reader
+ * The saved preference summaries in plain words, for each state the reader
  * reports: none yet, ready, out of date (stale), or damaged.
  */
-export function agreementStatusText(saved: GeneralizedState): string {
-  const label = "working agreements:";
+export function agreementStatusText(saved: GeneralizedState, flow: object = {}): string {
+  const label = "preference summaries:";
   if (saved.state === "absent") return `${label} ${dim("none yet")}`;
   if (saved.state === "damaged") {
-    return `${label} ${yellow(`damaged (${saved.reason}); the next distill rebuilds them`)}`;
+    return `${label} ${yellow(`damaged (${saved.reason}); the next reflection rebuilds them`)}`;
   }
   const { artifact, stale, incomplete } = saved;
   const count = bold(String(artifact.lessons.length));
   const day = artifact.generated_at.slice(0, 10);
   if (incomplete) {
     const of = `${incomplete.summarized} of ${incomplete.total} ${incomplete.total === 1 ? "preference" : "preferences"} summarized`;
-    return `${label} ${count}, ${yellow(`${of}; run distill again to finish`)}`;
+    return `${label} ${count}, ${yellow(`${of}; run ${nextCommandText("reflect", flow)} again to finish`)}`;
   }
   return stale
-    ? `${label} ${count}, ${yellow(`out of date since ${day}; the next distill refreshes them`)}`
+    ? `${label} ${count}, ${yellow(`out of date since ${day}; the next reflection refreshes them`)}`
     : `${label} ${count}, ready, generated ${day}`;
 }
 
-/** Agreement status follows its saved inputs, including current wording and evidence. */
+/** Preference summary status follows its saved inputs, including current wording and evidence. */
 export function agreementStatusLine(home: string): string {
-  return agreementStatusText(inspectGeneralized(home));
+  return agreementStatusText(inspectGeneralized(home), { home });
 }
 
 /** Build the status report: each stage's count, per-task marks, left-behind entries, skipped tasks. */
@@ -148,7 +148,7 @@ export function renderStatus(opts: {
   opencodeDir?: string;
   opencodeDb?: string;
   source?: SourceMode;
-  next?: (command: NextCommand) => void;
+  next?: (command: NextCommand, flow: object) => void;
   flow?: object;
   /** Add the generation ids and the ledger's own bookkeeping. */
   verbose?: boolean;
@@ -246,11 +246,11 @@ export function renderStatus(opts: {
     lines.push("written     none yet");
     lines.push(...preferenceStoryLines(opts.home, flow, { lead: "preferences: ", indent: "  " }));
     lines.push(agreementStatusLine(opts.home), suggestionStatusLine(opts.home));
-    lines.push(...renderStaleDigests(staleDigestKeys));
+    lines.push(...renderStaleDigests(staleDigestKeys, flow));
     lines.push(...renderLibraryIssues(libraryIssues));
     lines.push("");
-    const next = exported === 0 ? "export" : "distill";
-    opts.next?.(next);
+    const next = exported === 0 ? "export" : "reflect";
+    opts.next?.(next, flow);
     lines.push(hint(nextCommandText(next, flow)));
     return lines.join("\n");
   }
@@ -321,13 +321,15 @@ export function renderStatus(opts: {
           `  ${glyph("·", "-")} ${task.slug} ${yellow(`skipped: every session in it was abandoned${outcomes ? ` (${outcomes})` : ""}`)}`,
         );
       } else {
-        lines.push(
-          `  ${glyph("·", "-")} ${task.slug} ${dim("pending, run human-hindsight distill")}`,
-        );
+        lines.push(`  ${glyph("·", "-")} ${task.slug} ${dim("pending")}`);
       }
     }
   }
-  lines.push(...preferenceStoryLines(opts.home, flow, { lead: "preferences: ", indent: "  " }));
+  const preferences = preferenceStoryLines(opts.home, flow, {
+    lead: "preferences: ",
+    indent: "  ",
+  });
+  lines.push(...preferences);
   lines.push(agreementStatusLine(opts.home), suggestionStatusLine(opts.home));
 
   // Left-behind entries: library entries with no matching current task. Covers
@@ -339,7 +341,7 @@ export function renderStatus(opts: {
     lines.push("");
     lines.push(
       yellow(
-        `${orphans.length} librar${orphans.length === 1 ? "y entry was" : "y entries were"} left behind when sessions were regrouped (remove with human-hindsight prune):`,
+        `${orphans.length} librar${orphans.length === 1 ? "y entry was" : "y entries were"} left behind when sessions were regrouped (remove with ${nextCommandText("prune", flow)}):`,
       ),
     );
     for (const o of orphans) {
@@ -347,7 +349,7 @@ export function renderStatus(opts: {
     }
   }
 
-  lines.push(...renderStaleDigests(staleDigestKeys));
+  lines.push(...renderStaleDigests(staleDigestKeys, flow));
   lines.push(...renderLibraryIssues(libraryIssues));
   lines.push("");
   const pending = tasks.tasks.some(
@@ -357,12 +359,13 @@ export function renderStatus(opts: {
       !abandoned(task),
   );
   const next = pending
-    ? "distill"
+    ? "reflect"
     : current.length + keptEdits.length + keptEarlier.length > 0
       ? "gui"
       : "export";
-  opts.next?.(next);
-  lines.push(hint(nextCommandText(next, flow)));
+  const nextFlow = next === "gui" && preferences.length ? { ...flow, tab: "preferences" } : flow;
+  opts.next?.(next, nextFlow);
+  lines.push(hint(nextCommandText(next, nextFlow)));
   return lines.join("\n");
 }
 
@@ -402,7 +405,7 @@ function unfinishedLines(home: string, verbose: boolean): string[] {
     if (parts.length) lines.push(`unfinished  ${parts.join(", ")} did not finish`);
     if (retry.blocked.length) {
       lines.push(
-        `blocked     ${retry.blocked.length} ${retry.blocked.length === 1 ? "call cannot" : "calls cannot"} run as saved${verbose ? "" : "; see status --verbose"}`,
+        `blocked     ${retry.blocked.length} ${retry.blocked.length === 1 ? "call cannot" : "calls cannot"} run as saved${verbose ? "" : `; see ${nextCommandText("status", { home })} --verbose`}`,
       );
     }
     if (verbose) {
@@ -434,7 +437,7 @@ function unfinishedLines(home: string, verbose: boolean): string[] {
       if (pending) {
         lines.push(
           dim(
-            `  ${pending} recovered grouping ${pending === 1 ? "result awaits" : "results await"} adoption by the next distill`,
+            `  ${pending} recovered grouping ${pending === 1 ? "result awaits" : "results await"} adoption by the next reflection`,
           ),
         );
       }
@@ -443,7 +446,7 @@ function unfinishedLines(home: string, verbose: boolean): string[] {
       lines.push(
         ...sayThenRun(
           "  To try them again:",
-          `${nextCommandText("distill", { home })} --retry-failed --dry-run`,
+          `${nextCommandText("reflect", { home })} --retry-failed --dry-run`,
           Number.POSITIVE_INFINITY,
         ),
       );
@@ -468,19 +471,21 @@ export default defineCommand({
   async run({ args }) {
     const paths = resolvePaths(args);
     let next: NextCommand | undefined;
+    let nextFlow: object = args;
     const report = await withSpinner(process.stdout, "Reading library status", async () =>
       renderStatus({
         ...paths,
         source: parseSourceMode(args.source),
         flow: args,
         verbose: args.verbose,
-        next: (command) => {
+        next: (command, flow) => {
           next = command;
+          nextFlow = flow;
         },
       }),
     );
     const width = lineWidth();
     console.log(fitLines([report], width).join("\n"));
-    if (next) await offerNext(next, args, { hintPrinted: true });
+    if (next) await offerNext(next, nextFlow, { hintPrinted: true });
   },
 });

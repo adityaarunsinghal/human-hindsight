@@ -118,7 +118,7 @@ describe("edit", () => {
 
     expect(code).toBe(0);
     expect(launched).toEqual([path.join(home, "library", "my-task", "my-task.oneshot.md")]);
-    expect(text()).toContain("my-task edited. Distill will keep your version");
+    expect(text()).toContain("my-task edited. Future reflections will keep your version");
     const entry = readLibrary(home).find((e) => e.slug === "my-task");
     expect(entry && isEdited(entry)).toBe(true);
   });
@@ -227,7 +227,7 @@ describe("prune", () => {
     writeEntry(home, "orphan-task", { generation: "g0" });
     const { out: out1, text: text1 } = capture();
     expect(await runPrune({ home }, { output: out1 })).toBe(1);
-    expect(text1()).toContain("No distill checkpoint");
+    expect(text1()).toContain("No reflection checkpoint");
 
     writeTasks(home, []);
     const { out: out2, text: text2 } = capture();

@@ -14,6 +14,7 @@ export type NextCommand =
   | "scan"
   | "doctor"
   | "export"
+  | "reflect"
   | "distill"
   | "gui"
   | "list"
@@ -21,7 +22,13 @@ export type NextCommand =
   | "copy"
   | "preferences"
   | "suggest-subagents"
+  | "prune"
+  | "retention"
   | "status";
+function canonicalCommand(command: NextCommand) {
+  return command === "distill" ? "reflect" : command;
+}
+
 function route<T extends ArgsDef>(load: () => Promise<{ default: CommandDef<T> }>) {
   return async (rawArgs: string[]) => {
     const command = await load();
@@ -32,13 +39,15 @@ const routes = {
   scan: route(() => import("./scan.js")),
   doctor: route(() => import("./doctor.js")),
   export: route(() => import("./export.js")),
-  distill: route(() => import("./distill.js")),
+  reflect: route(() => import("./distill.js")),
   gui: route(() => import("./gui.js")),
   list: route(() => import("./list.js")),
   show: route(() => import("./show.js")),
   copy: route(() => import("./copy.js")),
   preferences: route(() => import("./preferences.js")),
   "suggest-subagents": route(() => import("./suggest-subagents.js")),
+  prune: route(() => import("./prune.js")),
+  retention: route(() => import("./retention.js")),
   status: route(() => import("./status.js")),
 };
 type FlowOptions = {
@@ -118,7 +127,8 @@ const SUBAGENT_SELECTIONS = [
  * run's recorded settings itself and ignores the environment, so its hint
  * carries only what was given explicitly, and only the options valid for it.
  */
-export function nextArguments(command: NextCommand, input: object, o: NextOptions = {}): string[] {
+export function nextArguments(name: NextCommand, input: object, o: NextOptions = {}): string[] {
+  const command = canonicalCommand(name);
   if (o.retry) return retryArguments(o.retry, input as Record<string, unknown>);
   const args = flowArgs(input) as Record<string, unknown>;
   const own: string[] = [];
@@ -136,7 +146,9 @@ export function nextArguments(command: NextCommand, input: object, o: NextOption
       own.push("--include-unreviewed");
   }
   const keys = ["home"];
-  if (["scan", "doctor", "export", "distill", "preferences", "status"].includes(command)) {
+  if (
+    ["scan", "doctor", "export", "reflect", "preferences", "status", "retention"].includes(command)
+  ) {
     keys.push(
       "claude-dir",
       "codex-dir",
@@ -145,20 +157,20 @@ export function nextArguments(command: NextCommand, input: object, o: NextOption
       "opencode-dir",
       "opencode-db",
       "source",
-      "project",
     );
+    if (command !== "retention") keys.push("project");
   }
-  if (["export", "distill", "preferences"].includes(command)) keys.push("runner", "model");
-  if (["export", "distill", "preferences", "suggest-subagents"].includes(command)) {
+  if (["export", "reflect", "preferences"].includes(command)) keys.push("runner", "model");
+  if (["export", "reflect", "preferences", "suggest-subagents"].includes(command)) {
     keys.push("quality");
   }
-  if (["export", "distill"].includes(command)) keys.push("recent");
+  if (["export", "reflect"].includes(command)) keys.push("recent");
   // Its --model selects the generalize stage, not distillation, so only the
   // runner carries over.
   if (command === "suggest-subagents" || command === "doctor") keys.push("runner");
   if (command === "gui") keys.push("tab");
-  if (["distill", "preferences"].includes(command)) keys.push("timeout");
-  if (command === "distill")
+  if (["reflect", "preferences"].includes(command)) keys.push("timeout");
+  if (command === "reflect")
     keys.push(
       "min-substance",
       "input-budget",
@@ -176,7 +188,8 @@ export function nextArguments(command: NextCommand, input: object, o: NextOption
       typeof value === "string" &&
       value &&
       !(key.endsWith("model") && isPlanLabel(value)) &&
-      !(value === "auto" && (key === "source" || key === "runner")) &&
+      // An explicit --runner=auto on reflect selects automatic fallback instead of the CLI chooser.
+      !(value === "auto" && (key === "source" || (key === "runner" && command !== "reflect"))) &&
       // A printed command names a folder only when leaving it out would change it.
       !(defaults && isDefaultFolder(key, value, args, defaults))
     ) {
@@ -184,7 +197,7 @@ export function nextArguments(command: NextCommand, input: object, o: NextOption
     }
   }
   // The distill switches that change what a run does, as typed.
-  if (command === "distill") {
+  if (command === "reflect") {
     if (args.group === false) result.push("--no-group");
     if (args.generalize === false) result.push("--no-generalize");
     if (args.breaker === false) result.push("--no-breaker");
@@ -290,18 +303,23 @@ export const shellWord = (value: string) => {
   return `$'${escaped}'`;
 };
 export function nextCommandText(command: NextCommand, args: object, o: NextOptions = {}): string {
-  return ["human-hindsight", command, ...nextArguments(command, args, o).map(shellWord)].join(" ");
+  return [
+    "npx",
+    "human-hindsight",
+    canonicalCommand(command),
+    ...nextArguments(command, args, o).map(shellWord),
+  ].join(" ");
 }
 
 /** Strict retry of one stage: {@link nextCommandText} in its retry form. */
 export function retryCommandText(stage: RetryStage, input: object): string {
-  return nextCommandText("distill", input, { retry: stage });
+  return nextCommandText("reflect", input, { retry: stage });
 }
 
 /** Dispatch an action the person already selected, keeping each command's own consent gate. */
 export async function runNextCommand(command: NextCommand, args: object): Promise<number> {
   process.exitCode = undefined;
-  await routes[command](nextArguments(command, args, { dispatch: true }));
+  await routes[canonicalCommand(command)](nextArguments(command, args, { dispatch: true }));
   return Number(process.exitCode ?? 0);
 }
 
@@ -337,9 +355,10 @@ export async function offerLibraryNext(
 ): Promise<number> {
   const args = flowArgs(input) as Record<string, unknown> & { home?: string };
   const output = io.output ?? process.stdout;
+  const browser = { ...args, tab: "preferences" };
   // Check the flags before the streams: `--yes` and `--dry-run` must never touch stdin.
   if (!allowsFollowUp(args) || !canPrompt(io)) {
-    output.write(`${hint(nextCommandText("gui", args))}\n`);
+    output.write(`${hint(nextCommandText("gui", browser))}\n`);
     // The suggested next step is the free preview, as in preferences and help.
     output.write(`${hint(`${nextCommandText("suggest-subagents", args)} --dry-run`)}\n`);
     return 0;
@@ -350,14 +369,14 @@ export async function offerLibraryNext(
       choices: [
         {
           key: "gui",
-          label: "Open my library",
-          detail: "reflect on how you work and what you care about",
+          label: "Open my reflections",
+          detail: "in the browser",
           recommended: true,
         },
         {
           key: "suggest",
-          label: "Generate my subagents",
-          detail: "specialist roles built from your working agreements",
+          label: "Suggest subagents",
+          detail: "roles from my preferences",
         },
         { key: "done", label: "Done for now" },
       ],
@@ -365,13 +384,13 @@ export async function offerLibraryNext(
     io,
   );
   if (choice === "interrupt") return 130;
-  if (choice === "gui") return run("gui", args);
+  if (choice === "gui") return run("gui", browser);
   if (choice === "suggest") return generateSubagents(args, run);
   return 0;
 }
 
 export async function offerNext(
-  command: NextCommand,
+  name: NextCommand,
   input: object,
   deps: {
     input?: Readable;
@@ -384,16 +403,17 @@ export async function offerNext(
   } = {},
 ): Promise<boolean> {
   const args = flowArgs(input) as Record<string, unknown>;
+  const command = canonicalCommand(name);
   const output = deps.output ?? process.stdout;
   if (!deps.hintPrinted) output.write(`${hint(nextCommandText(command, args))}\n`);
   // Check the flags before the streams: `--yes` and `--dry-run` must never touch stdin.
   if (!allowsFollowUp(args)) return false;
   if (!(deps.interactive ?? canPrompt(deps))) return false;
   const question =
-    command === "distill" || command === "suggest-subagents"
+    command === "reflect" || command === "suggest-subagents"
       ? `Run ${command} now? You will review the model-call plan before it spends anything.`
       : command === "gui"
-        ? "Open your prompt library in the browser now?"
+        ? "Open your reflections in the browser now?"
         : `Run ${command} now?`;
   const answer = await askYesNoAnswer(question, {
     input: deps.input,

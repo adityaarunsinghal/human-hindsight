@@ -107,6 +107,17 @@ describe("subagent tree render", () => {
     expectGolden("kirocrew-pinned", { target: "kirocrew", pinModel: "opus-5.5" });
   });
 
+  it("labels older saved preference results in the README and keeps their original provenance", () => {
+    const artifact = sample();
+    artifact.resolved = [
+      { stage: "generalize", unit: "saved agreements", runner: "codex", model: "saved-model" },
+    ];
+    const tree = renderSubagentTree(artifact, { target: "codex" });
+    expect(tree.get("README.md")).toContain(
+      "| generalize | codex | saved-model | saved preferences |",
+    );
+    expect(artifact.resolved[0]?.unit).toBe("saved agreements");
+  });
   it("renders exactly the tree of plan section 4, sorted", () => {
     expect([...renderSubagentTree(sample(), { target: "all" }).keys()]).toEqual(ALL_PATHS);
   });

@@ -1,20 +1,15 @@
-│ Human Hindsight 2.0.0
-│ The prompt you'd write if you knew then what you know now.
+│ Human Hindsight 2.1.0
+│ Understand how you work. Codify your taste.
 │
-│ Your coding tools on this machine
-│ Tool         History on disk           Command         Sign-in
-│ Claude Code  3 projects · 12 sessions  ✓ claude 1.2.3  ✓ ready
-│ No history or command found for Codex, Kiro CLI, or OpenCode.
-│ 12 sessions across 3 projects. Newest activity: today.
-│
-│ Private by default
-│ No session text leaves this machine until you approve a plan.
-│ This screen only asks your coding tools for their version and sign-in status.
+│ Your history
+│ Claude Code  12 sessions · 3 projects
+│ 12 sessions across 3 projects
+────────────────────────────────────────────────────────────────────────
 
 What would you like to do?
-  1  Build my prompt library (recommended)  export, then a plan you approve
-  2  Export my prompts only  Markdown, no model calls
-  3  Show every project  the full inventory
-  4  Check my setup  versions, sign-in, fixes
-  q  Quit
+› 1  Reflect on my history (recommended)  export, then review the plan
+• 2  Export my messages  local Markdown
+• 3  Show projects  history inventory
+• 4  Check setup  tools and sign-in
+• q  Quit
   Choose [1]:

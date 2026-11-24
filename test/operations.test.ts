@@ -131,9 +131,9 @@ describe("durable operation store", () => {
     // The refusal names the command holding the lock and says nothing changed.
     expect(() => acquireWriterLock(root, "prune")).toThrow(WriterBusyError);
     expect(() => acquireWriterLock(root)).toThrow(
-      /^human-hindsight distill is changing this library \(process \d+, .*\)\. Nothing was changed/,
+      /^npx human-hindsight reflect is changing this library \(process \d+, .*\)\. Nothing was changed/,
     );
-    expect(writerBusyReason(root)).toMatch(/^human-hindsight distill is changing this library/);
+    expect(writerBusyReason(root)).toMatch(/^npx human-hindsight reflect is changing this library/);
     lock.release();
     expect(readWriterLock(root).status).toBe("absent");
     expect(writerBusyReason(root)).toBeNull();
@@ -401,7 +401,9 @@ describe("a writer lock that nothing will release", () => {
     expect(line).toContain(`remove ${dir}`);
     if (typeof owner === "object") expect(line).toContain(`process ${owner.pid}`);
     if (typeof owner === "object" && owner.command)
-      expect(line).toContain(`human-hindsight ${owner.command}`);
+      expect(line).toContain(
+        `npx human-hindsight ${owner.command === "distill" ? "reflect" : owner.command}`,
+      );
     if (typeof owner === "object" && owner.host === OTHER_HOST && age === YOUNG)
       expect(line).toContain(`on ${OTHER_HOST}`);
     // Read-only previews give the same answer and change nothing.

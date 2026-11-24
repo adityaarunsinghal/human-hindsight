@@ -1,4 +1,4 @@
 │ Your library is ready
 │ 12 prompts from 40 sessions
 │ Read by claude-sonnet-5.5, grouped and written by claude-opus-5
-│ Next: human-hindsight gui
+│ Next: npx human-hindsight gui

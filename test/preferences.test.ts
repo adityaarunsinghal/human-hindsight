@@ -239,7 +239,7 @@ describe("runPreferences", () => {
     const code = await runPreferences({ home: tmpHome() }, { output: cap.out });
     expect(code).toBe(1);
     expect(cap.text()).toMatch(/library is empty/i);
-    expect(cap.text()).toContain("human-hindsight distill");
+    expect(cap.text()).toContain("npx human-hindsight reflect");
   });
 
   it("does not export or consolidate pending suggestions by default", async () => {
@@ -368,7 +368,7 @@ describe("runPreferences", () => {
     const cap = capture();
     await runPreferences({ home, "include-unreviewed": true }, { output: cap.out });
     expect(cap.text().trimEnd().split("\n").at(-1)).toContain(
-      `→ next: human-hindsight suggest-subagents --home=${home} --dry-run`,
+      `→ next: npx human-hindsight suggest-subagents --home=${home} --dry-run`,
     );
   });
 
@@ -877,10 +877,10 @@ describe("preferences tells one story on two streams", () => {
       "No accepted preferences yet. 3 preferences observed: 3 waiting for your review, none accepted yet.",
     );
     expect(text).toMatch(
-      /Review them in your browser:\n {2}human-hindsight gui --home=\S+ --tab=preferences\n/,
+      /Review them in your browser:\n {2}npx human-hindsight gui --home=\S+ --tab=preferences\n/,
     );
     expect(text).toMatch(
-      /Or print them without a review:\n {2}human-hindsight preferences --home=\S+.* --include-unreviewed\n/,
+      /Or print them without a review:\n {2}npx human-hindsight preferences --home=\S+.* --include-unreviewed\n/,
     );
   });
 
@@ -900,7 +900,7 @@ describe("preferences tells one story on two streams", () => {
     expect(file).not.toContain(String.fromCharCode(27));
     expect(stderr.text()).toContain("Including suggestions you have not reviewed");
     expect(stderr.text()).toContain("paste the block into your");
-    expect(stderr.text()).toMatch(/next:\s+human-hindsight suggest-subagents/);
+    expect(stderr.text()).toMatch(/next:\s+npx human-hindsight suggest-subagents/);
     expect(stderr.text()).not.toContain("- Be terse.");
   });
 

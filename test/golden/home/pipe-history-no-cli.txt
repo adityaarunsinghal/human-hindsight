@@ -1,16 +1,11 @@
-│ Human Hindsight 2.0.0
-│ The prompt you'd write if you knew then what you know now.
+│ Human Hindsight 2.1.0
+│ Understand how you work. Codify your taste.
 │
-│ Your coding tools on this machine
-│ Tool         History on disk           Command    Sign-in
-│ Claude Code  3 projects · 12 sessions  ! missing
-│ No history or command found for Codex, Kiro CLI, or OpenCode.
-│ 12 sessions across 3 projects. Newest activity: today.
-│ Export works now. To build a library, install a coding CLI:
+│ Your history
+│ Claude Code  12 sessions · 3 projects
+│ 12 sessions across 3 projects
+│ Export works now. To reflect on your history, install a coding CLI:
   npm install -g @anthropic-ai/claude-code && claude auth login
-│
-│ Private by default
-│ No session text leaves this machine until you approve a plan.
-│ This screen only asks your coding tools for their version and sign-in status.
+────────────────────────────────────────────────────────────────────────
 
-→ next: human-hindsight export --home=<ROOT>/home --claude-dir=<ROOT>/claude --codex-dir=<ROOT>/codex --kiro-dir=<ROOT>/kiro --kirocrew-dir=<ROOT>/kirocrew --opencode-dir=<ROOT>/opencode
+→ next: npx human-hindsight export --home=<ROOT>/home --claude-dir=<ROOT>/claude --codex-dir=<ROOT>/codex --kiro-dir=<ROOT>/kiro --kirocrew-dir=<ROOT>/kirocrew --opencode-dir=<ROOT>/opencode

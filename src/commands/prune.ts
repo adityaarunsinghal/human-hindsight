@@ -77,7 +77,9 @@ async function pruneLocked(
 ): Promise<number> {
   const tasks = loadTasks(home);
   if (!tasks) {
-    write("No distill checkpoint yet. Run distill before looking for left-behind entries.");
+    write(
+      `No reflection checkpoint yet. Run ${nextCommandText("reflect", args)} before looking for left-behind entries.`,
+    );
     write(hint(nextCommandText("status", args)));
     deps.next?.("status");
     return 1;

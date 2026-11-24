@@ -1,11 +1,11 @@
-human-hindsight rate
+npx human-hindsight rate
 Record whether a saved prompt worked for you.
 
 Examples
-  human-hindsight rate review-changes up
+  npx human-hindsight rate review-changes up
     Give a positive rating. Use a name from list.
 
-  human-hindsight rate review-changes down
+  npx human-hindsight rate review-changes down
     Record a negative rating for that prompt.
 
 Common options
@@ -15,10 +15,10 @@ Common options
                 --no-follow-up)
 
 More help
-  human-hindsight rate --help --all
+  npx human-hindsight rate --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

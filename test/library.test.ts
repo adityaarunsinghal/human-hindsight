@@ -247,7 +247,7 @@ describe("renderStatus", () => {
     expect(out).toContain("exported    0 sessions");
     expect(out).toContain("grouped     none yet");
     expect(out).toContain("written     none yet");
-    expect(out).toContain("human-hindsight export");
+    expect(out).toContain("npx human-hindsight export");
   });
 
   it("shows the full funnel with per-task marks, skips, and orphans", () => {
@@ -371,7 +371,7 @@ describe("renderStatus", () => {
     expect(out).toContain("· unclear-waiting pending");
     expect(out).toContain("· all-abandoned skipped: every session in it was abandoned");
     // A group still to be written makes distill the next step.
-    expect(out).toContain("next: human-hindsight distill");
+    expect(out).toContain("next: npx human-hindsight reflect");
   });
 
   it("flags stale digest-checkpoint keys whose session left the manifest (hygiene)", () => {
@@ -474,27 +474,27 @@ describe("renderStatus: per-source discovered breakdown", () => {
   });
 });
 
-describe("working agreements in status", () => {
+describe("preference summaries in status", () => {
   const artifact = {
     lessons: [{}, {}, {}],
     generated_at: "2026-11-20T10:00:00.000Z",
   } as unknown as GeneralizedArtifact;
   it.each([
-    ["none", { state: "absent" }, "working agreements: none yet"],
+    ["none", { state: "absent" }, "preference summaries: none yet"],
     [
       "ready",
       { state: "ok", artifact, stale: false },
-      "working agreements: 3, ready, generated 2026-11-20",
+      "preference summaries: 3, ready, generated 2026-11-20",
     ],
     [
       "stale",
       { state: "ok", artifact, stale: true },
-      "working agreements: 3, out of date since 2026-11-20; the next distill refreshes them",
+      "preference summaries: 3, out of date since 2026-11-20; the next reflection refreshes them",
     ],
     [
       "damaged",
       { state: "damaged", reason: "the file is not valid JSON" },
-      "working agreements: damaged (the file is not valid JSON); the next distill rebuilds them",
+      "preference summaries: damaged (the file is not valid JSON); the next reflection rebuilds them",
     ],
     [
       "incomplete",
@@ -504,7 +504,7 @@ describe("working agreements in status", () => {
         stale: false,
         incomplete: { summarized: 4, total: 9, windowsFailed: 1 },
       },
-      "working agreements: 3, 4 of 9 preferences summarized; run distill again to finish",
+      "preference summaries: 3, 4 of 9 preferences summarized; run npx human-hindsight reflect again to finish",
     ],
   ] as [string, GeneralizedState, string][])("%s is said in plain words", (_name, saved, line) => {
     expect(stripVTControlCharacters(agreementStatusText(saved))).toBe(line);
@@ -516,7 +516,7 @@ describe("working agreements in status", () => {
       fs.mkdirSync(path.join(home, "library"), { recursive: true });
       fs.writeFileSync(path.join(home, GENERALIZED_PATH), "{not json");
       expect(stripVTControlCharacters(agreementStatusLine(home))).toMatch(
-        /^working agreements: damaged \(.+\); the next distill rebuilds them$/,
+        /^preference summaries: damaged \(.+\); the next reflection rebuilds them$/,
       );
     } finally {
       fs.rmSync(home, { recursive: true, force: true });
@@ -541,7 +541,7 @@ describe("suggested subagents in status", () => {
     [
       "out of date",
       { state: "saved", roles: 2, generatedAt, stale: true },
-      "suggested subagents: 2 roles, out of date since 2026-11-21; run human-hindsight suggest-subagents to refresh them",
+      "suggested subagents: 2 roles, out of date since 2026-11-21; run npx human-hindsight suggest-subagents to refresh them",
     ],
     [
       "damaged",
@@ -601,7 +601,7 @@ describe("status in plain words", () => {
     expect(out).toContain("written     0 of 1 prompt, 1 kept as you edited it");
     expect(out).toContain("✓ small-change kept (edited by you)");
     expect(out).not.toMatch(/pending|left behind/);
-    expect(out).toMatch(/next:\s+human-hindsight gui/);
+    expect(out).toMatch(/next:\s+npx human-hindsight gui/);
     const cap = captureOut();
     await runPrune({ home: home.dir, "dry-run": true }, { output: cap.out });
     expect(cap.text()).toContain("No library entries were left behind.");
@@ -624,7 +624,7 @@ describe("status in plain words", () => {
       "preferences: 1 preference observed: 1 waiting for your review, none accepted yet.",
     );
     expect(out).toMatch(
-      / {2}Review them in your browser:\n {4}human-hindsight gui \S.* --tab=preferences\n/,
+      / {2}Review them in your browser:\n {4}npx human-hindsight gui \S.* --tab=preferences\n/,
     );
   });
 });
@@ -675,7 +675,7 @@ describe("status: unfinished calls", () => {
       const out = status(false);
       expect(out).toContain("unfinished  1 session read did not finish");
       expect(out).toMatch(
-        / {2}To try them again:\n {4}human-hindsight distill \S.* --retry-failed --dry-run\n/,
+        / {2}To try them again:\n {4}npx human-hindsight reflect \S.* --retry-failed --dry-run\n/,
       );
       expect(out).not.toMatch(/retryable|local repair|ledger/);
       expect(status(true)).toContain("ledger: 1 retryable, 0 local repairs, 0 blocked");

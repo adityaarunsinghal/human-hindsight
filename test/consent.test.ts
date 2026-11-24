@@ -104,7 +104,7 @@ describe("renderPlan without a run session", () => {
     },
   ] as const)("names the $own CLI and its cost", ({ runnerName, cli, own }) => {
     const out = strip(renderPlan({ digests: 3, cluster: 1, authorEstimate: 1, runnerName }));
-    expect(out).toContain(`distill will call your local ${cli}:`);
+    expect(out).toContain(`Reflection will call your local ${cli}:`);
     expect(out).toContain(`through your own ${own} CLI.`);
   });
 
@@ -644,7 +644,12 @@ describe("the subagent plan screen", () => {
     const rows = (text: string) =>
       strip(text)
         .split("\n")
-        .filter((line) => /^ {2}\S/.test(line) && !line.includes(" plan"))
+        .filter(
+          (line) =>
+            /^ {2}\S/.test(line) &&
+            !line.includes(" plan") &&
+            !line.includes("Reflect on your history"),
+        )
         .map((line) => line.slice(0, 11));
     const labels = ["Reads    ", "Runs on  ", "Calls    ", "Models   ", "Sending  "].map(
       (label) => `  ${label}`,
@@ -665,7 +670,7 @@ describe("the subagent plan screen", () => {
 
 describe("the short form for a short terminal", () => {
   it.each([
-    { name: "distill", plan: sessionPlan({ fullPlan: "human-hindsight distill --dry-run" }) },
+    { name: "distill", plan: sessionPlan({ fullPlan: "npx human-hindsight reflect --dry-run" }) },
     {
       name: "subagents",
       plan: subagentScreen(subagentsPlan(), {
@@ -935,7 +940,7 @@ describe("reportRunInterrupt", () => {
     const cap = captureOutput();
     const events: string[] = [];
     const exited = new Promise<number>((resolve) => {
-      const stop = reportRunInterrupt(cap.out, "human-hindsight distill --home=/h", {
+      const stop = reportRunInterrupt(cap.out, "npx human-hindsight reflect --home=/h", {
         host,
         exit: (code) => {
           events.push("exit");
@@ -951,7 +956,7 @@ describe("reportRunInterrupt", () => {
     expect(events).toEqual(["cleanup", "exit"]);
     expect(cap.text().trim().split("\n")).toEqual([
       "Interrupted. Finished work is saved and reused. To continue, run:",
-      "  human-hindsight distill --home=/h",
+      "  npx human-hindsight reflect --home=/h",
     ]);
     expect(host.listenerCount("SIGINT")).toBe(0);
   });

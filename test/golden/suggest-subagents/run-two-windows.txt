@@ -22,11 +22,11 @@ Writing role prompts  0/2
 Writing role prompts  2/2 · <elapsed>
 
 Suggested 2 roles from 14 preferences.
-  • Evidence Checker (evidence-checker): 5 working agreements
-  • Change Runner (change-runner): 4 working agreements
-  12 working agreements in all; 1 group of project-specific notes; 2 preferences
-  left out (no reusable instruction).
+  • Evidence Checker (evidence-checker): 5 preferences
+  • Change Runner (change-runner): 4 preferences
+  12 preferences in all; 1 group of project-specific notes; 2 preferences left
+  out (no reusable instruction).
 Saved to <HOME>/library/subagents/suggestion.json
 Kiro CLI: 7 CLI calls (gen-model, plan-model).
-→ next: human-hindsight gui --home=<HOME> --tab=subagents
-→ next: human-hindsight suggest-subagents --home=<HOME> --export <dir>
+→ next: npx human-hindsight gui --home=<HOME> --tab=subagents
+→ next: npx human-hindsight suggest-subagents --home=<HOME> --export human-hindsight-subagents

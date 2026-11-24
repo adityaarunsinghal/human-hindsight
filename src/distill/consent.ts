@@ -3,12 +3,20 @@ import type { Readable, Writable } from "node:stream";
 import { DEFAULT_CONCURRENCY } from "../core/budget.js";
 import type { Quality } from "../core/model-plan.js";
 import type { SessionDescription } from "../core/run-session.js";
+import { RUNNER_INFO } from "../runners/capabilities.js";
 import type { RunnerName } from "../runners/types.js";
 import { persistLiveRegion, type TerminalHost } from "../ui/live.js";
-import { canPrompt, glyph, type PromptIo, type TerminalOutput, terminalWidth } from "../ui/mode.js";
+import {
+  canColor,
+  canPrompt,
+  glyph,
+  type PromptIo,
+  type TerminalOutput,
+  terminalWidth,
+} from "../ui/mode.js";
 import { readLine } from "../ui/prompt.js";
-import { askStart, startTakesKeys } from "../ui/start.js";
-import { bold, counted, cyan, dim, yellow } from "../ui/style.js";
+import { askStart, START_HINT, type StartQuestion, startTakesKeys } from "../ui/start.js";
+import { bold, counted, cyan, dim, palette, visibleWidth, yellow } from "../ui/style.js";
 import { sayThenRun, wrapText } from "../ui/wrap.js";
 
 /** Model operations are disclosed before any provider call, including the readiness check. */
@@ -28,6 +36,7 @@ export interface DistillPlan {
   quality?: Quality;
   concurrency?: number;
   sessions?: number;
+  projects?: number;
   /** Eligible sessions before `--recent` narrowed them. */
   eligible?: number;
   /** The `--recent` count in effect, if any. */
@@ -149,6 +158,8 @@ export interface ConsentOptions {
   yes?: boolean;
   /** Enables the quality choice on the distill approval prompt. */
   onQuality?(quality: Quality): void;
+  /** `reflect` provides the CLIs discovered for this command. Selecting one uses its own model and reuse plan. */
+  runners?: readonly { name: RunnerName; select(): DistillPlan }[];
   /** Print the plan and exit without prompting or invoking anything. */
   dryRun?: boolean;
   /** Injected input stream (default process.stdin). */
@@ -252,9 +263,24 @@ interface Row {
  * with the text under the text. Distill and suggest-subagents build their rows
  * and share this and the row builders below.
  */
-function planScreen(title: string, rows: Row[], width: number): string {
-  const lines = [bold(`  ${title}`), ""];
-  for (const row of rows) lines.push(...wrapRow(row.label, row.text, width, row.indent));
+function planScreen(title: string, rows: Row[], width: number, color: boolean): string {
+  const s = palette(color);
+  const lines = [s.bold(`  ${title}`), ""];
+  let section = "";
+  for (const row of rows) {
+    if (row.label) section = row.label;
+    const ink =
+      section === "Models"
+        ? s.yellow
+        : section === "Reads"
+          ? s.cyan
+          : section === "Runs on"
+            ? s.blue
+            : section === "Sending"
+              ? s.magenta
+              : (line: string) => line;
+    lines.push(...wrapRow(row.label, row.text, width, row.indent).map(ink));
+  }
   return lines.join("\n");
 }
 
@@ -639,7 +665,7 @@ function subagentRows(plan: DistillPlan, sub: SubagentsPlan, session: SessionDes
     sendingRow(
       session,
       authorOnly
-        ? "The saved roles and their working agreements go"
+        ? "The saved roles and their working preferences go"
         : "Your working preferences and the evidence quoted for them go",
       checkSentence(cli, requests),
     ),
@@ -689,7 +715,9 @@ function shortScreen(plan: DistillPlan, session: SessionDescription, width: numb
     lines.push(...wrap(`Your preferences go to your provider through ${cli}.`));
   } else {
     const sessions = plan.sessions ?? plan.digests;
-    lines.push(...wrap(bold(`Distill plan: ${counted(sessions, "session")}, through ${cli}.`)));
+    lines.push(
+      ...wrap(bold(`Reflect on your history: ${counted(sessions, "session")}, through ${cli}.`)),
+    );
     const choices = plan.choices;
     const choice = choices?.[quality];
     if (choices && offersChoice(plan))
@@ -708,6 +736,7 @@ function shortScreen(plan: DistillPlan, session: SessionDescription, width: numb
 export interface RenderOptions {
   /** Columns to wrap the plan screen to (default 80). */
   width?: number;
+  color?: boolean;
   /**
    * Rows of the terminal. When the plan and the Start question would not fit,
    * the short form is shown with the command that prints the whole plan.
@@ -733,8 +762,18 @@ export function renderPlan(plan: DistillPlan, options: RenderOptions = {}): stri
   if (plan.retry) return renderRetryPlan(plan.retry, bullet);
   if (!plan.session) return renderBarePlan(plan, bullet);
   const full = plan.subagents
-    ? planScreen("Subagent plan", subagentRows(plan, plan.subagents, plan.session), width)
-    : planScreen("Distill plan", distillRows(plan, plan.session), width);
+    ? planScreen(
+        "Subagent plan",
+        subagentRows(plan, plan.subagents, plan.session),
+        width,
+        options.color ?? canColor(),
+      )
+    : planScreen(
+        "Reflect on your history",
+        distillRows(plan, plan.session),
+        width,
+        options.color ?? canColor(),
+      );
   if (options.height !== undefined && full.split("\n").length + QUESTION_LINES > options.height)
     return shortScreen(plan, plan.session, width);
   return full;
@@ -800,7 +839,7 @@ function renderBarePlan(plan: DistillPlan, bullet: string): string {
   const windows = plan.clusterWindowsEstimate;
 
   const lines = [
-    `  distill will call your local \`${cli}\` CLI (${cost}):`,
+    `  Reflection will call your local \`${cli}\` CLI (${cost}):`,
     `    ${bullet} ${strong(digestStr)} session read${plan.digests === 1 ? "" : "s"}`,
     `    ${bullet} ${strong(clusterStr)} grouping call${plan.cluster === 1 ? "" : "s"}${
       windows !== undefined
@@ -917,6 +956,178 @@ export async function askYesNo(question: string, opts: YesNoOptions = {}): Promi
   return (await askYesNoAnswer(question, opts)) === "yes";
 }
 
+const RUNNER_KEY: Record<RunnerName, string> = {
+  claude: "c",
+  codex: "x",
+  kiro: "k",
+  opencode: "o",
+};
+export const RUNNER_INK = {
+  claude: "yellow",
+  codex: "blue",
+  kiro: "cyan",
+  opencode: "magenta",
+} as const;
+
+/** Keep a key beside its label when a row of choices spans two terminal lines. */
+function optionRows(options: string[], width: number): string[] {
+  const rows: string[] = [];
+  let row = "";
+  for (const option of options) {
+    if (row && visibleWidth(`${row}   ${option}`) > width) {
+      rows.push(row);
+      row = "";
+    }
+    row += `${row ? "   " : ""}${option}`;
+  }
+  if (row) rows.push(row);
+  return rows;
+}
+
+/** The reflection question uses the same deliberate Start key and input protection as every paid operation. */
+async function confirmReflection(
+  initial: DistillPlan,
+  opts: ConsentOptions,
+): Promise<ConsentResult | "interrupted"> {
+  const runners = opts.runners ?? [];
+  let plan = initial;
+  let quality = plan.quality ?? "balanced";
+  let ready = runners.length === 0;
+  const offerQuality = () => !plan.qualityFixed && (!ready || offersChoice(plan));
+  const controls: NonNullable<StartQuestion<Quality>["controls"]> = {
+    ready: () => ready,
+    previewCommand: () =>
+      ready && !plan.qualityFixed && quality !== plan.quality
+        ? plan.fullPlan?.replace(/ --dry-run$/, ` --quality=${quality} --dry-run`)
+        : ready
+          ? plan.fullPlan
+          : undefined,
+    hint: () => (ready ? START_HINT : "Choose a coding CLI before pressing s to start."),
+    keys: () => [
+      ...runners.map((runner) => RUNNER_KEY[runner.name]),
+      ...(offerQuality() ? ["1", "2"] : []),
+    ],
+    choose(key) {
+      const runner = runners.find((item) => RUNNER_KEY[item.name] === key);
+      if (runner) {
+        plan = runner.select();
+        ready = true;
+        return true;
+      }
+      if (offerQuality() && (key === "1" || key === "2")) {
+        quality = key === "1" ? "balanced" : "best";
+        return true;
+      }
+      return false;
+    },
+    lines(width, color) {
+      const s = palette(color);
+      const sessions = plan.sessions ?? plan.digests;
+      const recent = plan.recent !== undefined && (plan.eligible ?? sessions) > sessions;
+      const scope = s.cyan(counted(sessions, recent ? "recent session" : "session"));
+      const projects = plan.projects
+        ? ` across ${s.magenta(counted(plan.projects, "project"))}`
+        : "";
+      const eligible = recent
+        ? ` ${glyph("·", "-")} ${s.dim(`${count(plan.eligible ?? sessions)} eligible`)}`
+        : "";
+      const lines = [
+        s.bold("Reflect on your history"),
+        ...wrapText(`${scope}${projects}${eligible}`, width),
+        "",
+      ];
+      const choice = (active: boolean, key: string, label: string) =>
+        `${active ? s.green(glyph("›", ">")) : s.dim(glyph("•", "-"))} ${s.bold(s.yellow(key))} ${active ? s.bold(label) : label}`;
+      if (runners.length) {
+        lines.push(
+          s.bold("Which coding CLI should run this reflection?"),
+          ...optionRows(
+            runners.map(({ name }) =>
+              choice(
+                ready && name === plan.runnerName,
+                RUNNER_KEY[name],
+                s[RUNNER_INK[name]](RUNNER_INFO[name].displayName),
+              ),
+            ),
+            width,
+          ),
+        );
+      } else if (plan.runnerName && plan.session) {
+        lines.push(`Runs on  ${s[RUNNER_INK[plan.runnerName]](plan.session.runnerLine)}`);
+        if (plan.session.alsoReady.length)
+          lines.push(
+            ...wrapText(
+              `If this CLI stops working, the run can move to ${listed(plan.session.alsoReady)}.`,
+              width,
+              { indent: "  " },
+            ),
+          );
+      }
+      if (offerQuality()) {
+        lines.push(
+          s.bold("Quality"),
+          ...optionRows(
+            [
+              choice(quality === "balanced", "1", s.cyan("Balanced")),
+              choice(quality === "best", "2", s.magenta("Best")),
+            ],
+            width,
+          ),
+        );
+      } else if (plan.qualityFixed) lines.push(`Quality  ${s.cyan(qualityName(quality))}`);
+      const cli = ready && plan.session ? cliName(plan.session) : "the CLI you choose";
+      const selected = ready ? plan.choices?.[quality] : undefined;
+      if (selected) {
+        lines.push(...wrapText(stageModels(plan, selected), width, { indent: "  " }).map(s.yellow));
+        for (const note of selected.notes ?? [])
+          lines.push(...wrapText(note, width, { indent: "  " }));
+      } else
+        lines.push(
+          ...wrapText("Choose a CLI to see its models and call counts.", width, { indent: "  " }),
+        );
+      lines.push("");
+      if (ready && plan.session) {
+        // The full plan already accounts for each runner's cache identity,
+        // concurrency limit, batching, edit protection and size policy.
+        const rows = distillRows({ ...plan, quality, qualityFixed: true }, plan.session);
+        let section = "";
+        for (const row of rows) {
+          if (row.label) section = row.label;
+          if (!["Calls", "Library", "Size"].includes(section)) continue;
+          const label = row.label === "Calls" ? "Plan" : row.label;
+          const ink = section === "Calls" ? s.blue : section === "Library" ? s.cyan : s.yellow;
+          const lead = label ? `${ink(label)}  ` : "  ";
+          lines.push(...wrapText(row.text, width, { indent: lead, hang: "  " }));
+        }
+      }
+      const route =
+        ready && plan.session?.alsoReady.length ? `${cli} (or the CLI the run moves to)` : cli;
+      const sending = `Selected session text${plan.generalize ? " and working preferences go" : " goes"} through ${route} to its provider, using your tokens.`;
+      lines.push(...wrapText(sending, width, { indent: `${s.magenta("Sending")}  `, hang: "  " }));
+      if (ready) {
+        lines.push(
+          ...wrapText(
+            `${plan.session?.pinned ? "This run stays on this CLI. " : ""}Before the first model call, a tiny request checks each planned model. If all work is reused, nothing is sent.`,
+            width,
+            { indent: "  " },
+          ),
+        );
+      }
+      lines.push(
+        "",
+        `  ${s.yellow("s")}  ${ready ? s.green(s.bold("Start reflection")) : s.dim("Start reflection (choose a CLI first)")}`,
+        `  ${s.yellow("q")}  Not now`,
+      );
+      return lines;
+    },
+  };
+  const answer = await askStart<Quality>({ controls }, opts);
+  if (answer === "interrupt") return "interrupted";
+  if (answer === "quit") return "declined";
+  opts.onQuality?.(quality);
+  return "proceed";
+}
+
 /**
  * Print the plan, then ask the Start question (`askStart`). `--dry-run` and
  * `--yes` never read input.
@@ -940,10 +1151,11 @@ export async function confirmPlan(
   const width = terminal.isTTY ? Math.min(terminalWidth(terminal), 100) : 80;
   const screen = Boolean(plan.session && !plan.consolidation && !plan.retry);
   const asks = !opts.dryRun && !opts.yes && (Boolean(opts.input) || canPrompt(opts));
+  if (asks && opts.runners && plan.session && plan.choices) return confirmReflection(plan, opts);
   // The short form is for a single-key question on a short terminal; printed lines scroll.
   const keys = asks && startTakesKeys({ input: opts.input, output: opts.output });
   const height = screen && keys && terminal.isTTY && terminal.rows ? terminal.rows : undefined;
-  output.write(`${renderPlan(plan, { width, height })}\n`);
+  output.write(`${renderPlan(plan, { width, height, color: canColor({ output }) })}\n`);
   if (opts.dryRun) return "dry-run";
   if (opts.yes) return "proceed";
   if (!asks) return "declined";

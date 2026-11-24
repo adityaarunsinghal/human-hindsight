@@ -1,14 +1,14 @@
-human-hindsight suggest-subagents
+npx human-hindsight suggest-subagents
 Generate specialist subagents from your working preferences.
 
 Examples
-  human-hindsight suggest-subagents --dry-run
+  npx human-hindsight suggest-subagents --dry-run
     Preview the preferences and model calls in the plan.
 
-  human-hindsight suggest-subagents
+  npx human-hindsight suggest-subagents
     Review the plan and generate a set of specialist roles.
 
-  human-hindsight suggest-subagents --export ./my-subagents
+  npx human-hindsight suggest-subagents --export ./my-subagents
     Write the saved roles to a directory.
 
 Common options
@@ -21,10 +21,10 @@ Common options
                            knowledge, or all (default: all)
 
 More help
-  human-hindsight suggest-subagents --help --all
+  npx human-hindsight suggest-subagents --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

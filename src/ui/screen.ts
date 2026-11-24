@@ -1,9 +1,21 @@
 import type { Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
-import type { StageItem, StageProgressSink } from "../distill/stage-events.js";
+import type { SavedSessionRead, StageItem, StageProgressSink } from "../distill/stage-events.js";
 import { type LiveRegion, liveRegion, type TerminalHost, writeAbove } from "./live.js";
-import { canColor, glyph, type TerminalEnv, terminalWidth } from "./mode.js";
-import { bold, cyan, dim, green, palette, safeLine, table, visibleWidth, yellow } from "./style.js";
+import { canColor, glyph, lineWidth, type TerminalEnv, terminalWidth } from "./mode.js";
+import {
+  bold,
+  cyan,
+  dim,
+  green,
+  palette,
+  safeLine,
+  table,
+  terminalExcerpt,
+  terminalText,
+  visibleWidth,
+  yellow,
+} from "./style.js";
 import { wrapText } from "./wrap.js";
 
 const rail = (line: string): string => `${dim(glyph("│", "|"))} ${line}`;
@@ -188,6 +200,10 @@ export interface StageProgressOptions {
   now?(): number;
   env?: TerminalEnv;
   host?: TerminalHost;
+  /** Projects of the selected session reads, in batch order (including repeats). */
+  readProjects?: readonly string[];
+  /** Reads already saved for the selected inputs, including entries this stage has yet to visit. */
+  reusableReads?: ReadonlySet<string>;
   /** Repeat `tick` every `ms` until the returned function is called. Keeps elapsed time moving. */
   every?(tick: () => void, ms: number): () => void;
 }
@@ -198,19 +214,58 @@ function everySecond(tick: () => void, ms: number): () => void {
   return () => clearInterval(timer);
 }
 
+/** Keep a project's color from batch selection through dispatch and its saved read. */
+function projectColors(style: ReturnType<typeof palette>, names: readonly string[]) {
+  const colors = [
+    style.blue,
+    style.cyan,
+    style.magenta,
+    style.magentaBright,
+    style.yellow,
+    style.green,
+  ];
+  const assigned = new Map<string, (text: string) => string>();
+  const colorFor = (name: string) => {
+    const known = assigned.get(name);
+    if (known) return known;
+    const color = colors[assigned.size % colors.length] ?? style.blue;
+    assigned.set(name, color);
+    return color;
+  };
+  for (const name of names) colorFor(name);
+  return colorFor;
+}
+
+/** Name the selected projects while the runner is checking its models. */
+export function batchProjectLine(
+  projects: readonly string[],
+  out: Writable,
+  env: TerminalEnv = process.env,
+): string | undefined {
+  const style = palette(canColor({ output: out, env }));
+  const clean = projects
+    .map((name) => terminalText(typeof name === "string" ? name : ""))
+    .filter(Boolean);
+  if (!clean.length) return undefined;
+  const colors = projectColors(style, clean);
+  const counts = new Map<string, number>();
+  for (const name of clean) counts.set(name, (counts.get(name) ?? 0) + 1);
+  const ranked = [...counts].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  const label = counts.size === 1 ? "Project" : counts.size <= 3 ? "Projects" : "Most represented";
+  const limit = Math.max(8, terminalWidth(out) - 12);
+  const names = ranked.map(([name, count]) => {
+    const project = colors(name)(terminalExcerpt(name, limit));
+    return count === 1 ? project : `${project} ${style.dim(`${glyph("×", "x", env)}${count}`)}`;
+  });
+  return `${style.dim(label)}  ${names.join(style.dim(glyph(" · ", ", ", env)))}`;
+}
+
 /**
- * Progress for a stage of many concurrent calls, in the manner of cargo and
- * Docker BuildKit: one aggregate line (`done/total · failed · elapsed ·
- * estimate`), a few "running now" lines, finished items folded into the
- * count, and failures printed permanently above the region. The estimate is a
- * moving average of the last finished calls and reads "estimating" until
- * {@link ESTIMATE_AFTER} results are in. Cached and skipped items count as
- * done but not toward the rate.
- *
- * Without a drawing terminal it prints the total at once, then a plain line
- * only when a second has passed and ten more results are in since the last
- * one (a slow step still reports every ten results; a fast one prints a line
- * or two), one at the end, and failures as they happen.
+ * A live count and active projects while a stage runs. Each checkpointed
+ * session read goes straight into scrollback in completion order, so Ctrl-C
+ * can clear the active work without losing any finished reads. Other stages
+ * fold successes into the count. Logged runs also receive the saved reads.
+ * The time estimate excludes cached and blocked results.
  */
 export function startStageProgress(
   out: Writable,
@@ -225,6 +280,16 @@ export function startStageProgress(
   const separator = mark(" · ", ", ");
   const rail = (line: string): string => `${style.dim(mark("│", "|"))} ${line}`;
   const running = new Map<string, string>();
+  const projectName = (name: string) =>
+    terminalText(typeof name === "string" ? name : "") || "Unknown project";
+  const projectColor = projectColors(
+    style,
+    (o.readProjects ?? []).map((name) => projectName(name ?? "")),
+  );
+  const announced = new Set<string>();
+  let reading = o.readProjects !== undefined;
+  let saved = 0;
+  let pendingSaved = new Set<string>();
   // Times at which a real call finished, newest last, for the moving average.
   const finishes: number[] = [];
   let region: LiveRegion | null = null;
@@ -253,20 +318,24 @@ export function startStageProgress(
     return seconds < 60 ? `about ${seconds}s left` : `about ${Math.ceil(seconds / 60)} min left`;
   }
 
-  function aggregate(final: boolean): { count: string; timing: string } {
+  function aggregate(final: boolean, live = false): { count: string[]; timing: string[] } {
     const time = now();
-    const count = [`${label}  ${completed}/${total}`];
-    if (failed) count.push(`${failed} failed`);
-    if (blocked) count.push(`${blocked} blocked`);
-    if (skipped) count.push(`${skipped} skipped`);
-    const timing = [duration(time - started)];
-    if (!final && completed < total) timing.push(estimate(time));
-    return { count: count.join(separator), timing: timing.join(separator) };
+    const count = [
+      reading && live
+        ? style.green(`${saved}/${total} read`)
+        : `${label}  ${reading ? saved : completed}/${total}`,
+    ];
+    if (failed) count.push(style.red(`${failed} failed`));
+    if (blocked) count.push(style.yellow(`${blocked} blocked`));
+    if (skipped) count.push(style.dim(`${skipped} ${reading ? "reused" : "skipped"}`));
+    const timing = [live ? style.yellow(duration(time - started)) : duration(time - started)];
+    if (!final && completed < total) timing.push(style.dim(estimate(time)));
+    return { count, timing };
   }
 
   function staticLine(final: boolean): void {
     const { count, timing } = aggregate(final);
-    const line = `${count}${separator}${timing}`;
+    const line = [...count, ...timing].join(separator);
     if (line === lastStatic) return;
     writeAbove(out, line, o.env);
     lastStatic = line;
@@ -276,28 +345,91 @@ export function startStageProgress(
 
   function draw(final = false): void {
     if (!active || !region) return;
-    const { count, timing } = aggregate(final);
-    const line = `${count}${separator}${timing}`;
-    const lines =
-      visibleWidth(line) <= terminalWidth(out) - 3
-        ? [rail(line)]
-        : [rail(count), rail(style.dim(timing))];
+    const { count, timing } = aggregate(final, true);
+    const width = Math.max(1, terminalWidth(out) - 3);
+    const lines: string[] = [];
+    let row = "";
+    for (const fact of [...count, ...timing]) {
+      if (row && visibleWidth(`${row}${separator}${fact}`) > width) {
+        lines.push(rail(row));
+        row = "";
+      }
+      row = row ? `${row}${separator}${fact}` : fact;
+    }
+    lines.push(rail(row));
     if (!final) {
       const labels = [...running.values()];
-      for (const name of labels.slice(0, RUNNING_LINES)) {
-        lines.push(rail(style.dim(`Running  ${name}`)));
-      }
-      if (labels.length > RUNNING_LINES) {
-        lines.push(rail(style.dim(`and ${labels.length - RUNNING_LINES} more running`)));
+      if (reading) {
+        const counts = new Map<string, number>();
+        for (const project of labels) counts.set(project, (counts.get(project) ?? 0) + 1);
+        const projects = [...counts].map(([project, count]) => {
+          const name = projectColor(project)(project);
+          return count > 1 ? `${name} ${style.dim(`${mark("×", "x")}${count}`)}` : name;
+        });
+        if (projects.length) {
+          const activity = `${style.magenta("Reading")}  ${projects.join(style.dim(separator))}`;
+          lines.push(...wrapText(activity, width).map(rail));
+          if (saved === 0)
+            lines.push(
+              ...wrapText("The first summary appears as soon as a read finishes.", width).map(
+                (line) => rail(style.dim(line)),
+              ),
+            );
+        }
+      } else {
+        for (const name of labels.slice(0, RUNNING_LINES))
+          lines.push(rail(style.dim(`Running  ${name}`)));
+        if (labels.length > RUNNING_LINES)
+          lines.push(rail(style.dim(`and ${labels.length - RUNNING_LINES} more running`)));
       }
     }
     region.render(lines);
   }
 
+  function printRead(read: SavedSessionRead, reused: boolean): void {
+    const project = projectName(read.project);
+    const outcomeColor = read.outcome === "completed" ? style.green : style.yellow;
+    const width = lineWidth(out);
+    const timestamp =
+      region && (width ?? 80) >= 45 ? style.dim(`${separator}${duration(now() - started)}`) : "";
+    const name =
+      width === undefined ? project : wrapCell(project, Math.max(1, width - 3)).join(" ");
+    const header = `${style.bold(reused ? "Reused" : "Read")}  ${projectColor(project)(name)}${style.dim(separator)}${outcomeColor(read.outcome)}${timestamp}`;
+    const lines = width ? wrapText(header, Math.max(1, width - 3)).map(rail) : [rail(header)];
+    const append = (label: string, value: string, color: (text: string) => string) => {
+      if (!value) return;
+      const prefix = `${label} `;
+      const gutter = visibleWidth(prefix);
+      const size = width === undefined ? undefined : Math.max(1, width - 3);
+      // On narrow terminals give the label its own line to leave room for the prose.
+      if (size !== undefined && size - gutter < 16) {
+        lines.push(rail(label), ...wrapCell(value, size).map((line) => rail(color(line))));
+        return;
+      }
+      const body = size === undefined ? [value] : wrapCell(value, size - gutter);
+      lines.push(
+        ...body.map((line, index) => rail(`${index ? " ".repeat(gutter) : prefix}${color(line)}`)),
+      );
+    };
+    append(
+      style.cyan(mark("›", ">")),
+      terminalExcerpt(read.goal, 160, mark("…", "...")),
+      (text) => text,
+    );
+    if (read.preference)
+      append(
+        style.magentaBright("Preference"),
+        terminalExcerpt(read.preference, 160, mark("…", "...")),
+        style.green,
+      );
+    writeAbove(out, lines.join("\n"), o.env);
+  }
+
   function end(): void {
     if (!active) return;
     stopTicking();
-    if (region) {
+    if (region && reading) region.stop();
+    else if (region) {
       draw(true);
       region.persist();
     } else staticLine(true);
@@ -316,11 +448,15 @@ export function startStageProgress(
       failed = 0;
       blocked = 0;
       skipped = 0;
+      saved = 0;
+      pendingSaved = new Set(o.reusableReads);
+      reading = o.readProjects !== undefined;
+      announced.clear();
       finishes.length = 0;
       lastStatic = "";
       lastStaticAt = started;
       lastStaticCount = 0;
-      region = liveRegion(out, { env: o.env, now, host: o.host });
+      region = liveRegion(out, { env: o.env, now, host: o.host, onResize: () => draw() });
       if (region) {
         draw();
         stopTicking = every(() => draw(), 1000);
@@ -332,18 +468,36 @@ export function startStageProgress(
         writeAbove(out, lastStatic, o.env);
       }
     },
-    running(id, name = id) {
+    running(id, name = id, project) {
       if (!active) return;
-      running.set(id, safeLine(name));
+      const first = running.size === 0;
+      if (project !== undefined) {
+        reading = true;
+        pendingSaved.delete(id);
+        const value = projectName(project);
+        running.set(id, value);
+        if (!region && !announced.has(value)) {
+          announced.add(value);
+          writeAbove(out, `Reading  ${projectColor(value)(value)}`, o.env);
+        }
+      } else running.set(id, safeLine(name));
       draw();
+      if (first && project !== undefined) region?.flush();
     },
     item(event: StageItem) {
       if (!active) return;
-      if (event.id !== undefined) running.delete(event.id);
+      if (event.id !== undefined) {
+        running.delete(event.id);
+        pendingSaved.delete(event.id);
+      }
       completed++;
       if (event.status === "skipped") skipped++;
       if (event.status === "blocked") blocked++;
       if (event.status === "failed") failed++;
+      if (event.read && (event.status === "done" || event.status === "skipped")) {
+        reading = true;
+        saved++;
+      }
       if (event.status === "done" || event.status === "failed") {
         finishes.push(now());
         if (finishes.length > ESTIMATE_WINDOW + 1) finishes.shift();
@@ -356,8 +510,10 @@ export function startStageProgress(
         now() - lastStaticAt >= STATIC_MIN_MS
       )
         staticLine(false);
+      if (event.read && (event.status === "done" || event.status === "skipped"))
+        printRead(event.read, event.status === "skipped");
       if (event.status === "failed" || event.status === "blocked") {
-        const message = `${event.status}: ${safeLine(event.line)}`;
+        const message = `${event.status}: ${terminalExcerpt(event.line, 500)}`;
         writeAbove(
           out,
           event.status === "failed" ? style.red(message) : style.yellow(message),
@@ -368,6 +524,7 @@ export function startStageProgress(
     note(line) {
       writeAbove(out, line, o.env);
     },
+    savedReads: () => saved + pendingSaved.size,
     end,
   };
 }

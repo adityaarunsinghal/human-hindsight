@@ -144,7 +144,7 @@ describe("export: default run", () => {
   it("prints the summary line and the distill funnel hint", () => {
     const { out } = run();
     expect(out).toContain("Exported 3 sessions with 7 of your messages.");
-    expect(out).toContain("→ next: human-hindsight distill");
+    expect(out).toContain("→ next: npx human-hindsight reflect");
     expect(out).toContain("1 session was left out: none of its messages were yours.");
     // How the evidence was gathered is internal: only --verbose shows it.
     expect(out).not.toMatch(/short turns|outcome evidence|duplicate|\(s\)/);

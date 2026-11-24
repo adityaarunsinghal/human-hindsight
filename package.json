@@ -1,31 +1,30 @@
 {
   "name": "human-hindsight",
-  "version": "2.0.0",
-  "description": "Build a reusable prompt library, working agreements, and personalized subagents from your Claude Code, Codex, Kiro CLI, Kiro Crew, and OpenCode history.",
+  "version": "2.1.0",
+  "description": "Reflect on your coding-agent history to see how you work. Find preferences in your own words, reuse prompts, and suggest specialist agents when you need them.",
   "type": "module",
   "author": "Aditya Singhal (https://adityasinghal.com)",
   "license": "MIT",
   "keywords": [
-    "claude",
+    "coding-agents",
+    "agent-history",
+    "preferences",
+    "subagents",
+    "prompt-library",
     "claude-code",
     "codex",
-    "kiro",
     "kiro-cli",
-    "agents",
-    "prompt",
-    "prompt-library",
-    "prompt-engineering",
-    "cli",
-    "transcripts",
-    "local-first",
+    "kiro-crew",
     "opencode",
-    "opencode-ai"
+    "local-first",
+    "cli",
+    "developer-tools"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/adityaarunsinghal/human-hindsight.git"
   },
-  "homepage": "https://github.com/adityaarunsinghal/human-hindsight#readme",
+  "homepage": "https://adityasinghal.com/#current",
   "bugs": {
     "url": "https://github.com/adityaarunsinghal/human-hindsight/issues"
   },

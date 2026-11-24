@@ -221,22 +221,22 @@ describe("the overview sentence", () => {
     [
       { total: 120, general: 62, project: 41, oneTime: 17 },
       139,
-      "120 working agreements from 139 preferences: 62 general, 41 for specific projects, 17 one-time notes.",
+      "120 saved preferences drawn from 139 observations (62 general, 41 for specific projects, 17 one-time notes).",
     ],
     [
       { total: 1, general: 1, project: 0, oneTime: 0 },
       1,
-      "1 working agreement from 1 preference: 1 general.",
+      "1 saved preference drawn from 1 observation (1 general).",
     ],
     [
       { total: 2, general: 0, project: 1, oneTime: 1 },
       3,
-      "2 working agreements from 3 preferences: 1 for a specific project, 1 one-time note.",
+      "2 saved preferences drawn from 3 observations (1 for a specific project, 1 one-time note).",
     ],
     [
       { total: 3, general: 0, project: 0, oneTime: 3 },
       0,
-      "3 working agreements: 3 one-time notes.",
+      "3 saved preferences (3 one-time notes).",
     ],
   ])("%o from %i preferences", (counts, preferences, sentence) => {
     expect(agreementSummary(counts, preferences)).toBe(sentence);
@@ -260,7 +260,7 @@ describe("the agreements worth reading first", () => {
     ]);
     expect(agreementHighlights(organized, 5).at(-1)).toEqual({
       id: "agreement/none",
-      reason: "From 2 preferences",
+      reason: "From 2 observations",
     });
   });
 
@@ -323,7 +323,7 @@ describe("copying the general agreements", () => {
     const markdown = agreementsMarkdown(organized, lessons);
     expect(markdown).toBe(
       [
-        "# Working agreements",
+        "# Preferences",
         "",
         "## Testing",
         "",

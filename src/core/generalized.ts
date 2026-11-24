@@ -213,7 +213,10 @@ export const GeneralizedArtifactSchema = artifactSchema.superRefine((artifact, c
     !isDeepStrictEqual(lessons, artifact.lessons) ||
     !isDeepStrictEqual(setAside, artifact.set_aside)
   )
-    ctx.addIssue({ code: "custom", message: "The agreement list differs from its saved windows." });
+    ctx.addIssue({
+      code: "custom",
+      message: "The preference summaries differ from their saved batches.",
+    });
 });
 
 /** The saved set as a reader sees it. Readers never throw. */

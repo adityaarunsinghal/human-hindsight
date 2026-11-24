@@ -156,7 +156,7 @@ export function organizeAgreements(facts: readonly AgreementFacts[]): OrganizedA
   };
 }
 
-/** "120 working agreements from 139 preferences: 62 general, 41 for specific projects, 17 one-time notes." */
+/** The numbers in the saved preference catalogue and the observations behind them. */
 export function agreementSummary(counts: AgreementCounts, preferences: number): string {
   const parts = [
     counts.general ? `${counts.general} general` : "",
@@ -167,8 +167,8 @@ export function agreementSummary(counts: AgreementCounts, preferences: number): 
         : "",
     counts.oneTime ? countLabel(counts.oneTime, "one-time note") : "",
   ].filter(Boolean);
-  const from = preferences ? ` from ${countLabel(preferences, "preference")}` : "";
-  return `${countLabel(counts.total, "working agreement")}${from}${parts.length ? `: ${parts.join(", ")}` : ""}.`;
+  const from = preferences ? ` drawn from ${countLabel(preferences, "observation")}` : "";
+  return `${countLabel(counts.total, "saved preference")}${from}${parts.length ? ` (${parts.join(", ")})` : ""}.`;
 }
 
 /**
@@ -184,7 +184,7 @@ export function supportLabel(count: number, verified: boolean, form: "long" | "s
 function agreementReason(item: AgreementFacts): string {
   return item.sessions
     ? supportLabel(item.sessions, true, "long")
-    : `From ${countLabel(item.preferences, "preference")}`;
+    : `From ${countLabel(item.preferences, "observation")}`;
 }
 
 /** The general agreements to read first, with the count that ranked them. Never a project or one-time one. */
@@ -214,7 +214,7 @@ export function agreementsMarkdown(
   lessons: readonly Lesson[],
 ): string {
   const byId = new Map(lessons.map((lesson) => [lesson.id, lesson]));
-  const lines = ["# Working agreements", ""];
+  const lines = ["# Preferences", ""];
   for (const group of organized.general) {
     lines.push(`## ${group.label}`, "");
     for (const item of group.items) {
@@ -360,7 +360,7 @@ export function agreementGroups(options: {
     title.append(group.label);
     const count = document.createElement("span");
     count.className = "muted group-count";
-    count.textContent = countLabel(group.items.length, "agreement");
+    count.textContent = countLabel(group.items.length, "preference");
     title.append(" ", count);
     block.setAttribute("aria-labelledby", title.id);
     const list = document.createElement("ul");
@@ -424,7 +424,7 @@ export function oneTimeNotes(options: {
   const about = document.createElement("p");
   about.className = "muted";
   about.textContent =
-    "Notes about a single situation or permission. They are kept for reference and are not part of the copied agreements.";
+    "Notes about a single situation or permission. Copying general preferences leaves these notes out.";
   const list = document.createElement("ul");
   list.className = "highlights";
   for (const item of options.items) {

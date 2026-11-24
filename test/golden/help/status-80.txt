@@ -1,11 +1,11 @@
-human-hindsight status
+npx human-hindsight status
 See what has finished and what to run next.
 
 Examples
-  human-hindsight status
+  npx human-hindsight status
     See how many sessions have become library prompts.
 
-  human-hindsight status --home ./hindsight-data
+  npx human-hindsight status --home ./hindsight-data
     Check a library in a different data directory.
 
 Common options
@@ -14,7 +14,7 @@ Common options
   --follow-up   Offer next steps in a terminal (disable with --no-follow-up)
 
 More help
-  human-hindsight status --help --all  Every option for this command
-  human-hindsight doctor               Check your setup
-  human-hindsight help --all           All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  npx human-hindsight status --help --all  Every option for this command
+  npx human-hindsight doctor               Check your setup
+  npx human-hindsight help --all           All commands and options
+  https://adityasinghal.com/#current

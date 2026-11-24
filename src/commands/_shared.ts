@@ -38,7 +38,7 @@ export const sharedArgs = {
   model: {
     type: "string",
     valueHint: "name",
-    description: "Model for every distill step, in place of the --quality plan",
+    description: "Model for every reflection step, in place of the --quality plan",
   },
   "cluster-model": {
     type: "string",
@@ -301,7 +301,7 @@ export function unknownPromptMessage(home: string, name: string): string {
   }
   const close = closestMatches(name, names);
   const suggestion = close.length ? ` Did you mean ${close.join(", ")}?` : "";
-  return `No prompt named "${name}".${suggestion} See every name with \`human-hindsight list\`.`;
+  return `No prompt named "${name}".${suggestion} See every name with \`npx human-hindsight list\`.`;
 }
 
 /**

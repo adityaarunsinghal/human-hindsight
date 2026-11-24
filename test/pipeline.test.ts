@@ -20,6 +20,7 @@ import {
   DigestResponseSchema,
   type PreferenceCandidate,
 } from "../src/distill/schemas.js";
+import type { StageItem, StageProgressSink } from "../src/distill/stage-events.js";
 import type { RunClaudeOptions } from "../src/runners/claude.js";
 
 // Unit tests skip disk flushes; test/engine.test.ts proves the durable path.
@@ -135,6 +136,76 @@ describe("checkpoints", () => {
 // --- digest stage -------------------------------------------------------------
 
 describe("runDigestStage", () => {
+  it("emits a sanitized summary only after publication and emits it again when reused", async () => {
+    const home = tmpHome();
+    const name = "reference.md";
+    writeExport(
+      home,
+      name,
+      [
+        "### 2026-01-01T00:00:00Z\n\nStart with a worked example.",
+        "### 2026-01-01T00:01:00Z\n\nPut the example first again.",
+      ].join("\n"),
+    );
+    const entries = [{ ...entry(name), project: "\x1b[34mReference\x1b[0m" }];
+    const response = {
+      ...DIGEST,
+      goal: `Explain widget sizing. ${"More detail. ".repeat(30)}`,
+      preferences: [
+        {
+          text: "Start with\n\x1b[31ma worked example.\x1b[0m\u202e",
+          basis: "inferred",
+          scope: "project",
+          evidence: "Two requests lead with examples.",
+          citations: [
+            { message_id: `${name}#m0`, quote: "Start with a worked example" },
+            { message_id: `${name}#m1`, quote: "example first" },
+          ],
+        },
+      ],
+    };
+    const dispatches: (string | undefined)[] = [];
+    const events: StageItem[] = [];
+    const progress: StageProgressSink = {
+      start() {},
+      end() {},
+      note() {},
+      running(_id, _label, project) {
+        dispatches.push(project);
+      },
+      item(event) {
+        // Check the on-disk checkpoint at the exact moment the card would be printed.
+        expect(loadDigests(home)?.digests[name]?.goal).toBe(response.goal);
+        events.push(event);
+      },
+    };
+    await runDigestStage({ home, entries, progress, runner: (async () => response) as RunnerFn });
+    const reuse = () =>
+      runDigestStage({
+        home,
+        entries,
+        progress,
+        runner: async () => {
+          throw Error("unexpected call");
+        },
+      });
+    await reuse();
+    expect(dispatches).toEqual(["Reference"]);
+    expect(events.map((event) => event.status)).toEqual(["done", "skipped"]);
+    expect(events[0]?.read).toEqual(events[1]?.read);
+    expect(events[0]?.read?.outcome).toBe("completed");
+    expect(events[0]?.read?.preference).toBe("Start with a worked example.");
+    expect(events[0]?.read?.goal?.length).toBeLessThanOrEqual(160);
+    const checkpoint = loadDigests(home);
+    const citation = checkpoint?.digests[name]?.preferences?.[0]?.citations[0];
+    if (!checkpoint || !citation) throw Error("missing fixture citation");
+    citation.quote = "Text absent from this session";
+    saveDigests(home, checkpoint);
+    await reuse();
+    expect(events.at(-1)?.status).toBe("skipped");
+    expect(events.at(-1)?.read?.preference).toBeUndefined();
+  });
+
   it("digests every entry, saving the checkpoint incrementally", async () => {
     const home = tmpHome();
     writeExport(home, "a.md");

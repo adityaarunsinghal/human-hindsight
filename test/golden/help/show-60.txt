@@ -1,11 +1,11 @@
-human-hindsight show
+npx human-hindsight show
 Read a saved prompt in your terminal.
 
 Examples
-  human-hindsight show review-changes
+  npx human-hindsight show review-changes
     Replace review-changes with a name from list.
 
-  human-hindsight show review-changes --raw
+  npx human-hindsight show review-changes --raw
     Print the prompt body as Markdown.
 
 Common options
@@ -15,10 +15,10 @@ Common options
                --no-follow-up)
 
 More help
-  human-hindsight show --help --all
+  npx human-hindsight show --help --all
     Every option for this command
-  human-hindsight doctor
+  npx human-hindsight doctor
     Check your setup
-  human-hindsight help --all
+  npx human-hindsight help --all
     All commands and options
-  https://github.com/adityaarunsinghal/human-hindsight#readme
+  https://adityasinghal.com/#current

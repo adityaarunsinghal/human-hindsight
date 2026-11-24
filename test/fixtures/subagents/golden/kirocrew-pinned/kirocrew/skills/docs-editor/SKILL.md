@@ -29,7 +29,7 @@ Every number in a report names the artifact it came from and how it was computed
 
 Applies when: Writing a report, readout or summary that quotes counts, rates or totals.
 
-# Shared agreements
+# Shared preferences
 
 ## Separate what was verified from what was inferred (separate-verified-from-inferred)
 

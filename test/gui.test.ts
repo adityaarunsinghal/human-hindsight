@@ -532,7 +532,7 @@ describe("local GUI server", () => {
         body: { id: candidate?.id, revision: candidate?.review.revision, status: "accepted" },
       });
       expect(response.status).toBe(423);
-      expect(response.text).toContain("human-hindsight distill is changing this library");
+      expect(response.text).toContain("human-hindsight reflect is changing this library");
     } finally {
       lock.release();
     }

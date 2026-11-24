@@ -1,8 +1,8 @@
 Human Hindsight is fully open source (https://github.com/adityaarunsinghal/human-hindsight). Export stays local; model steps use your own coding tool and its configured provider. Human Hindsight has no session-upload service.
 
-Checking which coding CLIs are ready.
+Checking available coding CLIs…
 
-  Distill plan
+  Reflect on your history
 
   Reads    5 sessions, about 2 prompts, plus your working preferences.
   Runs on  Claude Code (claude 9.9.9)
