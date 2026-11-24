@@ -1059,6 +1059,50 @@ describe("runAuthorStage", () => {
     expect(sources.input_coverage).toBeCloseTo(900 / 1300, 5);
   });
 
+  it("a prompt written from part of its group records only those sessions as its evidence", async () => {
+    const home = tmpHome();
+    // The session that reached a result is too long by itself, so only the unclear one is used.
+    fs.writeFileSync(path.join(home, "exports", "done.md"), "D".repeat(5_000));
+    fs.writeFileSync(path.join(home, "exports", "open.md"), "always diagnose first\n".repeat(10));
+    const withPreference = (outcome: Digest["outcome"], name: string, quote: string): Digest => ({
+      ...digest(outcome),
+      preferences: [
+        {
+          text: `Preference from ${name}.`,
+          evidence: "said so",
+          scope: "global",
+          basis: "explicit",
+          citations: [{ message_id: `${name}#m0`, quote }],
+        },
+      ],
+    });
+    const result = await runAuthorStage({
+      ...baseOpts(home),
+      entries: ["done.md", "open.md"].map(entry),
+      tasks: [task("auth-feature-work", ["done.md", "open.md"])],
+      digests: {
+        "done.md": withPreference("completed", "done.md", "DDDD"),
+        "open.md": withPreference("unclear", "open.md", "always diagnose first"),
+      },
+      runner: (async () => AUTHORED) as RunnerFn,
+      budget: 1_000,
+      truncate: "never",
+    });
+    expect(result.authored).toEqual(["auth-feature-work"]);
+    expect(result.fitted).toEqual([{ slug: "auth-feature-work", used: 1, sessions: 2 }]);
+    const sources = JSON.parse(
+      fs.readFileSync(path.join(home, "library", "auth-feature-work", "sources.json"), "utf8"),
+    );
+    // The group keeps both sessions; the prompt answers only for the one it was written from.
+    expect(sources.members).toEqual(["done.md", "open.md"]);
+    expect(sources.outcome_verified).toBe(false);
+    expect(sources.confidence).toBe("low");
+    expect(sources.preferences.map((preference: { text: string }) => preference.text)).toEqual([
+      "Preference from open.md.",
+    ]);
+    expect(result.unverified).toEqual(["auth-feature-work"]);
+  });
+
   it("fitWholeMembers prefers sessions with a result, then the newest, and never cuts one", () => {
     const member = (exportName: string, size: number, outcome: Digest["outcome"]) => ({
       exportName,

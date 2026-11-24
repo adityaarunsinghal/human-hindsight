@@ -1267,9 +1267,56 @@ describe("the run", () => {
       Record<string, unknown>,
     ];
     expect(args).toMatchObject({ home, quality: "fast", yes: true });
+    // Roles come from the preferences this run summarized, so its summaries are reused as they are.
+    expect(args["include-unreviewed"]).toBe(true);
     expect(deps.approved).toBe(true);
     // The closing menu belongs to the subagent step, so reflect prints no next step of its own.
     expect(text).not.toContain("next:");
+  });
+
+  it("--subagents runs with the models, limits, and CLI the reflection plan showed", async () => {
+    const home = tmpHome(sessions(2));
+    const codex = fakeCli("codex", CODEX, (opts) => answer(opts, { preferences: true }));
+    const suggestSubagents = vi.fn(async () => 0);
+    const { code, text } = await run(
+      {
+        home,
+        yes: true,
+        prompts: false,
+        subagents: true,
+        runner: "codex",
+        model: "gpt-5.6-sol",
+        "author-model": "gpt-5.6-astra",
+        "input-budget": "200000",
+        timeout: "900",
+        concurrency: "4",
+      },
+      { runners: [fakeCli("claude", ALIASES), codex], suggestSubagents },
+    );
+    expect(code).toBe(0);
+    // The plan names the role model the person chose.
+    expect(flat(text)).toContain("gpt-5.6-astra for choosing and writing roles");
+    const [args] = suggestSubagents.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(args).toMatchObject({
+      runner: "codex",
+      model: "gpt-5.6-sol",
+      "author-model": "gpt-5.6-astra",
+      "input-budget": "200000",
+      timeout: "900",
+      concurrency: "4",
+    });
+    // Nothing the person did not give is invented.
+    const plain = await run(
+      { home: tmpHome(sessions(2)), yes: true, prompts: false, subagents: true },
+      {
+        runners: [fakeCli("claude", ALIASES, (opts) => answer(opts, { preferences: true }))],
+        suggestSubagents,
+      },
+    );
+    expect(plain.code).toBe(0);
+    const [bare] = suggestSubagents.mock.calls.at(-1) as unknown as [Record<string, unknown>];
+    for (const key of ["model", "author-model", "input-budget", "timeout", "concurrency"])
+      expect(bare, key).not.toHaveProperty(key);
   });
 
   it.each([

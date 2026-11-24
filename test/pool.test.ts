@@ -543,10 +543,28 @@ describe("the reasoning effort a plan sets", () => {
     const before = claude.efforts.length;
     await p.run(call("best/bulk"));
     expect(claude.efforts.slice(before)).toEqual([undefined]);
-    // Another model of the plan still carries the effort until it is refused too.
+    // Another model of the plan is asked with the effort first, then without it.
     await p.run(call("best/major"));
-    expect(claude.efforts.at(-1)).toBeUndefined();
-    expect(claude.efforts).toContain("xhigh");
+    expect(claude.efforts.slice(-2)).toEqual(["xhigh", undefined]);
+    expect(claude.models.slice(-2)).toEqual(["fable", "fable"]);
+  });
+
+  it("an answer that fails its checks is not taken for a refused effort", async () => {
+    const claude = fake(
+      "claude",
+      (_opts, n) => (n === 1 ? Promise.reject(failure("validation")) : ok()),
+      undefined,
+      { effort: true },
+    );
+    const { pool: p, events } = pool([claude]);
+    // The invalid answer is that call's failure, as before, and costs no extra call.
+    await expect(p.run(call("balanced/bulk"))).rejects.toThrow("validation failure");
+    expect(claude.efforts).toEqual(["high"]);
+    // The plan's effort stays on for every later call, and nothing is announced.
+    await p.run(call("balanced/bulk"));
+    await p.run(call("balanced/bulk"));
+    expect(claude.efforts).toEqual(["high", "high", "high"]);
+    expect(events).toEqual([]);
   });
 
   it("a call that fails with and without the effort keeps it and fails as before", async () => {

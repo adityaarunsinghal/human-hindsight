@@ -277,7 +277,10 @@ function retryArguments(stage: RetryStage, input: Record<string, unknown>): stri
     const value = input[key];
     if (typeof value !== "string" || !value) continue;
     if (key.endsWith("model") && isPlanLabel(value)) continue;
-    if (key !== "runner" || value !== "auto") result.push(`--${key}=${value}`);
+    // A retry runs each call on the CLI recorded for it. `auto` and a list of
+    // CLIs name no single one, so they are left out.
+    if (key !== "runner" || (value !== "auto" && !String(value).includes(",")))
+      result.push(`--${key}=${value}`);
   }
   if (input.plain === true) result.push("--plain");
   result.push("--retry-failed", `--retry-stage=${stage}`);

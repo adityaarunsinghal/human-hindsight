@@ -188,15 +188,13 @@ const COUNTED: ReadonlySet<FailureClass> = new Set(["cli-error", "transient"]);
 const SWITCH_STREAK = 2;
 const TRANSIENT_RETRIES = 3;
 /**
- * Failures that can mean a CLI or model did not take the effort level. No
- * message is matched: the call is asked once more at the CLI's own setting,
- * and only a success there shows the effort was the cause.
+ * Failures that can mean a CLI or model did not take the effort level: the
+ * CLI refused its arguments, or the provider refused the request. No message
+ * is matched: the call is asked once more at the CLI's own setting, and only
+ * a success there shows the effort was the cause. An answer that fails its
+ * checks is not one of them: the CLI ran, so the effort was taken.
  */
-const EFFORT_SUSPECT: ReadonlySet<FailureClass> = new Set([
-  "cli-error",
-  "validation",
-  "model-unavailable",
-]);
+const EFFORT_SUSPECT: ReadonlySet<FailureClass> = new Set(["cli-error", "model-unavailable"]);
 
 function selectedRole(state: CandidateState, label: PlanLabel): ResolvedRole {
   const key = label.endsWith("/major") ? "major" : "bulk";

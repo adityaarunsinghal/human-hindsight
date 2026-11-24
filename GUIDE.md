@@ -26,7 +26,7 @@ One choice sets the models and how hard they are asked to reason.
 | Best | stronger model | most capable model | extra high |
 
 - Models are picked by family and newest version from your CLI's own list: Sonnet, Opus and Fable on Claude Code; Terra, Sol and Astra on Codex. The plan shows them by their real names before anything is sent.
-- The reasoning effort is set on Claude Code, Codex and Kiro CLI. OpenCode names its effort levels per model, so its calls run at the model's own setting.
+- The reasoning effort is set on Claude Code, Codex and Kiro CLI, where the installed version takes one. The plan screen states the level only when it will be sent. OpenCode names its effort levels per model, so its calls run at the model's own setting.
 - A model your provider refuses steps down one tier, and the terminal says so in one line.
 - A model you name yourself (`--model`, `--cluster-model`, `--author-model`) keeps the run on one CLI and runs at that CLI's own reasoning setting.
 - Results are saved per plan. Switching plan reads your sessions again; switching back reuses what that plan saved.

@@ -75,6 +75,15 @@ describe("interactive next commands", () => {
     expect(run.mock.calls[0]?.[1]).not.toContain("--yes");
   });
 
+  it("a retry command leaves out a list of CLIs, and strict retry refuses one with a plain line", () => {
+    const listed = retryCommandText("digest", { home: "/h", runner: "claude,codex" });
+    expect(listed).toBe(
+      "npx human-hindsight reflect --home=/h --retry-failed --retry-stage=digest",
+    );
+    // One name is still carried: it is the CLI the retry is kept on.
+    expect(retryCommandText("digest", { home: "/h", runner: "codex" })).toContain("--runner=codex");
+  });
+
   it("a printed or dispatched reflect keeps the switches that change what the run does", () => {
     const args = { home: "/h", prompts: false, subagents: true, generalize: true };
     expect(nextArguments("reflect", args)).toEqual(

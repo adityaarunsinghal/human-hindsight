@@ -628,11 +628,23 @@ export async function runDistill(args: DistillArgs, deps: DistillDeps = {}): Pro
       return 0;
     }
     const { runSuggestSubagents } = await import("./suggest-subagents.js");
+    // It runs with what the plan showed: the same CLIs in the same order, the
+    // same models, and the same limits, and it builds roles from the
+    // preferences this run summarized, so the summaries are reused as they
+    // are and its only calls are the ones the plan named.
+    const carried = (key: "model" | "author-model" | "input-budget" | "timeout" | "concurrency") =>
+      args[key] === undefined ? {} : { [key]: args[key] };
     return (deps.suggestSubagents ?? runSuggestSubagents)(
       {
         home,
         runner: args.runner,
         quality: session.quality,
+        "include-unreviewed": true,
+        ...carried("model"),
+        ...carried("author-model"),
+        ...carried("input-budget"),
+        ...carried("timeout"),
+        ...carried("concurrency"),
         ...(args.yes && { yes: true }),
         ...(args["follow-up"] === false && { "follow-up": false }),
         ...(args.verbose && { verbose: true }),
@@ -764,14 +776,19 @@ export function unverifiedLine(n: number): string | undefined {
  * The working preferences line after a run: how many were summarized, or how
  * far a run that stopped part way got, or that none could be summarized.
  */
-export function preferencesLine(result: GeneralizeResult, inputs: number): string {
+export function preferencesLine(
+  result: GeneralizeResult,
+  inputs: number,
+  /** False for a run that wrote no prompts (`--no-prompts`). */
+  prompts = true,
+): string {
   if (result.status === "done")
     return `Working preferences: ${counted(result.lessons, "preference")} summarized from ${counted(inputs, "observation")}${result.reused ? ` (${counted(result.reused, "batch", "batches")} reused)` : ""}.`;
   const gap = result.artifact ? generalizedGap(result.artifact) : undefined;
   if (gap)
     return `Working preferences: ${gap.summarized.toLocaleString("en-US")} of ${counted(gap.total, "preference")} summarized; run npx human-hindsight reflect to finish (finished work is reused).`;
   const first = result.errors[0] ? ` (${result.errors[0]})` : "";
-  return `Working preferences could not be summarized this time${first}. Your prompts are saved; run npx human-hindsight reflect to finish them.`;
+  return `Working preferences could not be summarized this time${first}. ${prompts ? "Your prompts are saved" : "Your session reads are saved"}; run npx human-hindsight reflect to finish them.`;
 }
 
 /**
@@ -1294,7 +1311,7 @@ async function distillSelectedSessions(opts: {
       const failed = (error: unknown): SummaryOutcome => ({
         incomplete: true,
         ran: true,
-        line: `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). Your prompts are saved; run npx human-hindsight reflect to finish them.`,
+        line: `Working preferences could not be summarized this time (${error instanceof Error ? error.message : String(error)}). ${prompts ? "Your prompts are saved" : "Your session reads are saved"}; run npx human-hindsight reflect to finish them.`,
       });
       const model = session.modelFor("generalize");
       let preferences: ReturnType<typeof planGeneralize>;
@@ -1345,7 +1362,7 @@ async function distillSelectedSessions(opts: {
             const incomplete = result.status !== "done";
             liveLibrary?.update({ kind: incomplete ? "interrupted" : "complete" });
             return {
-              line: preferencesLine(result, inputs),
+              line: preferencesLine(result, inputs, prompts),
               incomplete,
               ran: true,
               lessons: result.lessonList,

@@ -4,10 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  type ActionCommands,
   type HomeAction,
   type HomeArgs,
   type HomeIo,
   PRIVACY_LINE,
+  runAction,
   runHome,
 } from "../src/commands/home.js";
 import type { HistoryCounts } from "../src/core/environment-history.js";
@@ -597,6 +599,78 @@ describe("first run, in a terminal", () => {
   ] as [string, string[], HomeAction][])("%s", async (_name, keys, action) => {
     const t = await run(READY_HISTORY, keys);
     expect(t.dispatched).toEqual([action]);
+  });
+});
+
+describe("what each first-screen action runs", () => {
+  /** A data home in the given state, and the commands an action started on it. */
+  function world(state: { exported?: boolean; preferences?: boolean; sessions?: number } = {}) {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hh-home-action-"));
+    roots.push(dir);
+    if (state.exported) {
+      fs.mkdirSync(path.join(dir, "exports"), { recursive: true });
+      fs.writeFileSync(path.join(dir, "exports", "manifest.json"), "[]");
+    }
+    const started: string[] = [];
+    const commands: Partial<ActionCommands> = {
+      scan: (() => {
+        started.push("scan");
+      }) as never,
+      exportSessions: (() => {
+        started.push("export");
+        return { exportedSessions: state.sessions ?? 3 };
+      }) as never,
+      run: async (command, args) => {
+        const flags = args as { prompts?: boolean; subagents?: boolean; tab?: string };
+        started.push(
+          `${command}${flags.prompts === false ? " --no-prompts" : ""}${flags.subagents ? " --subagents" : ""}${flags.tab ? ` --tab=${flags.tab}` : ""}`,
+        );
+        return 0;
+      },
+      subagents: async () => {
+        started.push("suggest-subagents");
+        return 0;
+      },
+    };
+    const home = state.preferences ? sampleHome().build().dir : dir;
+    if (state.preferences) roots.push(home);
+    const act = (action: HomeAction) =>
+      runAction(action, { home }, { output: fakeOutput(), runnerAvailable: true, home }, commands);
+    return { act, started };
+  }
+
+  it.each([
+    // Checking the setup, browsing, and reading never export anything.
+    ["doctor", {}, ["doctor"]],
+    ["gui", {}, ["gui --tab=preferences"]],
+    ["preferences", {}, ["preferences"]],
+    ["scan", {}, ["scan"]],
+    ["reflect", {}, ["reflect"]],
+    // The paths that need an export make one, then go on.
+    ["export", {}, ["export"]],
+    ["build", {}, ["export", "reflect"]],
+    ["refresh", { exported: true }, ["export", "reflect"]],
+    // Subagents with nothing read yet: export if needed, then one run without prompts.
+    ["suggest", {}, ["export", "reflect --no-prompts --subagents"]],
+    ["suggest", { exported: true }, ["reflect --no-prompts --subagents"]],
+    // With preferences saved, the subagent command plans from them.
+    ["suggest", { preferences: true }, ["suggest-subagents"]],
+  ] as [
+    HomeAction,
+    Parameters<typeof world>[0],
+    string[],
+  ][])("%s on %o starts %j", async (action, state, expected) => {
+    const { act, started } = world(state);
+    expect(await act(action)).toBe(0);
+    expect(started).toEqual(expected);
+  });
+
+  it("an export that finds no session ends there, with where to look", async () => {
+    for (const action of ["build", "suggest"] as const) {
+      const { act, started } = world({ sessions: 0 });
+      expect(await act(action)).toBe(0);
+      expect(started).toEqual(["export"]);
+    }
   });
 });
 

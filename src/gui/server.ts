@@ -567,6 +567,9 @@ export function createGuiHandler(opts: {
     }
     // Only the view a reflection started takes this, and only with its session key.
     if (route === "/api/shutdown" && req.method === "POST" && opts.onShutdown) {
+      // Still in use: its reflection is running and its link is on screen.
+      if (opts.liveBatches?.isRunning())
+        return reply(409, "This view's reflection is still running.", TEXT_TYPE);
       setImmediate(opts.onShutdown);
       return reply(204, "");
     }

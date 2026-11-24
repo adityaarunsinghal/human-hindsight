@@ -431,7 +431,9 @@ function prepareAuthorRequest(
       upstream: logical.upstream,
     },
   });
-  return { prompt, inputCoverage, truncations, lineage };
+  // The sessions the prompt was written from: what it records as its evidence.
+  const written = included.map((member) => member.exportName);
+  return { prompt, inputCoverage, truncations, lineage, written };
 }
 
 /** Sessions that ended with a result come first when a group does not fit one call. */
@@ -480,23 +482,30 @@ function authorResult(
     logical.members.map((member) => [member.exportName, member.digest as Digest]),
   ) as Record<string, Digest>;
   const entries = new Map(logical.entries.map((entry) => [entry.export, entry]));
-  // No member reached a result that could be verified: the prompt is kept but
-  // marked, at the lowest confidence, whatever the writer claimed.
-  const verified = taskOutcome(logical.task.members, digests) === "verified";
+  // A prompt written from part of its group answers only for those sessions:
+  // their outcomes, and the preferences quoted from them. A request saved
+  // before this was recorded used every session.
+  const written = new Set((request.written as string[] | undefined) ?? logical.task.members);
+  const used = logical.task.members.filter((id) => written.has(id));
+  // No session it was written from reached a result that could be verified:
+  // the prompt is kept but marked, at the lowest confidence, whatever the writer claimed.
+  const verified = taskOutcome(used, digests) === "verified";
   const sources: SourcesJson = {
     slug: logical.task.slug,
     title: authored.title,
     members: logical.task.members,
     sessionIds: logical.task.members.map((id) => entries.get(id)?.sessionId ?? "unknown"),
-    preferences: logical.members.flatMap((member) =>
-      (member.digest?.preferences ?? []).map((candidate) => ({
-        ...candidate,
-        ...(candidate.scope === "global"
-          ? {}
-          : { project: entries.get(member.exportName)?.project ?? "" }),
-      })),
-    ),
-    outcome_summary: summarizeOutcomes(logical.task.members, digests),
+    preferences: logical.members
+      .filter((member) => written.has(member.exportName))
+      .flatMap((member) =>
+        (member.digest?.preferences ?? []).map((candidate) => ({
+          ...candidate,
+          ...(candidate.scope === "global"
+            ? {}
+            : { project: entries.get(member.exportName)?.project ?? "" }),
+        })),
+      ),
+    outcome_summary: summarizeOutcomes(used, digests),
     domains: [
       ...new Set(
         logical.task.members

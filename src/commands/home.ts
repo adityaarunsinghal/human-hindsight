@@ -569,23 +569,42 @@ export async function runHome(input: HomeArgs = {}, io: HomeIo = {}): Promise<nu
   return runAction(answer, args, { output, runnerAvailable, home: paths.home });
 }
 
-async function runAction(
+/** The commands an action runs, injected so tests start nothing real. */
+export interface ActionCommands {
+  scan: typeof runScan;
+  exportSessions: typeof runExport;
+  run: typeof runNextCommand;
+  subagents: typeof generateSubagents;
+}
+
+/** Run the action chosen on the first screen. Only the path that needs an export makes one. */
+export async function runAction(
   action: HomeAction,
   args: HomeArgs,
   o: { output: Writable; runnerAvailable: boolean; home: string },
+  commands: Partial<ActionCommands> = {},
 ): Promise<number> {
+  const scan = commands.scan ?? runScan;
+  const exportSessions = commands.exportSessions ?? runExport;
+  const run = commands.run ?? runNextCommand;
+  const subagents = commands.subagents ?? generateSubagents;
   if (action === "scan") {
-    runScan(args);
+    scan(args);
     return 0;
   }
   // Subagents come from the preferences in the session reads. With some
   // saved, the command plans from them. Without any, one run makes them
   // first and writes no prompts: export if needed, read, summarize, then roles.
   const fromScratch = action === "suggest" && !hasSavedPreferences(o.home);
-  if (action === "suggest" && !fromScratch) return generateSubagents(args);
+  if (action === "suggest" && !fromScratch) return subagents(args);
   const exported = fs.existsSync(path.join(o.home, "exports", "manifest.json"));
-  if (action === "export" || action === "build" || action === "refresh" || !exported) {
-    const stats = runExport({ ...args, guided: true, output: o.output });
+  if (
+    action === "export" ||
+    action === "build" ||
+    action === "refresh" ||
+    (fromScratch && !exported)
+  ) {
+    const stats = exportSessions({ ...args, guided: true, output: o.output });
     if (stats.busy) return 1;
     if (stats.exportedSessions === 0) {
       o.output.write(`${hint(nextCommandText("scan", args))}\n`);
@@ -596,8 +615,8 @@ async function runAction(
       return 0;
     }
   }
-  if (fromScratch) return runNextCommand("reflect", { ...args, prompts: false, subagents: true });
-  if (action === "build" || action === "refresh") return runNextCommand("reflect", args);
+  if (fromScratch) return run("reflect", { ...args, prompts: false, subagents: true });
+  if (action === "build" || action === "refresh") return run("reflect", args);
   const { command, tab } = actionCommand(action);
-  return runNextCommand(command, tab ? { ...args, tab } : args);
+  return run(command, tab ? { ...args, tab } : args);
 }
